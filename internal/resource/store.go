@@ -115,6 +115,26 @@ func (s *Store[T, PT]) create(id, tenantID, dedupeNamespace, name string, obj T)
 	return out, nil
 }
 
+// LookupByName returns the object bound to (tenantID, name) by a prior
+// Create, without minting anything -- the read-only half of Create's own
+// idempotency check, exposed so a caller can run side effects (e.g. quota
+// charging) only around a genuinely new Create, not an idempotent repeat.
+func (s *Store[T, PT]) LookupByName(tenantID, name string) (T, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var zero T
+	if name == "" {
+		return zero, false
+	}
+	id, ok := s.byTenantName[tenantID+"/"+name]
+	if !ok {
+		return zero, false
+	}
+	obj, ok := s.byID[id]
+	return obj, ok
+}
+
 func (s *Store[T, PT]) Get(ctx context.Context, tenantID, id string) (T, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

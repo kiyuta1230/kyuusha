@@ -17,16 +17,19 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute/grpcserver"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func main() {
 	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL")
 	grpcAddr := flag.String("grpc-addr", ":8081", "address to serve VirtualMachineService on")
+	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
 	hypervisors := flag.String("hypervisors", "hypervisor-1", "comma-separated list of hypervisor IDs the stub scheduler may pick from")
 	flag.Parse()
 
@@ -46,7 +49,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	svc := compute.NewService()
+	// compute -> identity is plaintext for now; see api-gateway's identical
+	// note on the mTLS follow-up.
+	identityConn, err := grpc.NewClient(*identityAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		slog.Error("dial identity", "addr", *identityAddr, "err", err)
+		os.Exit(1)
+	}
+	defer identityConn.Close()
+
+	svc, err := compute.NewService(ctx, identityv1.NewTenantServiceClient(identityConn))
+	if err != nil {
+		slog.Error("new compute service", "err", err)
+		os.Exit(1)
+	}
 	recon := compute.NewReconciler(svc, nc, js, strings.Split(*hypervisors, ","))
 	go func() {
 		if err := recon.Run(ctx); err != nil && ctx.Err() == nil {

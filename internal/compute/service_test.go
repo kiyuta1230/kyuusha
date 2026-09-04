@@ -6,6 +6,15 @@ import (
 	"time"
 )
 
+func newTestService(t *testing.T, ctx context.Context) *Service {
+	t.Helper()
+	svc, err := NewService(ctx, &FakeTenantClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	return svc
+}
+
 // playground: drives the Service the way a real client (KaaS controller,
 // CLI, ...) would: Create, observe it over Watch, Update with optimistic
 // concurrency, Delete, and confirm Watch reports all of it. Kept as a normal
@@ -14,7 +23,7 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	svc := NewService()
+	svc := newTestService(t, ctx)
 	const tenant = "tenant-a"
 
 	events, err := svc.Watch(ctx, tenant, 0)
@@ -90,7 +99,7 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 
 func TestService_CreateRejectsUnspecifiedRecoveryPolicy(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := newTestService(t, ctx)
 
 	if _, err := svc.Create(ctx, "tenant-a", "x", VirtualMachineSpec{}); err == nil {
 		t.Fatal("expected validation error for unset RecoveryPolicy")
@@ -99,7 +108,7 @@ func TestService_CreateRejectsUnspecifiedRecoveryPolicy(t *testing.T) {
 
 func TestService_GetIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := newTestService(t, ctx)
 
 	m, err := svc.Create(ctx, "tenant-a", "", VirtualMachineSpec{RecoveryPolicy: RecoveryPolicyNone})
 	if err != nil {

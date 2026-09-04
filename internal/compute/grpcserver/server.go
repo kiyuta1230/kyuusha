@@ -5,6 +5,7 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -94,13 +95,15 @@ func (s *Server) Watch(req *computev1.WatchVirtualMachinesRequest, stream comput
 }
 
 func toStatus(err error) error {
-	switch err {
-	case compute.ErrNotFound:
+	switch {
+	case errors.Is(err, compute.ErrNotFound):
 		return status.Error(codes.NotFound, err.Error())
-	case compute.ErrConflict:
+	case errors.Is(err, compute.ErrConflict):
 		return status.Error(codes.Aborted, err.Error())
-	case compute.ErrHistoryPruned:
+	case errors.Is(err, compute.ErrHistoryPruned):
 		return status.Error(codes.OutOfRange, err.Error())
+	case errors.Is(err, compute.ErrQuotaExceeded):
+		return status.Error(codes.ResourceExhausted, err.Error())
 	}
 	if status.Code(err) != codes.Unknown {
 		return err

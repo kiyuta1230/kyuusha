@@ -28,10 +28,13 @@ services:
     command:
       - "-nats-url=nats://nats:4222"
       - "-grpc-addr=:8081"
+      - "-identity-addr=identity:8082"
       - "-hypervisors=hypervisor-1,hypervisor-2,hypervisor-3"
     depends_on:
       nats:
         condition: service_healthy
+      identity:
+        condition: service_started
     # No ports exposed to the host: api-gateway is the only client-facing
     # entrypoint. compute is reachable only from inside the compose network.
 

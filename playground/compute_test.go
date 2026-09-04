@@ -60,7 +60,10 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 		t.Fatalf("jetstream.New: %v", err)
 	}
 
-	svc := compute.NewService()
+	svc, err := compute.NewService(ctx, &compute.FakeTenantClient{})
+	if err != nil {
+		t.Fatalf("compute.NewService: %v", err)
+	}
 	recon := compute.NewReconciler(svc, nc, js, []string{"hypervisor-1"})
 	go func() {
 		if err := recon.Run(ctx); err != nil && ctx.Err() == nil {
