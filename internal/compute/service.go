@@ -112,13 +112,16 @@ func (s *Service) Get(ctx context.Context, tenantID, id string) (*VirtualMachine
 	return &out, nil
 }
 
+// List returns every VM for tenantID, or every VM across all tenants when
+// tenantID is empty (internal use only; external callers must always pass
+// their own tenant_id).
 func (s *Service) List(ctx context.Context, tenantID string) ([]VirtualMachine, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var out []VirtualMachine
 	for _, m := range s.byID {
-		if m.Meta.TenantID == tenantID {
+		if tenantID == "" || m.Meta.TenantID == tenantID {
 			out = append(out, *m)
 		}
 	}
@@ -165,8 +168,10 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 }
 
 // Watch replays history newer than sinceRV (0 for "from the start") and then
-// streams live events, both scoped to tenantID. The returned channel is
-// closed when ctx is done.
+// streams live events, both scoped to tenantID. An empty tenantID watches
+// across all tenants, for internal use by the reconciler; external callers
+// must always pass their own tenant_id. The returned channel is closed when
+// ctx is done.
 func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-chan Event, error) {
 	s.mu.Lock()
 	if sinceRV > 0 && len(s.history) > 0 && sinceRV < s.history[0].ResourceVersion-1 {
@@ -176,7 +181,7 @@ func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-
 
 	var backlog []Event
 	for _, e := range s.history {
-		if e.ResourceVersion > sinceRV && e.VM.Meta.TenantID == tenantID {
+		if e.ResourceVersion > sinceRV && (tenantID == "" || e.VM.Meta.TenantID == tenantID) {
 			backlog = append(backlog, e)
 		}
 	}
@@ -206,7 +211,7 @@ func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-
 				if !ok {
 					return
 				}
-				if e.VM.Meta.TenantID != tenantID {
+				if tenantID != "" && e.VM.Meta.TenantID != tenantID {
 					continue
 				}
 				select {
