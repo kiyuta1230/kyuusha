@@ -60,7 +60,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		if e.Type != EventAdded && e.Type != EventModified {
 			continue
 		}
-		r.reconcile(ctx, e.VM)
+		r.reconcile(ctx, e.Object)
 	}
 	return nil
 }

@@ -90,6 +90,10 @@ message ListVirtualMachinesResponse {
 message UpdateVirtualMachineRequest {
   VirtualMachine vm = 1; // vm.meta.resource_version must match the stored value
   bool dry_run = 2;
+  // Mirrors vm.meta.tenant_id: kept as a top-level field (like every other
+  // request here) so internal/authz's TenantIDGetter check can authorize
+  // this RPC without unwrapping the nested message.
+  string tenant_id = 3;
 }
 
 message DeleteVirtualMachineRequest {

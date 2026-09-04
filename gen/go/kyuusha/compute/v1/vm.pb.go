@@ -809,9 +809,13 @@ func (x *ListVirtualMachinesResponse) GetItems() []*VirtualMachine {
 }
 
 type UpdateVirtualMachineRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Vm            *VirtualMachine        `protobuf:"bytes,1,opt,name=vm,proto3" json:"vm,omitempty"` // vm.meta.resource_version must match the stored value
-	DryRun        bool                   `protobuf:"varint,2,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Vm     *VirtualMachine        `protobuf:"bytes,1,opt,name=vm,proto3" json:"vm,omitempty"` // vm.meta.resource_version must match the stored value
+	DryRun bool                   `protobuf:"varint,2,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	// Mirrors vm.meta.tenant_id: kept as a top-level field (like every other
+	// request here) so internal/authz's TenantIDGetter check can authorize
+	// this RPC without unwrapping the nested message.
+	TenantId      string `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -858,6 +862,13 @@ func (x *UpdateVirtualMachineRequest) GetDryRun() bool {
 		return x.DryRun
 	}
 	return false
+}
+
+func (x *UpdateVirtualMachineRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
 }
 
 type DeleteVirtualMachineRequest struct {
@@ -1088,10 +1099,11 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x1aListVirtualMachinesRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"W\n" +
 	"\x1bListVirtualMachinesResponse\x128\n" +
-	"\x05items\x18\x01 \x03(\v2\".kyuusha.compute.v1.VirtualMachineR\x05items\"j\n" +
+	"\x05items\x18\x01 \x03(\v2\".kyuusha.compute.v1.VirtualMachineR\x05items\"\x87\x01\n" +
 	"\x1bUpdateVirtualMachineRequest\x122\n" +
 	"\x02vm\x18\x01 \x01(\v2\".kyuusha.compute.v1.VirtualMachineR\x02vm\x12\x17\n" +
-	"\adry_run\x18\x02 \x01(\bR\x06dryRun\"c\n" +
+	"\adry_run\x18\x02 \x01(\bR\x06dryRun\x12\x1b\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"c\n" +
 	"\x1bDeleteVirtualMachineRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x17\n" +

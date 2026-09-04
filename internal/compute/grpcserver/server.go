@@ -59,6 +59,12 @@ func (s *Server) List(ctx context.Context, req *computev1.ListVirtualMachinesReq
 }
 
 func (s *Server) Update(ctx context.Context, req *computev1.UpdateVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	// req.TenantId (top-level) is what internal/authz actually authorized;
+	// req.Vm.Meta.TenantId must agree, or a caller authorized for their own
+	// tenant could smuggle a mutation of another tenant's VM inside vm.meta.
+	if req.GetTenantId() == "" || req.GetTenantId() != req.GetVm().GetMeta().GetTenantId() {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be set and match vm.meta.tenant_id")
+	}
 	vm := fromVM(req.GetVm())
 	updated, err := s.svc.Update(ctx, &vm)
 	if err != nil {
@@ -257,7 +263,7 @@ func toEvent(e compute.Event) *computev1.VirtualMachineEvent {
 		out.Type = computev1.VirtualMachineEvent_BOOKMARK
 	}
 	if out.Type != computev1.VirtualMachineEvent_BOOKMARK {
-		out.Vm = toVM(e.VM)
+		out.Vm = toVM(e.Object)
 	}
 	return out
 }
