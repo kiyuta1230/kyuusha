@@ -14,6 +14,11 @@ type fakeReq struct{ tenantID string }
 
 func (r fakeReq) GetTenantId() string { return r.tenantID }
 
+// fakeUnscopedReq deliberately does not implement TenantIDGetter, mirroring
+// identity's CreateTenantRequest: creating a Tenant isn't scoped under an
+// existing tenant_id, so it must be admin-only.
+type fakeUnscopedReq struct{}
+
 func TestAuthorize(t *testing.T) {
 	ctx := context.Background()
 	a, err := New(ctx)
@@ -41,5 +46,23 @@ func TestAuthorize(t *testing.T) {
 				t.Fatalf("authorize() err=%v, denied=%v, want denied=%v", err, denied, tt.wantDenied)
 			}
 		})
+	}
+}
+
+func TestAuthorize_UnscopedRequestIsAdminOnly(t *testing.T) {
+	ctx := context.Background()
+	a, err := New(ctx)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	nonAdmin := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "tenant-a"})
+	if err := a.authorize(nonAdmin, fakeUnscopedReq{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("non-admin on unscoped request: got %v, want PermissionDenied", err)
+	}
+
+	admin := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "tenant-a", Role: "admin"})
+	if err := a.authorize(admin, fakeUnscopedReq{}); err != nil {
+		t.Fatalf("admin on unscoped request: got %v, want allowed", err)
 	}
 }

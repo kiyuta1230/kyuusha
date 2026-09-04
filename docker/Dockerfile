@@ -11,6 +11,7 @@ RUN CGO_ENABLED=0 go build -o /out/compute ./cmd/compute
 RUN CGO_ENABLED=0 go build -o /out/compute-agent ./cmd/compute-agent
 RUN CGO_ENABLED=0 go build -o /out/kyuusha ./cmd/kyuusha
 RUN CGO_ENABLED=0 go build -o /out/api-gateway ./cmd/api-gateway
+RUN CGO_ENABLED=0 go build -o /out/identity ./cmd/identity
 
 FROM alpine:3 AS compute
 COPY --from=builder /out/compute /usr/local/bin/compute
@@ -28,3 +29,7 @@ ENTRYPOINT ["/usr/local/bin/compute-agent"]
 FROM alpine:3 AS kyuusha-cli
 COPY --from=builder /out/kyuusha /usr/local/bin/kyuusha
 ENTRYPOINT ["/usr/local/bin/kyuusha"]
+
+FROM alpine:3 AS identity
+COPY --from=builder /out/identity /usr/local/bin/identity
+ENTRYPOINT ["/usr/local/bin/identity"]

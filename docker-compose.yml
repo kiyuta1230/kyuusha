@@ -1,11 +1,11 @@
 # Multi-hypervisor playground: one NATS/JetStream broker, api-gateway (the
 # only client-facing, JWT/OPA-checked entrypoint), one compute control-plane
-# (not exposed to the host -- only api-gateway may reach it), and three
-# compute-agent "hypervisors" so the (still-stub) round-robin scheduler has
-# something to spread VMs across. Bring it up with `docker compose up
-# --build` and drive it with playground/scenario.sh or
-# `go run ./cmd/kyuusha vm ... -addr=localhost:8080 -token=...`
-# (`kyuusha token mint` for a dev token).
+# and one identity control-plane (neither exposed to the host -- only
+# api-gateway may reach them), and three compute-agent "hypervisors" so the
+# (still-stub) round-robin scheduler has something to spread VMs across.
+# Bring it up with `docker compose up --build` and drive it with
+# playground/scenario.sh or `go run ./cmd/kyuusha vm|tenant ...
+# -addr=localhost:8080 -token=...` (`kyuusha token mint` for a dev token).
 name: kyuusha-playground
 
 services:
@@ -35,6 +35,15 @@ services:
     # No ports exposed to the host: api-gateway is the only client-facing
     # entrypoint. compute is reachable only from inside the compose network.
 
+  identity:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: identity
+    command:
+      - "-grpc-addr=:8082"
+    # No ports exposed to the host: same reasoning as compute above.
+
   api-gateway:
     build:
       context: .
@@ -43,8 +52,10 @@ services:
     command:
       - "-listen-addr=:8080"
       - "-compute-addr=compute:8081"
+      - "-identity-addr=identity:8082"
     depends_on:
       - compute
+      - identity
     ports:
       - "8080:8080"
 

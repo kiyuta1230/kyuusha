@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package kyuusha.identity.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1;identityv1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// See docs/architecture.md "identityサービスのリソース: Tenant" and "Quota設計".
+// Tenant is the owner every other resource's tenant_id refers to; Quota
+// (the limit values) lives here, but usage accounting/enforcement is each
+// resource-owning service's own responsibility (compute, block-storage),
+// checked synchronously at their own Create time -- identity never learns
+// about individual VirtualMachines/Volumes.
+
+message QuotaSpec {
+  int32 max_vcpu = 1;             // tenant total
+  int64 max_memory_mb = 2;        // tenant total
+  int64 max_volume_gb = 3;        // tenant total
+  int32 max_vms = 4;
+  int32 max_vcpu_per_vm = 5;      // per-VM cap
+  int64 max_memory_mb_per_vm = 6; // per-VM cap
+}
+
+message TenantSpec {
+  string display_name = 1;
+  QuotaSpec quota = 2;
+}
+
+message TenantStatus {
+  string phase = 1; // Active / Deleting / Error
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+}
+
+message Tenant {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  TenantSpec spec = 2;
+  TenantStatus status = 3;
+}
+
+message CreateTenantRequest {
+  // Idempotency key: a repeated Create with the same name returns the
+  // existing Tenant. Unlike VirtualMachine, this request carries no
+  // tenant_id -- creating a Tenant isn't scoped under an existing tenant,
+  // so internal/authz authorizes it for the admin role only.
+  string name = 1;
+  TenantSpec spec = 2;
+  bool dry_run = 3;
+}
+
+message GetTenantRequest {
+  string tenant_id = 1; // the target Tenant's own id; a tenant may Get itself
+}
+
+message ListTenantsRequest {
+  string tenant_id = 1; // empty = all tenants (admin-only in practice)
+}
+
+message ListTenantsResponse {
+  repeated Tenant items = 1;
+}
+
+message UpdateTenantRequest {
+  Tenant tenant = 1; // tenant.meta.resource_version must match the stored value
+  bool dry_run = 2;
+  // Mirrors tenant.meta.tenant_id; kept top-level like every other request
+  // here so internal/authz can authorize without unwrapping the nested
+  // message, and so the server can reject a mismatch (see vm.proto's
+  // UpdateVirtualMachineRequest.tenant_id for the same reasoning).
+  string tenant_id = 3;
+}
+
+message DeleteTenantRequest {
+  string tenant_id = 1;
+  bool dry_run = 2;
+}
+
+message WatchTenantsRequest {
+  string tenant_id = 1;
+  int64 since_resource_version = 2;
+}
+
+message TenantEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  Tenant tenant = 2;
+  int64 resource_version = 3;
+}
+
+service TenantService {
+  rpc Create(CreateTenantRequest) returns (Tenant);
+  rpc Get(GetTenantRequest) returns (Tenant);
+  rpc List(ListTenantsRequest) returns (ListTenantsResponse);
+  rpc Update(UpdateTenantRequest) returns (Tenant);
+  rpc Delete(DeleteTenantRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchTenantsRequest) returns (stream TenantEvent);
+}

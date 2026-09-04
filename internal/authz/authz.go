@@ -20,8 +20,13 @@ import (
 //go:embed policy.rego
 var policySrc string
 
-// TenantIDGetter is implemented by every kyuusha request message: they all
-// carry tenant_id (CreateVirtualMachineRequest, WatchVirtualMachinesRequest, ...).
+// TenantIDGetter is implemented by most kyuusha request messages: they
+// carry tenant_id (CreateVirtualMachineRequest, WatchVirtualMachinesRequest,
+// ...). A request that does NOT implement it (e.g. identity's
+// CreateTenantRequest -- creating a Tenant isn't scoped under any existing
+// tenant_id) is treated as carrying an empty tenant_id, which policy.rego's
+// per-tenant rule can never match; such requests are authorized only for
+// the admin role.
 type TenantIDGetter interface {
 	GetTenantId() string
 }
@@ -46,9 +51,9 @@ func (a *Authorizer) authorize(ctx context.Context, req any) error {
 	if !ok {
 		return status.Error(codes.Internal, "authz ran before authn")
 	}
-	tenantGetter, ok := req.(TenantIDGetter)
-	if !ok {
-		return status.Error(codes.Internal, "request does not implement TenantIDGetter")
+	var requestTenantID string
+	if tenantGetter, ok := req.(TenantIDGetter); ok {
+		requestTenantID = tenantGetter.GetTenantId()
 	}
 
 	input := map[string]any{
@@ -57,7 +62,7 @@ func (a *Authorizer) authorize(ctx context.Context, req any) error {
 			"role":      claims.Role,
 		},
 		"request": map[string]any{
-			"tenant_id": tenantGetter.GetTenantId(),
+			"tenant_id": requestTenantID,
 		},
 	}
 	results, err := a.query.Eval(ctx, rego.EvalInput(input))

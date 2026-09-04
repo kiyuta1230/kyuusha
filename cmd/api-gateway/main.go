@@ -20,11 +20,13 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/gateway"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func main() {
 	listenAddr := flag.String("listen-addr", ":8080", "address to serve the client-facing API on")
 	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address")
+	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address")
 	jwtPublicKey := flag.String("jwt-public-key", "hack/devkeys/jwt-dev.pub", "PEM file used to verify client JWTs")
 	flag.Parse()
 
@@ -55,6 +57,14 @@ func main() {
 	defer computeConn.Close()
 	vmProxy := gateway.NewVirtualMachineProxy(computev1.NewVirtualMachineServiceClient(computeConn))
 
+	identityConn, err := grpc.NewClient(*identityAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		slog.Error("dial identity", "addr", *identityAddr, "err", err)
+		os.Exit(1)
+	}
+	defer identityConn.Close()
+	tenantProxy := gateway.NewTenantProxy(identityv1.NewTenantServiceClient(identityConn))
+
 	lis, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
 		slog.Error("listen", "addr", *listenAddr, "err", err)
@@ -65,13 +75,14 @@ func main() {
 		grpc.ChainStreamInterceptor(verifier.StreamInterceptor(), authorizer.StreamInterceptor()),
 	)
 	computev1.RegisterVirtualMachineServiceServer(grpcServer, vmProxy)
+	identityv1.RegisterTenantServiceServer(grpcServer, tenantProxy)
 
 	go func() {
 		<-ctx.Done()
 		grpcServer.GracefulStop()
 	}()
 
-	slog.Info("api-gateway: serving", "addr", *listenAddr, "compute-addr", *computeAddr)
+	slog.Info("api-gateway: serving", "addr", *listenAddr, "compute-addr", *computeAddr, "identity-addr", *identityAddr)
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("grpc serve", "err", err)
 		os.Exit(1)

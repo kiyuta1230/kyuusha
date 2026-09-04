@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func main() {
@@ -27,6 +28,8 @@ func main() {
 	switch os.Args[1] {
 	case "vm":
 		vmCmd(os.Args[2:])
+	case "tenant":
+		tenantCmd(os.Args[2:])
 	case "token":
 		tokenCmd(os.Args[2:])
 	default:
@@ -38,6 +41,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   kyuusha vm <create|get|list|watch> [flags]
+  kyuusha tenant <create|get|list|watch> [flags]
   kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 
@@ -67,6 +71,14 @@ func dial(addr string) computev1.VirtualMachineServiceClient {
 		fatal("dial %s: %v", addr, err)
 	}
 	return computev1.NewVirtualMachineServiceClient(conn)
+}
+
+func dialIdentity(addr string) identityv1.TenantServiceClient {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		fatal("dial %s: %v", addr, err)
+	}
+	return identityv1.NewTenantServiceClient(conn)
 }
 
 // authedContext attaches the bearer token api-gateway expects. token
