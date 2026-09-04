@@ -1,6 +1,7 @@
 // Command kyuusha is the CLI client for the kyuusha services. It is a thin
-// wrapper over the gRPC API; see docs/architecture.md "API消費者の多様化に
-// 備える". Currently only `vm` (VirtualMachineService) is wired up.
+// wrapper over the gRPC API, talking to api-gateway (not backend services
+// directly); see docs/architecture.md "API消費者の多様化に備える" and
+// "認証・認可とHypervisor登録".
 package main
 
 import (
@@ -13,6 +14,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
@@ -25,6 +27,8 @@ func main() {
 	switch os.Args[1] {
 	case "vm":
 		vmCmd(os.Args[2:])
+	case "token":
+		tokenCmd(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -32,7 +36,9 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: kyuusha vm <create|get|list|watch> [flags]`)
+	fmt.Fprintln(os.Stderr, `usage:
+  kyuusha vm <create|get|list|watch> [flags]
+  kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 
 func vmCmd(args []string) {
@@ -63,6 +69,19 @@ func dial(addr string) computev1.VirtualMachineServiceClient {
 	return computev1.NewVirtualMachineServiceClient(conn)
 }
 
+// authedContext attaches the bearer token api-gateway expects. token
+// defaults to $KYUUSHA_TOKEN so scripts don't have to pass -token
+// everywhere; see `kyuusha token mint` for how to get one in dev.
+func authedContext(ctx context.Context, token string) context.Context {
+	if token == "" {
+		token = os.Getenv("KYUUSHA_TOKEN")
+	}
+	if token == "" {
+		fatal("no token: pass -token or set $KYUUSHA_TOKEN (see 'kyuusha token mint')")
+	}
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+}
+
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
@@ -70,7 +89,8 @@ func fatal(format string, args ...any) {
 
 func vmCreate(args []string) {
 	fs := flag.NewFlagSet("vm create", flag.ExitOnError)
-	addr := fs.String("addr", "localhost:8081", "compute service address")
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	name := fs.String("name", "", "VM name (idempotency key)")
 	image := fs.String("image", "", "image ID (required)")
@@ -85,7 +105,7 @@ func vmCreate(args []string) {
 	}
 
 	client := dial(*addr)
-	ctx := context.Background()
+	ctx := authedContext(context.Background(), *token)
 
 	vm, err := client.Create(ctx, &computev1.CreateVirtualMachineRequest{
 		TenantId: *tenant,
@@ -144,7 +164,8 @@ func waitForTerminal(ctx context.Context, client computev1.VirtualMachineService
 
 func vmGet(args []string) {
 	fs := flag.NewFlagSet("vm get", flag.ExitOnError)
-	addr := fs.String("addr", "localhost:8081", "compute service address")
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "VM ID (required)")
 	fs.Parse(args)
@@ -153,7 +174,8 @@ func vmGet(args []string) {
 		fatal("-tenant and -id are required")
 	}
 	client := dial(*addr)
-	vm, err := client.Get(context.Background(), &computev1.GetVirtualMachineRequest{TenantId: *tenant, Id: *id})
+	ctx := authedContext(context.Background(), *token)
+	vm, err := client.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: *tenant, Id: *id})
 	if err != nil {
 		fatal("get: %v", err)
 	}
@@ -162,7 +184,8 @@ func vmGet(args []string) {
 
 func vmList(args []string) {
 	fs := flag.NewFlagSet("vm list", flag.ExitOnError)
-	addr := fs.String("addr", "localhost:8081", "compute service address")
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	fs.Parse(args)
 
@@ -170,7 +193,8 @@ func vmList(args []string) {
 		fatal("-tenant is required")
 	}
 	client := dial(*addr)
-	resp, err := client.List(context.Background(), &computev1.ListVirtualMachinesRequest{TenantId: *tenant})
+	ctx := authedContext(context.Background(), *token)
+	resp, err := client.List(ctx, &computev1.ListVirtualMachinesRequest{TenantId: *tenant})
 	if err != nil {
 		fatal("list: %v", err)
 	}
@@ -181,7 +205,8 @@ func vmList(args []string) {
 
 func vmWatch(args []string) {
 	fs := flag.NewFlagSet("vm watch", flag.ExitOnError)
-	addr := fs.String("addr", "localhost:8081", "compute service address")
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
 	fs.Parse(args)
@@ -190,7 +215,8 @@ func vmWatch(args []string) {
 		fatal("-tenant is required")
 	}
 	client := dial(*addr)
-	stream, err := client.Watch(context.Background(), &computev1.WatchVirtualMachinesRequest{
+	ctx := authedContext(context.Background(), *token)
+	stream, err := client.Watch(ctx, &computev1.WatchVirtualMachinesRequest{
 		TenantId:             *tenant,
 		SinceResourceVersion: *since,
 	})
