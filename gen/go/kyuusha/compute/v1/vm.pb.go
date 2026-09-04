@@ -460,7 +460,7 @@ type VirtualMachineStatus struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	Phase                string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"`
 	Conditions           []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	Node                 string                 `protobuf:"bytes,3,opt,name=node,proto3" json:"node,omitempty"`
+	Hypervisor           string                 `protobuf:"bytes,3,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`
 	RootVolumeRef        string                 `protobuf:"bytes,4,opt,name=root_volume_ref,json=rootVolumeRef,proto3" json:"root_volume_ref,omitempty"`
 	InterfaceRefs        []string               `protobuf:"bytes,5,rep,name=interface_refs,json=interfaceRefs,proto3" json:"interface_refs,omitempty"`
 	VolumeAttachmentRefs []string               `protobuf:"bytes,6,rep,name=volume_attachment_refs,json=volumeAttachmentRefs,proto3" json:"volume_attachment_refs,omitempty"`
@@ -512,9 +512,9 @@ func (x *VirtualMachineStatus) GetConditions() []*v1.Condition {
 	return nil
 }
 
-func (x *VirtualMachineStatus) GetNode() string {
+func (x *VirtualMachineStatus) GetHypervisor() string {
 	if x != nil {
-		return x.Node
+		return x.Hypervisor
 	}
 	return ""
 }
@@ -1061,13 +1061,15 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"driverHint\x12E\n" +
 	"\vpci_devices\x18\n" +
 	" \x03(\v2$.kyuusha.compute.v1.PciDeviceRequestR\n" +
-	"pciDevices\"\x85\x02\n" +
+	"pciDevices\"\x91\x02\n" +
 	"\x14VirtualMachineStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
 	"conditions\x18\x02 \x03(\v2\x1e.kyuusha.resource.v1.ConditionR\n" +
-	"conditions\x12\x12\n" +
-	"\x04node\x18\x03 \x01(\tR\x04node\x12&\n" +
+	"conditions\x12\x1e\n" +
+	"\n" +
+	"hypervisor\x18\x03 \x01(\tR\n" +
+	"hypervisor\x12&\n" +
 	"\x0froot_volume_ref\x18\x04 \x01(\tR\rrootVolumeRef\x12%\n" +
 	"\x0einterface_refs\x18\x05 \x03(\tR\rinterfaceRefs\x124\n" +
 	"\x16volume_attachment_refs\x18\x06 \x03(\tR\x14volumeAttachmentRefs\"\xc3\x01\n" +

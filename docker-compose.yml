@@ -1,0 +1,63 @@
+# Multi-hypervisor playground: one NATS/JetStream broker, one compute
+# control-plane, and three compute-agent "hypervisors" so the (still-stub)
+# round-robin scheduler has something to spread VMs across. Bring it up with
+# `docker compose up --build` and drive it with playground/scenario.sh or
+# `go run ./cmd/kyuusha vm ... -addr=localhost:8081`.
+name: kyuusha-playground
+
+services:
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8222/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  compute:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: compute
+    command:
+      - "-nats-url=nats://nats:4222"
+      - "-grpc-addr=:8081"
+      - "-hypervisors=hypervisor-1,hypervisor-2,hypervisor-3"
+    depends_on:
+      nats:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+
+  compute-agent-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: compute-agent
+    command: ["-nats-url=nats://nats:4222", "-hypervisor=hypervisor-1"]
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  compute-agent-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: compute-agent
+    command: ["-nats-url=nats://nats:4222", "-hypervisor=hypervisor-2"]
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  compute-agent-3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: compute-agent
+    command: ["-nats-url=nats://nats:4222", "-hypervisor=hypervisor-3"]
+    depends_on:
+      nats:
+        condition: service_healthy

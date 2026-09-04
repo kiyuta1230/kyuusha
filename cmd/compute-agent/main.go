@@ -20,12 +20,12 @@ import (
 
 func main() {
 	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL")
-	node := flag.String("node", "", "this node's ID (required, must match -nodes on compute)")
+	hypervisor := flag.String("hypervisor", "", "this hypervisor's ID (required, must match -hypervisors on compute)")
 	heartbeat := flag.Duration("heartbeat", 5*time.Second, "heartbeat interval")
 	flag.Parse()
 
-	if *node == "" {
-		slog.Error("-node is required")
+	if *hypervisor == "" {
+		slog.Error("-hypervisor is required")
 		os.Exit(1)
 	}
 
@@ -45,8 +45,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	agent := &computeagent.Agent{Node: *node, NC: nc, JS: js, HeartbeatInterval: *heartbeat}
-	slog.Info("compute-agent: starting", "node", *node)
+	agent := &computeagent.Agent{Hypervisor: *hypervisor, NC: nc, JS: js, HeartbeatInterval: *heartbeat}
+	slog.Info("compute-agent: starting", "hypervisor", *hypervisor)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("agent stopped", "err", err)
 		os.Exit(1)

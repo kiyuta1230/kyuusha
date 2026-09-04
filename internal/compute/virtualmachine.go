@@ -66,7 +66,7 @@ const (
 type VirtualMachineStatus struct {
 	Phase                Phase
 	Conditions           []resource.Condition
-	Node                 string
+	Hypervisor           string
 	RootVolumeRef        string
 	InterfaceRefs        []string
 	VolumeAttachmentRefs []string

@@ -55,7 +55,7 @@ message VirtualMachineSpec {
 message VirtualMachineStatus {
   string phase = 1;
   repeated kyuusha.resource.v1.Condition conditions = 2;
-  string node = 3;
+  string hypervisor = 3;
   string root_volume_ref = 4;
   repeated string interface_refs = 5;
   repeated string volume_attachment_refs = 6;

@@ -9,21 +9,21 @@ import (
 )
 
 // Subject naming follows docs/architecture.md's "NATS JetStream:
-// subject/stream設計" section: ms.<service>.<cmd|evt>.<node>.<resource-type>.<verb>
+// subject/stream設計" section: ms.<service>.<cmd|evt>.<hypervisor>.<resource-type>.<verb>
 
 // CmdSubjectCreate etc. are shared by the compute service (Reconciler) and
 // compute-agent, which is why they live here rather than unexported.
 
-func CmdSubjectCreate(node string) string {
-	return fmt.Sprintf("ms.compute.cmd.%s.vm.create", node)
+func CmdSubjectCreate(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.cmd.%s.vm.create", hypervisor)
 }
 
-func EvtSubjectCreateResult(node string) string {
-	return fmt.Sprintf("ms.compute.evt.%s.vm.create-result", node)
+func EvtSubjectCreateResult(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.evt.%s.vm.create-result", hypervisor)
 }
 
-func EvtSubjectHeartbeat(node string) string {
-	return fmt.Sprintf("ms.compute.evt.%s.heartbeat", node)
+func EvtSubjectHeartbeat(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.evt.%s.heartbeat", hypervisor)
 }
 
 const (
@@ -31,7 +31,7 @@ const (
 	evtStreamName = "COMPUTE_EVT"
 )
 
-// CreateCommand is published to cmdSubjectCreate(node) when a VM enters
+// CreateCommand is published to cmdSubjectCreate(hypervisor) when a VM enters
 // Provisioning. compute-agent acks on receipt, not on completion (see
 // docs/architecture.md), and reports back on evtSubjectCreateResult.
 type CreateCommand struct {
@@ -49,8 +49,8 @@ type CreateResult struct {
 }
 
 type HeartbeatMsg struct {
-	Node string    `json:"node"`
-	At   time.Time `json:"at"`
+	Hypervisor string    `json:"hypervisor"`
+	At         time.Time `json:"at"`
 }
 
 // EnsureStreams creates COMPUTE_CMD/COMPUTE_EVT if they don't already exist.

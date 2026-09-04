@@ -210,15 +210,15 @@ func vmWatch(args []string) {
 			continue
 		}
 		vm := ev.GetVm()
-		fmt.Printf("%-10s %-24s phase=%-12s node=%s rv=%d\n",
-			ev.GetType(), vm.GetMeta().GetId(), vm.GetStatus().GetPhase(), vm.GetStatus().GetNode(), ev.GetResourceVersion())
+		fmt.Printf("%-10s %-24s phase=%-12s hypervisor=%s rv=%d\n",
+			ev.GetType(), vm.GetMeta().GetId(), vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(), ev.GetResourceVersion())
 	}
 }
 
 func printVM(vm *computev1.VirtualMachine) {
-	fmt.Printf("id=%s name=%s tenant=%s phase=%s node=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s rv=%d\n",
 		vm.GetMeta().GetId(), vm.GetMeta().GetName(), vm.GetMeta().GetTenantId(),
-		vm.GetStatus().GetPhase(), vm.GetStatus().GetNode(), vm.GetMeta().GetResourceVersion())
+		vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(), vm.GetMeta().GetResourceVersion())
 }
 
 func parseRecoveryPolicy(s string) computev1.RecoveryPolicy {

@@ -169,7 +169,7 @@ func toSpec(s compute.VirtualMachineSpec) *computev1.VirtualMachineSpec {
 func toStatusProto(st compute.VirtualMachineStatus) *computev1.VirtualMachineStatus {
 	out := &computev1.VirtualMachineStatus{
 		Phase:                string(st.Phase),
-		Node:                 st.Node,
+		Hypervisor:           st.Hypervisor,
 		RootVolumeRef:        st.RootVolumeRef,
 		InterfaceRefs:        st.InterfaceRefs,
 		VolumeAttachmentRefs: st.VolumeAttachmentRefs,
@@ -189,7 +189,7 @@ func toStatusProto(st compute.VirtualMachineStatus) *computev1.VirtualMachineSta
 func fromStatusProto(st *computev1.VirtualMachineStatus) compute.VirtualMachineStatus {
 	out := compute.VirtualMachineStatus{
 		Phase:                compute.Phase(st.GetPhase()),
-		Node:                 st.GetNode(),
+		Hypervisor:           st.GetHypervisor(),
 		RootVolumeRef:        st.GetRootVolumeRef(),
 		InterfaceRefs:        st.GetInterfaceRefs(),
 		VolumeAttachmentRefs: st.GetVolumeAttachmentRefs(),

@@ -18,7 +18,7 @@ import (
 )
 
 type Agent struct {
-	Node              string
+	Hypervisor        string
 	NC                *nats.Conn
 	JS                jetstream.JetStream
 	HeartbeatInterval time.Duration
@@ -36,8 +36,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       "compute-agent-" + a.Node,
-		FilterSubject: compute.CmdSubjectCreate(a.Node),
+		Durable:       "compute-agent-" + a.Hypervisor,
+		FilterSubject: compute.CmdSubjectCreate(a.Hypervisor),
 		AckPolicy:     jetstream.AckExplicitPolicy,
 	})
 	if err != nil {
@@ -77,18 +77,18 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 		return
 	}
 
-	slog.Info("compute-agent: stub-creating VM", "vm_id", cmd.VMID, "node", a.Node)
+	slog.Info("compute-agent: stub-creating VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor)
 	result := compute.CreateResult{VMID: cmd.VMID, Success: true}
 	payload, _ := json.Marshal(result)
-	if _, err := a.JS.Publish(context.Background(), compute.EvtSubjectCreateResult(a.Node), payload); err != nil {
+	if _, err := a.JS.Publish(context.Background(), compute.EvtSubjectCreateResult(a.Hypervisor), payload); err != nil {
 		slog.Error("compute-agent: publish create-result failed", "vm_id", cmd.VMID, "err", err)
 	}
 }
 
 func (a *Agent) publishHeartbeat() {
-	hb := compute.HeartbeatMsg{Node: a.Node, At: time.Now()}
+	hb := compute.HeartbeatMsg{Hypervisor: a.Hypervisor, At: time.Now()}
 	payload, _ := json.Marshal(hb)
-	if err := a.NC.Publish(compute.EvtSubjectHeartbeat(a.Node), payload); err != nil {
+	if err := a.NC.Publish(compute.EvtSubjectHeartbeat(a.Hypervisor), payload); err != nil {
 		slog.Error("compute-agent: publish heartbeat failed", "err", err)
 	}
 }

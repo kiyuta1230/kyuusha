@@ -61,14 +61,14 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 	}
 
 	svc := compute.NewService()
-	recon := compute.NewReconciler(svc, nc, js, []string{"node-1"})
+	recon := compute.NewReconciler(svc, nc, js, []string{"hypervisor-1"})
 	go func() {
 		if err := recon.Run(ctx); err != nil && ctx.Err() == nil {
 			t.Errorf("reconciler.Run: %v", err)
 		}
 	}()
 
-	agent := &computeagent.Agent{Node: "node-1", NC: nc, JS: js, HeartbeatInterval: 200 * time.Millisecond}
+	agent := &computeagent.Agent{Hypervisor: "hypervisor-1", NC: nc, JS: js, HeartbeatInterval: 200 * time.Millisecond}
 	go func() {
 		if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
 			t.Errorf("agent.Run: %v", err)
@@ -92,8 +92,8 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 			t.Fatalf("Get: %v", err)
 		}
 		if got.Status.Phase == compute.PhaseRunning {
-			if got.Status.Node != "node-1" {
-				t.Fatalf("Node = %q, want node-1", got.Status.Node)
+			if got.Status.Hypervisor != "hypervisor-1" {
+				t.Fatalf("Hypervisor = %q, want hypervisor-1", got.Status.Hypervisor)
 			}
 			return
 		}

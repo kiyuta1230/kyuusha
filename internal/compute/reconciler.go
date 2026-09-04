@@ -16,26 +16,26 @@ import (
 
 // Reconciler drives VirtualMachines from Pending through Provisioning by
 // talking to compute-agent over NATS. Scheduling is a stub (round-robin over
-// a fixed node list) until the real Node inventory and scheduler exist; the
+// a fixed hypervisor list) until the real Hypervisor inventory and scheduler exist; the
 // point of this pass is to validate the async command/event shape end to end.
 type Reconciler struct {
-	svc   *Service
-	nc    *nats.Conn
-	js    jetstream.JetStream
-	nodes []string
+	svc         *Service
+	nc          *nats.Conn
+	js          jetstream.JetStream
+	hypervisors []string
 
-	mu       sync.Mutex
-	nextNode int
-	seen     map[string]time.Time // node -> last heartbeat, informational only for now
+	mu             sync.Mutex
+	nextHypervisor int
+	seen           map[string]time.Time // hypervisor -> last heartbeat, informational only for now
 }
 
-func NewReconciler(svc *Service, nc *nats.Conn, js jetstream.JetStream, nodes []string) *Reconciler {
+func NewReconciler(svc *Service, nc *nats.Conn, js jetstream.JetStream, hypervisors []string) *Reconciler {
 	return &Reconciler{
-		svc:   svc,
-		nc:    nc,
-		js:    js,
-		nodes: nodes,
-		seen:  make(map[string]time.Time),
+		svc:         svc,
+		nc:          nc,
+		js:          js,
+		hypervisors: hypervisors,
+		seen:        make(map[string]time.Time),
 	}
 }
 
@@ -68,13 +68,13 @@ func (r *Reconciler) Run(ctx context.Context) error {
 func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 	switch vm.Status.Phase {
 	case PhasePending:
-		node, ok := r.pickNode()
+		hypervisor, ok := r.pickHypervisor()
 		if !ok {
-			slog.Warn("unschedulable: no nodes available", "vm_id", vm.Meta.ID)
+			slog.Warn("unschedulable: no hypervisors available", "vm_id", vm.Meta.ID)
 			return
 		}
 		vm.Status.Phase = PhaseScheduled
-		vm.Status.Node = node
+		vm.Status.Hypervisor = hypervisor
 		if _, err := r.svc.Update(ctx, &vm); err != nil {
 			slog.Error("schedule: update failed", "vm_id", vm.Meta.ID, "err", err)
 		}
@@ -93,21 +93,21 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			MemoryMB: vm.Spec.MemoryMB,
 		}
 		payload, _ := json.Marshal(cmd)
-		if _, err := r.js.Publish(ctx, CmdSubjectCreate(vm.Status.Node), payload); err != nil {
+		if _, err := r.js.Publish(ctx, CmdSubjectCreate(vm.Status.Hypervisor), payload); err != nil {
 			slog.Error("provision: publish create command failed", "vm_id", vm.Meta.ID, "err", err)
 		}
 	}
 }
 
-func (r *Reconciler) pickNode() (string, bool) {
+func (r *Reconciler) pickHypervisor() (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.nodes) == 0 {
+	if len(r.hypervisors) == 0 {
 		return "", false
 	}
-	node := r.nodes[r.nextNode%len(r.nodes)]
-	r.nextNode++
-	return node, true
+	hypervisor := r.hypervisors[r.nextHypervisor%len(r.hypervisors)]
+	r.nextHypervisor++
+	return hypervisor, true
 }
 
 // consumeResults handles compute-agent's vm.create-result events, advancing
@@ -181,7 +181,7 @@ func (r *Reconciler) subscribeHeartbeats() error {
 			return
 		}
 		r.mu.Lock()
-		r.seen[hb.Node] = hb.At
+		r.seen[hb.Hypervisor] = hb.At
 		r.mu.Unlock()
 	})
 	return err

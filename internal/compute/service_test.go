@@ -49,7 +49,7 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 
 	// Simulate the scheduler advancing the phase, with optimistic concurrency.
 	m.Status.Phase = PhaseScheduled
-	m.Status.Node = "node-1"
+	m.Status.Hypervisor = "hypervisor-1"
 	updated, err := svc.Update(ctx, m)
 	if err != nil {
 		t.Fatalf("Update: %v", err)

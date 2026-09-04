@@ -1,7 +1,7 @@
 // Command compute runs the compute control-plane: the VirtualMachineService
 // gRPC API plus the Reconciler that talks to compute-agent over NATS. See
 // docs/architecture.md. The scheduler is still a round-robin stub over
-// -nodes; there is no real Node inventory yet.
+// -hypervisors; there is no real Hypervisor inventory yet.
 package main
 
 import (
@@ -27,7 +27,7 @@ import (
 func main() {
 	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL")
 	grpcAddr := flag.String("grpc-addr", ":8081", "address to serve VirtualMachineService on")
-	nodes := flag.String("nodes", "node-1", "comma-separated list of node IDs the stub scheduler may pick from")
+	hypervisors := flag.String("hypervisors", "hypervisor-1", "comma-separated list of hypervisor IDs the stub scheduler may pick from")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -47,7 +47,7 @@ func main() {
 	}
 
 	svc := compute.NewService()
-	recon := compute.NewReconciler(svc, nc, js, strings.Split(*nodes, ","))
+	recon := compute.NewReconciler(svc, nc, js, strings.Split(*hypervisors, ","))
 	go func() {
 		if err := recon.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("reconciler stopped", "err", err)
@@ -67,7 +67,7 @@ func main() {
 		grpcServer.GracefulStop()
 	}()
 
-	slog.Info("compute: serving VirtualMachineService", "addr", *grpcAddr, "nodes", *nodes)
+	slog.Info("compute: serving VirtualMachineService", "addr", *grpcAddr, "hypervisors", *hypervisors)
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("grpc serve", "err", err)
 		os.Exit(1)
