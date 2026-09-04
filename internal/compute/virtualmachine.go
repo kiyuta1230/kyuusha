@@ -1,5 +1,5 @@
 // Package compute implements the "compute" service from docs/architecture.md:
-// Machine lifecycle management. This first pass covers the CRUD+Watch surface
+// VirtualMachine lifecycle management. This first pass covers the CRUD+Watch surface
 // only; scheduling and the NATS/compute-agent side are added separately.
 package compute
 
@@ -37,7 +37,7 @@ type PciDeviceRequest struct {
 	Count    int32
 }
 
-type MachineSpec struct {
+type VirtualMachineSpec struct {
 	ImageID            string
 	VCPU               int32
 	MemoryMB           int64
@@ -63,7 +63,7 @@ const (
 	PhaseError        Phase = "Error"
 )
 
-type MachineStatus struct {
+type VirtualMachineStatus struct {
 	Phase                Phase
 	Conditions           []resource.Condition
 	Node                 string
@@ -72,8 +72,8 @@ type MachineStatus struct {
 	VolumeAttachmentRefs []string
 }
 
-type Machine struct {
+type VirtualMachine struct {
 	Meta   resource.ObjectMeta
-	Spec   MachineSpec
-	Status MachineStatus
+	Spec   VirtualMachineSpec
+	Status VirtualMachineStatus
 }

@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("machine: not found")
-	ErrConflict      = errors.New("machine: resource_version conflict")
-	ErrValidation    = errors.New("machine: validation failed")
-	ErrHistoryPruned = errors.New("machine: watch resume point too old, relist required")
+	ErrNotFound      = errors.New("vm: not found")
+	ErrConflict      = errors.New("vm: resource_version conflict")
+	ErrValidation    = errors.New("vm: validation failed")
+	ErrHistoryPruned = errors.New("vm: watch resume point too old, relist required")
 )
 
 type EventType string
@@ -28,17 +28,17 @@ const (
 
 type Event struct {
 	Type            EventType
-	Machine         Machine
+	VM              VirtualMachine
 	ResourceVersion int64
 }
 
-// Service implements the MachineService CRUD+Watch surface from
+// Service implements the VirtualMachineService CRUD+Watch surface from
 // docs/architecture.md against an in-memory store. This is the first,
 // scheduler/NATS-free slice: it validates the shape of the declarative
 // resource model (ObjectMeta, resource_version, Watch) end to end.
 type Service struct {
 	mu             sync.RWMutex
-	byID           map[string]*Machine
+	byID           map[string]*VirtualMachine
 	byTenantName   map[string]string // "<tenantID>/<name>" -> id, for idempotent Create
 	history        []Event
 	historyLimit   int
@@ -49,7 +49,7 @@ type Service struct {
 
 func NewService() *Service {
 	return &Service{
-		byID:           make(map[string]*Machine),
+		byID:           make(map[string]*VirtualMachine),
 		byTenantName:   make(map[string]string),
 		historyLimit:   1000,
 		watchers:       make(map[chan Event]struct{}),
@@ -58,8 +58,8 @@ func NewService() *Service {
 }
 
 // Create is idempotent when Name is set: a second Create with the same
-// (tenantID, name) returns the existing Machine rather than erroring.
-func (s *Service) Create(ctx context.Context, tenantID, name string, spec MachineSpec) (*Machine, error) {
+// (tenantID, name) returns the existing VirtualMachine rather than erroring.
+func (s *Service) Create(ctx context.Context, tenantID, name string, spec VirtualMachineSpec) (*VirtualMachine, error) {
 	if spec.RecoveryPolicy == RecoveryPolicyUnspecified {
 		return nil, fmt.Errorf("%w: spec.recovery_policy must be set", ErrValidation)
 	}
@@ -79,15 +79,15 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Machin
 	}
 
 	now := time.Now()
-	m := &Machine{
+	m := &VirtualMachine{
 		Meta: resource.ObjectMeta{
-			ID:        resource.NewID("machine"),
+			ID:        resource.NewID("vm"),
 			Name:      name,
 			TenantID:  tenantID,
 			CreatedAt: now,
 		},
 		Spec: spec,
-		Status: MachineStatus{
+		Status: VirtualMachineStatus{
 			Phase: PhasePending,
 		},
 	}
@@ -100,7 +100,7 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Machin
 	return &out, nil
 }
 
-func (s *Service) Get(ctx context.Context, tenantID, id string) (*Machine, error) {
+func (s *Service) Get(ctx context.Context, tenantID, id string) (*VirtualMachine, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -112,11 +112,11 @@ func (s *Service) Get(ctx context.Context, tenantID, id string) (*Machine, error
 	return &out, nil
 }
 
-func (s *Service) List(ctx context.Context, tenantID string) ([]Machine, error) {
+func (s *Service) List(ctx context.Context, tenantID string) ([]VirtualMachine, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var out []Machine
+	var out []VirtualMachine
 	for _, m := range s.byID {
 		if m.Meta.TenantID == tenantID {
 			out = append(out, *m)
@@ -127,7 +127,7 @@ func (s *Service) List(ctx context.Context, tenantID string) ([]Machine, error) 
 
 // Update requires machine.Meta.ResourceVersion to match the stored value
 // (optimistic concurrency); mismatches return ErrConflict.
-func (s *Service) Update(ctx context.Context, machine *Machine) (*Machine, error) {
+func (s *Service) Update(ctx context.Context, machine *VirtualMachine) (*VirtualMachine, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -160,7 +160,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 	}
 	s.nextRV++
 	m.Meta.ResourceVersion = s.nextRV
-	s.emitLocked(Event{Type: EventDeleted, Machine: *m, ResourceVersion: s.nextRV})
+	s.emitLocked(Event{Type: EventDeleted, VM: *m, ResourceVersion: s.nextRV})
 	return nil
 }
 
@@ -176,7 +176,7 @@ func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-
 
 	var backlog []Event
 	for _, e := range s.history {
-		if e.ResourceVersion > sinceRV && e.Machine.Meta.TenantID == tenantID {
+		if e.ResourceVersion > sinceRV && e.VM.Meta.TenantID == tenantID {
 			backlog = append(backlog, e)
 		}
 	}
@@ -206,7 +206,7 @@ func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-
 				if !ok {
 					return
 				}
-				if e.Machine.Meta.TenantID != tenantID {
+				if e.VM.Meta.TenantID != tenantID {
 					continue
 				}
 				select {
@@ -242,12 +242,12 @@ func (s *Service) removeWatcher(ch chan Event) {
 
 // putLocked assigns the next resource_version, stores the object, and emits
 // an event. Callers must hold s.mu.
-func (s *Service) putLocked(m *Machine, eventType EventType) {
+func (s *Service) putLocked(m *VirtualMachine, eventType EventType) {
 	s.nextRV++
 	m.Meta.ResourceVersion = s.nextRV
 	stored := *m
 	s.byID[m.Meta.ID] = &stored
-	s.emitLocked(Event{Type: eventType, Machine: *m, ResourceVersion: s.nextRV})
+	s.emitLocked(Event{Type: eventType, VM: *m, ResourceVersion: s.nextRV})
 }
 
 func (s *Service) emitLocked(e Event) {

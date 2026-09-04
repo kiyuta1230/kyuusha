@@ -52,10 +52,10 @@ PVC/CDIというコンテナ向けボリューム抽象の流用、CNI(コンテ
 **リソースの意味論（オブジェクトモデル）はVMネイティブに独自定義する**。Pod/PVC/CNIのような
 コンテナ用に設計された抽象へVMを押し込めない。具体的には：
 
-- Machineは「Podに包まれたコンテナ」ではなく、compute-agentが直接VMMプロセス(Firecracker/libvirt)を管理する第一級リソース
-- Machineのライフサイクルはコンテナのwaiting/running/terminatedではなく、VMネイティブな状態機械
+- VirtualMachineは「Podに包まれたコンテナ」ではなく、compute-agentが直接VMMプロセス(Firecracker/libvirt)を管理する第一級リソース
+- VirtualMachineのライフサイクルはコンテナのwaiting/running/terminatedではなく、VMネイティブな状態機械
   （例: `Pending → Scheduled → Provisioning → Running → Stopping → Stopped → Deleting`）で表現する
-- vCPU/メモリはコンテナのresource requests/limitsを模倣せず、`MachineSpec`にVMの語彙でそのまま持つ
+- vCPU/メモリはコンテナのresource requests/limitsを模倣せず、`VirtualMachineSpec`にVMの語彙でそのまま持つ
   （将来CPU pinning/NUMA/hugepagesが必要になっても、素直にspecフィールドとして追加できる形にする）
 - ボリュームはPVC/CDIのようなコンテナ向け間接層を経由せず、block-storageサービスへの
   Attach/Detach操作として直接扱う
@@ -73,7 +73,7 @@ CNCF濃度の高いエコシステムに自然と収束している**。偶然�
 
 判断基準は一貫している: JWT署名・OAuth2/OIDCフロー・ポリシー評価・分散合意・テレメトリ
 パイプラインのような、**間違えると事故に直結する／車輪の再発明が高くつく領域**では、自前実装を
-避けて既製品に乗る。逆に、Machineのライフサイクル状態機械やSagaの補償ロジックのような
+避けて既製品に乗る。逆に、VirtualMachineのライフサイクル状態機械やSagaの補償ロジックのような
 **kyuusha固有のドメインロジック**は自前で設計する。新しいコンポーネントを選ぶ際は、
 この軸（難しい分散システムの問題かどうか）で自作/既製品を判断する。
 
@@ -85,9 +85,9 @@ OpenStackの実装都合に由来する用語をそのまま輸入しない**。
 
 | OpenStack用語 | 何の内部事情由来か | kyuushaでの表現 |
 |---|---|---|
-| Port | 仮想スイッチの差し込み口という実装比喩。実態はMachineに紐づくIP/MACを持つネットワークインターフェース | `NetworkInterface` |
-| Instance / Server | 「サーバー」は曖昧（物理/仮想どちらとも取れる） | `Machine`（既存採用） |
-| Flavor | 料理的比喩で意味が読み取れない。固定カタログという間接層自体もQuotaと役割が重複する | `MachineSpec.vcpu`/`memory_mb`を直接指定（当初`machine_class`という間接層で受けたが、Quotaで統制すれば固定カタログ自体が不要と判断し撤廃。「Quota設計」節参照） |
+| Port | 仮想スイッチの差し込み口という実装比喩。実態はVirtualMachineに紐づくIP/MACを持つネットワークインターフェース | `NetworkInterface` |
+| Instance / Server | 「サーバー」は曖昧（物理/仮想どちらとも取れる） | `VirtualMachine`（既存採用） |
+| Flavor | 料理的比喩で意味が読み取れない。固定カタログという間接層自体もQuotaと役割が重複する | `VirtualMachineSpec.vcpu`/`memory_mb`を直接指定（当初`machine_class`という間接層で受けたが、Quotaで統制すれば固定カタログ自体が不要と判断し撤廃。「Quota設計」節参照） |
 
 一方、`Volume`（ブロックストレージの塊）や`Subnet`（CIDRで区切られたネットワーク領域）は
 OpenStack固有語ではなく業界共通語として十分直接的なため、そのまま使う。
@@ -99,7 +99,7 @@ OpenStack固有語ではなく業界共通語として十分直接的なため�
 |---|---|---|
 | `identity` | Keystone | 認証・認可・テナント（＝KaaSクラスタ）・RBAC・トークン発行 |
 | `image` | Glance | イメージのメタデータ管理＋ストレージ |
-| `compute` | Nova | Machineのライフサイクル管理、スケジューリング、compute-agentとの非同期RPC。ライブマイグレーション等の高可用機能は持たない |
+| `compute` | Nova | VirtualMachineのライフサイクル管理、スケジューリング、compute-agentとの非同期RPC。ライブマイグレーション等の高可用機能は持たない |
 | `network` | Neutron | テナント(KaaSクラスタ)単位のネットワーク分離のみ。ルーター/floating IP/per-tenant security policyはスコープ外 |
 | `block-storage` | Cinder | ボリュームの作成・attach・detachのみ。スナップショット/レプリケーションは当面スコープ外 |
 | `api-gateway` | (Nova-api等の集約) | 外部(KaaS)向けgRPCエンドポイント集約、認証、ルーティング |
@@ -134,7 +134,7 @@ message Condition {
 }
 ```
 
-### サービス共通のRPCパターン（例: Machine）
+### サービス共通のRPCパターン（例: VirtualMachine）
 
 ```protobuf
 enum RecoveryPolicy {
@@ -165,11 +165,11 @@ message PciDeviceRequest {
   int32  count = 3;
 }
 
-message MachineSpec {
+message VirtualMachineSpec {
   string image_id = 1;
   int32  vcpu = 2;
   int64  memory_mb = 3;
-  repeated NetworkAttachment network_interfaces = 4; // 1台のMachineに複数インターフェースを許容
+  repeated NetworkAttachment network_interfaces = 4; // 1台のVirtualMachineに複数インターフェースを許容
   repeated VolumeRequest volumes = 5;  // データボリューム。ルートディスクはpersistent_root_diskで別扱い
   RecoveryPolicy recovery_policy = 6; // UNSPECIFIEDはCreate時にエラー(デフォルト値での暗黙運用をさせない)
   bool persistent_root_disk = 7;      // trueならルートディスクもVolumeとして扱い、再作成時に再アタッチする
@@ -178,7 +178,7 @@ message MachineSpec {
   repeated PciDeviceRequest pci_devices = 10; // GPU/SR-IOV NIC等。QEMU driver_hint時のみ有効
 }
 
-message MachineStatus {
+message VirtualMachineStatus {
   string phase = 1;           // Pending / Scheduled / Provisioning / Running / Stopping / Stopped / Deleting / Error
   repeated Condition conditions = 2;
   string node = 3;            // 配置先ノード
@@ -187,19 +187,19 @@ message MachineStatus {
   repeated string volume_attachment_refs = 6; // spec.volumesと同順のVolumeAttachmentへの参照
 }
 
-message Machine {
+message VirtualMachine {
   ObjectMeta meta = 1;
-  MachineSpec spec = 2;
-  MachineStatus status = 3;
+  VirtualMachineSpec spec = 2;
+  VirtualMachineStatus status = 3;
 }
 
-service MachineService {
-  rpc Create(CreateMachineRequest) returns (Machine); // name(べき等キー)/dry_runを持つ。詳細は「API消費者の多様化に備える」節
-  rpc Get(GetMachineRequest) returns (Machine);
-  rpc List(ListMachinesRequest) returns (ListMachinesResponse);
-  rpc Update(UpdateMachineRequest) returns (Machine); // resource_versionが不一致ならConflictエラー。dry_runを持つ
-  rpc Delete(DeleteMachineRequest) returns (google.protobuf.Empty); // dry_runを持つ
-  rpc Watch(WatchMachinesRequest) returns (stream MachineEvent); // ADDED/MODIFIED/DELETED
+service VirtualMachineService {
+  rpc Create(CreateVirtualMachineRequest) returns (VirtualMachine); // name(べき等キー)/dry_runを持つ。詳細は「API消費者の多様化に備える」節
+  rpc Get(GetVirtualMachineRequest) returns (VirtualMachine);
+  rpc List(ListVirtualMachinesRequest) returns (ListVirtualMachinesResponse);
+  rpc Update(UpdateVirtualMachineRequest) returns (VirtualMachine); // resource_versionが不一致ならConflictエラー。dry_runを持つ
+  rpc Delete(DeleteVirtualMachineRequest) returns (google.protobuf.Empty); // dry_runを持つ
+  rpc Watch(WatchVirtualMachinesRequest) returns (stream VirtualMachineEvent); // ADDED/MODIFIED/DELETED
 }
 ```
 
@@ -231,8 +231,8 @@ AIエージェントによるリソース管理も将来の消費者になりう
 （Terraformプロバイダ、MCPサーバー等）を今書くのは時期尚早だが、**どの消費者にも共通して効く
 API規約上の改善**は今のうちに反映しておく。
 
-- **Createにクライアント指定のべき等キーを持たせる**: 子リソースの決定的ID(`iface-<machine-id>-<index>`等)と
-  同じ発想を、外部から呼ばれるトップレベルのCreate（Machine等）にも広げる。呼び出し元が
+- **Createにクライアント指定のべき等キーを持たせる**: 子リソースの決定的ID(`iface-<vm-id>-<index>`等)と
+  同じ発想を、外部から呼ばれるトップレベルのCreate（VirtualMachine等）にも広げる。呼び出し元が
   `name`（または`idempotency_key`）を指定でき、同じキーでの再Createは「既に存在する」として
   安全に扱う。AIエージェントの重複呼び出しやTerraformの再applyに対する頑健性が上がる
 - **`dry_run`をCreate/Update/Deleteに持たせる**: 既存のCreate時バリデーション（format対応、
@@ -271,9 +271,9 @@ message QuotaSpec {
   int32 max_vcpu = 1;                  // テナント合計
   int64 max_memory_mb = 2;             // テナント合計
   int64 max_volume_gb = 3;
-  int32 max_machines = 4;
-  int32 max_vcpu_per_machine = 5;      // 1台あたりの上限。固定カタログ廃止に伴う歯止め
-  int64 max_memory_mb_per_machine = 6; // 1台あたりの上限
+  int32 max_vms = 4;
+  int32 max_vcpu_per_vm = 5;      // 1台あたりの上限。固定カタログ廃止に伴う歯止め
+  int64 max_memory_mb_per_vm = 6; // 1台あたりの上限
 }
 
 message TenantSpec {
@@ -297,23 +297,23 @@ Quotaの実体（vCPU/メモリ/Volume容量）はidentityではなくcompute/bl
 更新した**予約パターンをそのままテナント単位に転用**する。
 
 - compute/block-storageはそれぞれ自分のDBに`tenant_usage(tenant_id, used_vcpu, used_memory_mb,
-  used_volume_gb, machine_count)`を持つ
-- Machine/Volumeの`Create`時、対象テナントの`quota`をidentityへ同期Getで取得し、`tenant_usage`への
+  used_volume_gb, vm_count)`を持つ
+- VirtualMachine/Volumeの`Create`時、対象テナントの`quota`をidentityへ同期Getで取得し、`tenant_usage`への
   加算とリソース作成を**同一トランザクション**で行う。使用量のライブSUM集計はしない
   （レースを避けるため、Node容量予約と同じ理由）
-- 超過していれば**Create自体を同期的に`ResourceExhausted`エラーで拒否する**。Machineの
+- 超過していれば**Create自体を同期的に`ResourceExhausted`エラーで拒否する**。VirtualMachineの
   ライフサイクル状態機械節で「quota超過」を`Error`フェーズへ倒す原因の一つとして挙げていたが、
   これは訂正する。quota判定はNetworkAttachmentのzone一致やImage/driver_hintのformat対応と
-  同じ**Create時の同期バリデーション**であるべきで、doomedなMachineオブジェクトを一度作ってから
+  同じ**Create時の同期バリデーション**であるべきで、doomedなVirtualMachineオブジェクトを一度作ってから
   `Error`にする必要はない
 - 判定ロジック自体（`used + requested <= max`）はOPAのRegoルールとして表現し、認可判定と
   同じ基盤に乗せる
-- **per-VM上限（`max_vcpu_per_machine`/`max_memory_mb_per_machine`）も同じCreate時バリデーションで
+- **per-VM上限（`max_vcpu_per_vm`/`max_memory_mb_per_vm`）も同じCreate時バリデーションで
   チェックする**。固定カタログ(Flavor/machine_class)を廃止し`spec.vcpu`/`memory_mb`を自由記述に
   したため、テナント合計は余裕があっても1台が異常に巨大、という要求を防ぐ歯止めが要る。
-  副次的に、物理ノードの最大キャパシティを超えるMachineをCreate時点で即座に拒否できる
+  副次的に、物理ノードの最大キャパシティを超えるVirtualMachineをCreate時点で即座に拒否できる
   （`Unschedulable`のまま放置されるのを防ぐ）
-- Machine/Volume削除時、同一トランザクションで`tenant_usage`を減算する
+- VirtualMachine/Volume削除時、同一トランザクションで`tenant_usage`を減算する
 
 ### computeサービスのリソース: Node
 
@@ -335,7 +335,7 @@ message NodeStatus {
   int64  last_heartbeat_at = 3;
   int32  allocatable_vcpu = 4;
   int64  allocatable_memory_mb = 5;
-  int32  allocated_vcpu = 6;             // Scheduled以上のMachineの予約合計
+  int32  allocated_vcpu = 6;             // Scheduled以上のVirtualMachineの予約合計
   int64  allocated_memory_mb = 7;
   repeated string supported_drivers = 8; // 例: ["firecracker", "qemu"]
   repeated PciDevice available_devices = 9; // vfio-pci束縛済みのPCIデバイス在庫（GPU/SR-IOV NIC等）
@@ -354,7 +354,7 @@ message SubnetSpec {
   string gateway_ip = 3;
   repeated string dns_servers = 4; // 未指定かつdns_suffix設定時はkyuushaの共有リゾルバIPを補完
   repeated string shared_with_tenant_ids = 5; // 他テナントへの経路共有を許可する意図の宣言（任意）
-  string dns_suffix = 6;   // 空なら名前解決は拡張機能として無効。値を設定すると<machine名>.<dns_suffix>で解決可能になる
+  string dns_suffix = 6;   // 空なら名前解決は拡張機能として無効。値を設定すると<vm名>.<dns_suffix>で解決可能になる
 }
 
 message SubnetStatus {
@@ -371,7 +371,7 @@ message FirewallRule {
 }
 
 message NetworkInterfaceSpec {
-  string machine_id = 1;
+  string vm_id = 1;
   string subnet_id = 2;
   repeated FirewallRule ingress_rules = 3; // 自Subnet CIDR外からはデフォルト拒否。SecurityGroupのような別リソースは介さない
 }
@@ -385,7 +385,7 @@ message NetworkInterfaceStatus {
 }
 ```
 
-`tenant_id`(`ObjectMeta`)は`Subnet`単位で持ち、同一テナントのMachineだけがその`Subnet`の
+`tenant_id`(`ObjectMeta`)は`Subnet`単位で持ち、同一テナントのVirtualMachineだけがその`Subnet`の
 `NetworkInterface`を作成できる。異なるテナントのSubnet間の非疎通性は、VLANタグそのものではなく
 **ゲートウェイ側のVRF分離とルートリーク禁止**によって担保する（誤りの訂正含め、詳細は
 「ネットワーク分離の実現方式」節）。
@@ -395,15 +395,15 @@ message NetworkInterfaceStatus {
 該当zoneのプールから空きIDを排他的に払い出す（ノードagent不関与、同期で完結）。プール枯渇時は
 `Subnet`が`Pending`のまま`Condition{type: VlanPoolExhausted}`を報告する。
 
-**マルチAZにまたがるMachineは作れない**: `MachineSpec.network_interfaces`が参照する全`Subnet`の
-`zone`は一致していなければならない（Create時にバリデーションし、異なれば拒否）。1台のMachineは
+**マルチAZにまたがるVirtualMachineは作れない**: `VirtualMachineSpec.network_interfaces`が参照する全`Subnet`の
+`zone`は一致していなければならない（Create時にバリデーションし、異なれば拒否）。1台のVirtualMachineは
 物理的に1ノード上でしか動かないため当然の制約。マルチAZ冗長性が欲しいテナントは、AZごとに別々の
-`Subnet`を作り（`tenant_id`は同じ）、Machineごとにどちらのzoneに置くかをKaaS側が選ぶ形で表現する。
+`Subnet`を作り（`tenant_id`は同じ）、VirtualMachineごとにどちらのzoneに置くかをKaaS側が選ぶ形で表現する。
 これによりkyuusha側に新しい仕組みは不要。
 
 ### block-storageサービスのリソース: Volume / VolumeAttachment
 
-`Volume`はMachineより長生きしうる独立リソース、`VolumeAttachment`はMachineとVolumeの結びつきを
+`Volume`はVirtualMachineより長生きしうる独立リソース、`VolumeAttachment`はVirtualMachineとVolumeの結びつきを
 表す一時的なリソース。NetworkInterfaceと同じ「結びつきそのものをリソースにする」パターン。
 
 ```protobuf
@@ -418,7 +418,7 @@ message VolumeStatus {
 
 message VolumeAttachmentSpec {
   string volume_id = 1;
-  string machine_id = 2;
+  string vm_id = 2;
   string device_hint = 3; // 省略可
 }
 
@@ -430,11 +430,11 @@ message VolumeAttachmentStatus {
 }
 ```
 
-`VolumeAttachment`のIDも決定的に生成する: データボリュームは`volattach-<machine-id>-<index>`
-（`spec.volumes`のindex基準）、ルートディスクは`volattach-<machine-id>-root`。
+`VolumeAttachment`のIDも決定的に生成する: データボリュームは`volattach-<vm-id>-<index>`
+（`spec.volumes`のindex基準）、ルートディスクは`volattach-<vm-id>-root`。
 
 ルートディスク(`persistent_root_disk: true`時)も同じ`Volume`/`VolumeAttachment`で表現し、
-computeが決定的ID(`rootvol-<machine-id>`)で作成する。`persistent_root_disk: false`(デフォルト)の
+computeが決定的ID(`rootvol-<vm-id>`)で作成する。`persistent_root_disk: false`(デフォルト)の
 場合、ルートディスクはblock-storageを経由せず、compute-agentがVMMドライバ経由でイメージから
 直接ephemeralなディスクを作る（このほうがcattleノードの共通経路として依存が少なく軽い）。
 
@@ -471,15 +471,15 @@ message ImageStatus {
 }
 ```
 
-**Create時のバリデーション**: Machineが参照する`Image.spec.format`は、`MachineSpec.driver_hint`が
+**Create時のバリデーション**: VirtualMachineが参照する`Image.spec.format`は、`VirtualMachineSpec.driver_hint`が
 要求するVMMと対応していなければならない（`KERNEL_ROOTFS`↔`FIRECRACKER`、`QCOW2`↔`QEMU`）。
 不一致ならCreate時に拒否する。フォーマット変換（自動トランスコード）は行わない。イメージの
 作成者（運用者、あるいはKaaS側のイメージビルドパイプライン）が対象driverに合った形式で
 公開する前提とする。
 
 **ストレージ: 必須の外部依存にしない**。VolumeとImageは性質が違う。Volumeは「排他的に1台の
-Machineへattachされる可変ブロックデバイス」だが、Imageは常に**外部でビルドされる不変
-アーティファクト**（スナップショット由来ではない。kyuusha自体はVolume/Machineのスナップショット
+VirtualMachineへattachされる可変ブロックデバイス」だが、Imageは常に**外部でビルドされる不変
+アーティファクト**（スナップショット由来ではない。kyuusha自体はVolume/VirtualMachineのスナップショット
 からのイメージ作成をサポートしない）。
 
 `Image`は`ImageArtifact{url, digest}`という**外部URLへの参照＋整合性検証用digest**を持つだけの
@@ -507,7 +507,7 @@ kyuusha自身に軽量なピアフェッチを組み込む。
 
 ただし軽量ピアフェッチで解決できるのは「フリート内の誰かが一度取得済みのImageを、別ノードが
 再取得する」ケースに限られる。**「フリート全体にとって初めてのImageを、多数のノードが同時に
-必要とする」ケース（バルクMachine作成×新規Image。KaaSクラスタの新規構築・スケールアウト・
+必要とする」ケース（バルクVirtualMachine作成×新規Image。KaaSクラスタの新規構築・スケールアウト・
 イメージロールアウトという、このプロジェクトの主要ユースケースそのもの）には全く効かない**。
 誰も持っていないdigestなので、ピアフェッチが不発に終わり、N台が同時に`url`（origin）へ直接
 殺到する「thundering herd」が起きる。速度の問題ではなく、**origin側の負荷問題**である点に注意。
@@ -549,7 +549,7 @@ kyuusha自身に軽量なピアフェッチを組み込む。
 **少数の"seedピア"へだけ事前配布**すれば十分になる。新Image公開時に1〜数台のseedへ流し込んで
 おけば、あとはバルク作成時にswarmが自然に広げてくれる。全ノード配布よりずっと安上がり。
 
-**Provisioningフェーズへの反映**: 「Machineのライフサイクル状態機械」節の`Provisioning`で
+**Provisioningフェーズへの反映**: 「VirtualMachineのライフサイクル状態機械」節の`Provisioning`で
 挙げた`Condition`（NetworkReady/VolumesReady/Started）に**`ImageCached`を追加**する。
 compute-agentはVMM起動前に、(1)対象ノードのローカルキャッシュ（digestキー）を確認し、
 (2)無ければ軽量ピアフェッチで他ノードから取得を試み、(3)それも無ければDragonfly経由（未導入
@@ -559,14 +559,14 @@ compute-agentはVMM起動前に、(1)対象ノードのローカルキャッシ�
 （キャッシュ済み/ピアフェッチ/Dragonfly配信中なら速い）。
 
 **ephemeralルートディスクの実体**: `persistent_root_disk: false`の場合、compute-agentは
-ノードにキャッシュ済みのrootfsブロブを**Machineごとにcopy-on-writeクローン**し
+ノードにキャッシュ済みのrootfsブロブを**VirtualMachineごとにcopy-on-writeクローン**し
 （CoW対応ファイルシステム上での`reflink`コピー等）、それをvirtio-blockとしてFirecrackerに渡す。
-共有キャッシュ本体には書き込まず、Machine削除時にクローンだけを破棄する。
+共有キャッシュ本体には書き込まず、VirtualMachine削除時にクローンだけを破棄する。
 
 **エビクションポリシー（LRU＋参照カウント除外＋サイズ閾値）**: コンテナイメージキャッシュや
 CDNエッジキャッシュで実績のある標準的なパターンをそのまま借用する。
 
-- 稼働中のMachineがCoWクローンの元にしているdigestは、参照がある限りエビクション対象外
+- 稼働中のVirtualMachineがCoWクローンの元にしているdigestは、参照がある限りエビクション対象外
 - 参照されていないキャッシュ済みdigestのうち、最終使用時刻が古いもの（LRU）から削除対象にする
 - キャッシュディレクトリのサイズがノードごとの設定閾値（例: 割り当て容量の80%）を超えたら、
   LRU順に未参照digestを削除して閾値を下回るまで繰り返す
@@ -590,7 +590,7 @@ CDNエッジキャッシュで実績のある標準的なパターンをその�
 
 Dockerエコシステムが成功したのは`docker commit`のようなスナップショット型のイメージ作成では
 なく、**Dockerfileという宣言的・再現可能なビルドレシピ＋レイヤーキャッシュ＋レジストリ**の
-組み合わせによるものと捉える。kyuushaでも同じ考え方を採用し、**VM/Machineのスナップショットから
+組み合わせによるものと捉える。kyuushaでも同じ考え方を採用し、**VM/VirtualMachineのスナップショットから
 Imageを作る機能はサポートしない**（既述の通り）。Firecracker自身が持つスナップショット機能
 （VMメモリ+vCPUレジスタ+デバイス状態の丸ごとシリアライズ/再開）は実在するが、これは
 **コールドスタート短縮のためのwarm boot専用機能**として位置づけ、Image作成の手段としては
@@ -615,7 +615,7 @@ Imageを作る機能はサポートしない**（既述の通り）。Firecracke
 
 ### UserData注入: NoCloud seed disk
 
-KaaSがMachineに初期設定（kubeadm joinスクリプト、SSH公開鍵等）を渡す手段として、
+KaaSがVirtualMachineに初期設定（kubeadm joinスクリプト、SSH公開鍵等）を渡す手段として、
 **cloud-initのNoCloud seed disk方式**を採用する。AWS/OpenStack Nova流の
 HTTPメタデータサービス（`169.254.169.254`への特別ルーティング）は採用しない。
 理由は、compute nodeごとのルーティング細工と常駐する応答サービスという追加の可動部を
@@ -651,7 +651,7 @@ IPだけで足りる利用者もいるため、DNSは**Subnetごとのオプト�
 
 - networkサービス自体（またはそのサイドカー）が、DNSを有効化しているSubnetについてのみ、
   権威DNSリゾルバとしてDNSポートも待ち受ける
-- `dns_suffix`が設定されているSubnetに限り、`<machine名>.<dns_suffix>` →
+- `dns_suffix`が設定されているSubnetに限り、`<vm名>.<dns_suffix>` →
   `NetworkInterface.status.ip_address`を、DB上のNetworkInterfaceレコードから直接引いて
   応答する（PTRレコードも同様）
 - 実装はdnsmasq/BINDのような重量級ミドルウェアではなく、**Go実装の軽量DNSレスポンダ**
@@ -710,9 +710,9 @@ compute-agentは複数ノードに分散配置される前提で設計する（�
 | 物理側の作業完了を知りたい（例: tapデバイス配線完了、実ボリュームattach完了） | 非同期。相手サービスの`Watch`を購読し、`status.phase`の変化を検知する |
 | あるサービスのノードagentへの指示 | そのサービス自身の内部NATSのみ。他サービスから直接は触らない |
 
-例（compute→network、Machine作成時のネットワークインターフェース確保）:
+例（compute→network、VirtualMachine作成時のネットワークインターフェース確保）:
 1. compute → network: `CreateNetworkInterface()` を同期gRPC呼び出し。networkはDBに`NetworkInterface{status.phase: Pending}`を書き込み即座に返す（agent不関与、ミリ秒オーダー）
-2. computeのMachineコントローラーはnetwork側の`NetworkInterface`を**Watch**し、`status.phase == Ready`になるまで待つ
+2. computeのVirtualMachineコントローラーはnetwork側の`NetworkInterface`を**Watch**し、`status.phase == Ready`になるまで待つ
 3. IPAM割り当て→対象ノードのnetwork-agentへNATSで指示→tapデバイス配線完了→`status`更新、という内部処理は完全にnetworkサービス内で閉じており、computeはその実装を意識しない
 
 `spec.network_interfaces`が複数ある場合、上記1〜3を各エントリに対して並行に実行し、全てが`Ready`になってから`Provisioning`を次に進める。
@@ -725,14 +725,14 @@ compute-agentは複数ノードに分散配置される前提で設計する（�
 
 **subject命名規則**: `ms.<service>.<方向>.<node>.<resource-type>.<verb>`
 
-- コマンド（control-plane→agent）: `ms.compute.cmd.<node>.machine.create` / `ms.network.cmd.<node>.interface.bind` など
-- イベント（agent→control-plane、結果報告・heartbeat）: `ms.compute.evt.<node>.machine.create-result` / `ms.compute.evt.<node>.heartbeat`
+- コマンド（control-plane→agent）: `ms.compute.cmd.<node>.vm.create` / `ms.network.cmd.<node>.interface.bind` など
+- イベント（agent→control-plane、結果報告・heartbeat）: `ms.compute.evt.<node>.vm.create-result` / `ms.compute.evt.<node>.heartbeat`
 
 **ストリームと配信保証**: 性質が異なるので2種類のストリームに分ける。
 
 | ストリーム | 対象subject | Retention | 配信保証 |
 |---|---|---|---|
-| `<SERVICE>_CMD` | `ms.<service>.cmd.>` | WorkQueue（一度消費されたら消える） | at-least-once。agentは処理完了ではなく**受理**時点でack。冪等な決定的ID（`iface-<machine-id>-<index>`等）により再配送されても安全に再適用できる |
+| `<SERVICE>_CMD` | `ms.<service>.cmd.>` | WorkQueue（一度消費されたら消える） | at-least-once。agentは処理完了ではなく**受理**時点でack。冪等な決定的ID（`iface-<vm-id>-<index>`等）により再配送されても安全に再適用できる |
 | `<SERVICE>_EVT` | `ms.<service>.evt.>` | Limits（max-age短め、例: 24時間） | heartbeatはack不要のfire-and-forget（次の送信が数秒後に来るので1回の欠落は無害）。結果報告イベントはat-least-onceで、受信側（control-plane）はresource_versionで冪等に反映する |
 
 ### 原則: 失敗時のロールバックはSagaパターン（2PCはやらない）
@@ -743,14 +743,14 @@ compute-agentは複数ノードに分散配置される前提で設計する（�
 **オーケストレーション型のSaga**を採用する。これは特別な仕組みではなく、通常の削除フロー
 （`Deleting`状態でのreconcile）と同じコードパスで実現する。
 
-- オーケストレーター（例: Machine）は、作成した子リソースへの参照を自分の`status`に記録する
+- オーケストレーター（例: VirtualMachine）は、作成した子リソースへの参照を自分の`status`に記録する
   （例: `status.interface_refs`, `status.volume_refs`）
-- 後続ステップが失敗したら、記録済みの参照を使って子リソースを補償Delete（Machine自体は削除しない）。
-  完了確認後、Machineは`phase: Error`に留まり、`status.conditions`に失敗理由を記録する。
-  Machine自体の削除はKaaSが明示的に`Delete()`を呼ぶまで発生しない（詳細は次節「Machineのライフサイクル状態機械」）
+- 後続ステップが失敗したら、記録済みの参照を使って子リソースを補償Delete（VirtualMachine自体は削除しない）。
+  完了確認後、VirtualMachineは`phase: Error`に留まり、`status.conditions`に失敗理由を記録する。
+  VirtualMachine自体の削除はKaaSが明示的に`Delete()`を呼ぶまで発生しない（詳細は次節「VirtualMachineのライフサイクル状態機械」）
 - **クラッシュ耐性**: 「子リソースの`Create`はgRPC的に成功したが、オーケストレーターが
   `status`に参照を書く前にクラッシュした」場合の孤児化を防ぐため、子リソースIDは
-  呼び出し元が決定的に生成する（例: `iface-<machine-id>-<index>`。1台のMachineが複数の
+  呼び出し元が決定的に生成する（例: `iface-<vm-id>-<index>`。1台のVirtualMachineが複数の
   NetworkInterfaceを持てるため、`spec.network_interfaces`内のindexまで含めて一意にする）。
   再起動後に同じIDで`Create`を再送すれば、相手サービスは「既に存在する」として何もせず返す（べき等）。
   これによりcompute側は安全に`status.interface_refs`を復元できる
@@ -758,10 +758,10 @@ compute-agentは複数ノードに分散配置される前提で設計する（�
   各サービスは「参照元が存在しない/削除済みのリソース」を定期的に検出して掃除するガベージコレクタを持つ
   （k8sのownerReference + GCコントローラーと同じ発想）。実行間隔は10分に1回程度の定期スイープで十分
   （即時性は不要。孤児は既に無害化されている状態のクリーンアップに過ぎないため）。検出ロジックは
-  「`machine_id`を持つ子リソース(NetworkInterface/VolumeAttachment)について、computeへ`Get`し
+  「`vm_id`を持つ子リソース(NetworkInterface/VolumeAttachment)について、computeへ`Get`し
   `NotFound`が返れば削除」というシンプルな参照チェックで良い
 
-## Machineのライフサイクル状態機械
+## VirtualMachineのライフサイクル状態機械
 
 VM自体の状態（起動中/停止中）と、依存リソース（NetworkInterface/Volume attachment）の
 準備状況を混ぜず、phaseは粗く保ち、詳細は`status.conditions`で表現する。
@@ -773,14 +773,14 @@ waiting/running/terminatedをそのまま持ち込まない）。
 
 | Phase | 意味 | 駆動主体 |
 |---|---|---|
-| `Pending` | Machine作成直後。未スケジュール | compute(スケジューラ) |
+| `Pending` | VirtualMachine作成直後。未スケジュール | compute(スケジューラ) |
 | `Scheduled` | 配置先ノード決定（`status.node`確定） | compute(スケジューラ) |
 | `Provisioning` | NetworkInterface/Volume attachment確保待ち→compute-agentへのVM作成指示。`status.conditions`に`NetworkReady`/`VolumesReady`/`Started`が積まれる | compute-agent |
 | `Running` | agentがVM起動を確認 | compute-agent |
 | `Stopping` | ユーザーがStop要求 | compute-agent |
 | `Stopped` | agentが停止を確認。NetworkInterface/Volume attachmentは保持したまま | compute-agent |
 | `Deleting` | ユーザーがDelete要求（どのphaseからでも遷移可）。VM破棄→子リソース補償削除 | compute-agent → compute |
-| `Error` | 回復不能な失敗。子リソースの補償削除は完了済みだが、Machine自体は削除せず留まる（理由調査のため） | compute |
+| `Error` | 回復不能な失敗。子リソースの補償削除は完了済みだが、VirtualMachine自体は削除せず留まる（理由調査のため） | compute |
 
 ### 遷移図
 
@@ -807,14 +807,14 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
 - **Stopped→再起動はProvisioningへの再入**: Firecrackerはプロセス単位のVMMなので、Stop=プロセス終了、
   Start=新規プロセスで同じNetworkInterface/Volume attachmentを再利用してVM作成、という扱いになる
   （QEMUのpause/resumeのような同一プロセス継続は前提にしない。ライブマイグレーション不要判断と一貫）
-- **NetworkInterfaceとVolumeで削除方針が非対称**: `Deleting`時、NetworkInterfaceはMachine専用に作られた
-  リソースなので完全削除する。一方Volumeは Machineより長生きしうる独立リソースなので、
+- **NetworkInterfaceとVolumeで削除方針が非対称**: `Deleting`時、NetworkInterfaceはVirtualMachine専用に作られた
+  リソースなので完全削除する。一方Volumeは VirtualMachineより長生きしうる独立リソースなので、
   Volume自体は消さず`VolumeAttachment`（結びつきの部分）だけ削除する
   （`spec.volumes[].delete_on_termination`のようなフラグで例外的にVolumeごと削除する余地は将来検討）
 - **Errorへ倒す基準**: ネットワーク瞬断のような一時的失敗は無限にリトライする（reconcileループの通常動作）。
   イメージ不存在・スケジューリング不能・agentからの恒久的失敗報告など、有限回数以内に
   自然回復しないと判断される失敗のみ`Error`にする（quota超過はCreate時の同期バリデーションで
-  拒否するため、Machineが生成されてから`Error`になることはない。「Quota設計」節を参照）
+  拒否するため、VirtualMachineが生成されてから`Error`になることはない。「Quota設計」節を参照）
 - **ノード喪失時の分岐**: `spec.recovery_policy == SELF_HEAL`の場合、ノード喪失検知（後述）を契機に
   `Running`/`Stopped`から`Scheduled`（新ノード）へ差し戻し、`Provisioning`を再実行する。既存の
   `NetworkInterface`（IPは維持しtapのみ再配線）と、`persistent_root_disk`なら`status.root_volume_ref`の
@@ -857,7 +857,7 @@ Goライブラリとして埋め込む**（別サービスを立てず`open-poli
    呼べない」といった認可は別途要る。内部コンポーネントが侵害された場合の被害範囲を絞るためのもの
 
 外部（KaaSコントローラー向け）APIについて、テナント内でリソース種別ごとに細かく権限を分ける
-（Machineは書けるがVolumeは読むだけ、等）のは時期尚早と判断する。主要な外部クライアントは
+（VirtualMachineは書けるがVolumeは読むだけ、等）のは時期尚早と判断する。主要な外部クライアントは
 KaaSコントローラー1つで、自クラスタの全リソース種別を管理する必要があるため分割の実利が薄い。
 OPA採用によりこの「今は粗く、後で細かく」という判断は先送りでき、認可基盤自体を作り直す必要はない。
 
@@ -878,11 +878,11 @@ OPA採用によりこの「今は粗く、後で細かく」という判断は�
 
 ## スケジューラ設計
 
-`Pending`の`Machine`に配置先ノードを決め`status.node`を設定し`Scheduled`へ遷移させる、
+`Pending`の`VirtualMachine`に配置先ノードを決め`status.node`を設定し`Scheduled`へ遷移させる、
 computeの内部処理。Nova流のfilter+weigherパイプラインのような複雑な仕組みは持ち込まず、
 最小限のフィルタと単一のデフォルト戦略で開始する（YAGNI）。
 
-### サイジングとdriverは`MachineSpec`から直接読む
+### サイジングとdriverは`VirtualMachineSpec`から直接読む
 
 固定カタログ（Flavor/machine_class）は廃止した（「設計原則: 命名はOpenStackを踏襲しない」節）。
 `spec.vcpu`/`spec.memory_mb`をそのままリソース要求量として使い、`spec.driver_hint`
@@ -894,7 +894,7 @@ computeの内部処理。Nova流のfilter+weigherパイプラインのような�
 1. `Node.status.phase == Ready`
 2. `spec.driver_hint`（未指定なら`FIRECRACKER`）が`Node.status.supported_drivers`に含まれる
 3. `allocatable - allocated >= spec.vcpu / spec.memory_mb`
-4. `Node.status.zone`が、Machineが参照する`Subnet.spec.zone`と一致する
+4. `Node.status.zone`が、VirtualMachineが参照する`Subnet.spec.zone`と一致する
 5. `spec.pci_devices`が指定されている場合、要求を満たす未割当の`PciDevice`（`vendor_id`/`device_id`一致）が
    `Node.status.available_devices`に十分な数だけ存在する（詳細は「PCIデバイス(GPU等)パススルー」節）
 
@@ -909,7 +909,7 @@ type SchedulingStrategy interface {
     Pick(candidates []*Node, req ResourceRequest) (*Node, error)
 }
 // デフォルト: 空き容量が最も多いノードを選ぶ(スプレッド)
-// 特別な失敗ドメイン/ラック認識をしなくても、同一KaaSクラスタのMachineが
+// 特別な失敗ドメイン/ラック認識をしなくても、同一KaaSクラスタのVirtualMachineが
 // 1ノードに偏るのを自然に抑制できる
 type MostAvailableFirst struct{}
 ```
@@ -919,12 +919,12 @@ type MostAvailableFirst struct{}
 ### 予約とレース対策
 
 ノード選定と同時に、同一トランザクションで`Node.status.allocated_vcpu`/`allocated_memory_mb`を
-加算し、Machineの`status.node`を書いて`Scheduled`へ遷移させる。複数Machineの同時スケジューリングは
+加算し、VirtualMachineの`status.node`を書いて`Scheduled`へ遷移させる。複数VirtualMachineの同時スケジューリングは
 `resource_version`による楽観的並行性制御で検出し、衝突時は候補を選び直してリトライする。
 割当てできるノードがない場合は`Pending`のまま`Condition{type: Unschedulable, reason: InsufficientCapacity}`
-を報告し続け、「Errorへ倒す基準」に従う。Machineが削除/失敗した際は予約を解放する
-（`allocated_*`を減算）。`spec.pci_devices`を指定したMachineの場合、該当する`PciDevice.allocated`も
-同一トランザクションで`true`に設定し、排他的に予約する（GPUは同時に1台のMachineにしか
+を報告し続け、「Errorへ倒す基準」に従う。VirtualMachineが削除/失敗した際は予約を解放する
+（`allocated_*`を減算）。`spec.pci_devices`を指定したVirtualMachineの場合、該当する`PciDevice.allocated`も
+同一トランザクションで`true`に設定し、排他的に予約する（GPUは同時に1台のVirtualMachineにしか
 パススルーできないため。VolumeAttachmentの排他制御と同じ発想）。
 
 ## PCIデバイス(GPU等)パススルー
@@ -935,7 +935,7 @@ type MostAvailableFirst struct{}
 **QEMU/libvirt側（VFIO）でのみ**成立し、`driver_hint: QEMU`を選ぶ既存の仕組みにそのまま乗る。
 I/O性能が必要なpet系ワークロードに続く、QEMUを選ぶ2つ目の正当な理由になる。
 
-`Node.status.available_devices`（vfio-pci束縛済みのPCIデバイス在庫）と`MachineSpec.pci_devices`
+`Node.status.available_devices`（vfio-pci束縛済みのPCIデバイス在庫）と`VirtualMachineSpec.pci_devices`
 （`vendor_id`/`device_id`/`count`を直接指定）は、GPUだけでなくSR-IOV NIC等にも使い回せる
 汎用設計にしてある。デバイスIDは実ハードウェアのPCI ID(ベンダーID/デバイスID)そのものであり、
 `machine_class`のような実装都合の間接カタログではないため、「avoid indirection」の命名原則にも反しない。
@@ -950,12 +950,12 @@ I/O性能が必要なpet系ワークロードに続く、QEMUを選ぶ2つ目の
 
 - compute-agentは自ノードの生存を`agent.heartbeat.<node>`のようなsubjectへ定期送信する
 - compute側のノード監視コンポーネントが最終heartbeat時刻を追跡し、閾値超過で該当ノードを`NotReady`と判定する
-- `NotReady`になったノード上の全Machineをreconcileし、上記「ノード喪失時の分岐」に従って処理する
+- `NotReady`になったノード上の全VirtualMachineをreconcileし、上記「ノード喪失時の分岐」に従って処理する
 
 ### 未解決の危険: フェンシング問題
 
 heartbeat途絶は必ずしも「VMが停止した」ことを意味しない。ネットワーク分断でheartbeatだけ届かず、
-実際には旧ノードでVMが動き続けているケースがあり得る。この状態で新ノードにMachineを作り直すと、
+実際には旧ノードでVMが動き続けているケースがあり得る。この状態で新ノードにVirtualMachineを作り直すと、
 同一Volumeの二重アタッチ（データ破損）や同一IPの二重払い出しが発生しうる。
 
 最低限の対処として、block-storage側で「同一Volumeの同時アタッチ拒否」の排他制御を持たせ、
@@ -1025,8 +1025,8 @@ VRFインスタンスを払い出し、テナント間のデフォルトルー�
 
 ### テナント間でのSubnet共有: L2共有はせず、ルートリーク+ACLで表現する
 
-`Subnet.tenant_id`による単一所有は変えない（NetworkInterfaceは同一テナントのMachineのみ作成可能、
-というルールも維持する）。同一VLANに複数テナントのMachineを混在させると、ARP spoofingや
+`Subnet.tenant_id`による単一所有は変えない（NetworkInterfaceは同一テナントのVirtualMachineのみ作成可能、
+というルールも維持する）。同一VLANに複数テナントのVirtualMachineを混在させると、ARP spoofingや
 broadcast/multicastの盗聴といったL2レベルの攻撃面がテナント間で共有されてしまい、VRF分離の
 効果と矛盾するため、L2レベルでの共有は行わない。
 
@@ -1113,7 +1113,7 @@ type HypervisorDriver interface {
 FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが頻発するI/O負荷に対して
 QEMUより不利になる可能性がある（要ベンチマーク検証）。またNUMAトポロジ露出やhugepages対応も
 QEMUほど手厚くない。`recovery_policy: SELF_HEAL`を使うpet/control-planeノード（etcd/PKIサーバ等）で
-これが問題になりうるため、**全MachineにFirecrackerを強制せず、`MachineSpec.driver_hint`で
+これが問題になりうるため、**全VirtualMachineにFirecrackerを強制せず、`VirtualMachineSpec.driver_hint`で
 使用する`HypervisorDriver`実装を選べるようにする**。
 
 - computeサービスは`driver_hint`（未指定なら`FIRECRACKER`）を見て、スケジューリング時に
@@ -1130,7 +1130,7 @@ QEMUほど手厚くない。`recovery_policy: SELF_HEAL`を使うpet/control-pla
 ### 前提: ローカルディスクでは`SELF_HEAL`が成立しない
 
 `Volume`の実体が各compute node上のローカルディスクだと、ノード障害時に`SELF_HEAL`が別ノードへ
-Machineを再作成しても、Volumeの中身は旧ノードに物理的に残ったままで持っていけない。pet系
+VirtualMachineを再作成しても、Volumeの中身は旧ノードに物理的に残ったままで持っていけない。pet系
 （etcd/PKIサーバ）の永続化が意味をなさなくなるため、**block-storageのバックエンドはどのcompute
 nodeからでもネットワーク越しにattachできることが必須要件**になる。
 
@@ -1173,7 +1173,7 @@ Linuxカーネルの`nvmet`/`nvme-cli`で実装できる。iSCSIは、対象の�
 
 ## コントロールプレーンサービス自体の可用性
 
-Machine/Node側のHA（`SELF_HEAL`、フェンシング）は丁寧に設計したが、`compute`/`network`/
+VirtualMachine/Node側のHA（`SELF_HEAL`、フェンシング）は丁寧に設計したが、`compute`/`network`/
 `block-storage`等のサービス自体が落ちたときの話が抜けていた。設計する。
 
 ### 前提として有利な点: 状態は全てDBにある
@@ -1192,7 +1192,7 @@ Machine/Node側のHA（`SELF_HEAL`、フェンシング）は丁寧に設計し�
 
 ### Reconcile面: リーダー選出（k8s controller-managerと同じ発想）
 
-複数レプリカがそれぞれ独自にreconcileループ（`Pending`のMachineを見つけてスケジューリングする等）
+複数レプリカがそれぞれ独自にreconcileループ（`Pending`のVirtualMachineを見つけてスケジューリングする等）
 を回すと、二重処理・レースが発生する（`resource_version`の楽観的並行性制御で最悪の破損は
 防げるが、無駄な競合が常態化する）。
 
@@ -1246,7 +1246,7 @@ KubeVirtの教訓（オブジェクトモデルは自作するがAPIの見た目
 - **トレーシングは最初から設計に組み込む**: OpenTelemetryを採用し、gRPC呼び出しに加えて
   **NATSメッセージのヘッダにもtrace_idを伝播させる**。Sagaの補償フローやcompute↔agentの
   非同期往復は、まさにOpenStackのトレーシングが弱かった箇所そのものであり、後付けにしない。
-  Machineのライフサイクル全体（数分に及びうる）は1つの長大なspanにはせず、`ObjectMeta.id`を
+  VirtualMachineのライフサイクル全体（数分に及びうる）は1つの長大なspanにはせず、`ObjectMeta.id`を
   相関IDとして各phase遷移を短いspanに分けて繋ぐ
 - **構造化ログ**: Goの標準ライブラリ`log/slog`でJSON出力に統一し、`trace_id`/`tenant_id`/
   `resource_id`/`resource_version`を共通フィールドとして必ず含める
@@ -1265,11 +1265,11 @@ Prometheus本体・Grafana・Jaeger/Tempo・Lokiのような**集約基盤は動
 - Sagaの補償発生回数・理由別内訳（どれだけロールバックが起きているか）
 - NATS CMDストリームのキュー滞留時間・深さ（agentの詰まり検知）
 - スケジューラの`Unschedulable`滞留時間（容量枯渇の兆候）
-- Machineの各phase滞留時間（`Provisioning`が異常に長い＝イメージpullやagentの問題）
+- VirtualMachineの各phase滞留時間（`Provisioning`が異常に長い＝イメージpullやagentの問題）
 - ノードheartbeat欠落率（`NotReady`判定・フェンシングの発生頻度）
 - リーダー選出の切り替え回数（頻発していたら異常）
 
-### 払い出したリソース自身のメトリクス（Machine/NetworkInterface/Volume）
+### 払い出したリソース自身のメトリクス（VirtualMachine/NetworkInterface/Volume）
 
 システム自身の健全性だけでなく、**払い出した仮想マシン・ネットワーク・ストレージの利用状況を
 ネイティブにサポートする**。これはまさにCeilometerが元々やろうとしていた領域（リソースの
@@ -1281,14 +1281,14 @@ Prometheus本体・Grafana・Jaeger/Tempo・Lokiのような**集約基盤は動
 
 | リソース | メトリクス源 | 取得元 |
 |---|---|---|
-| Machine(CPU/メモリ) | jailerが使うcgroup統計 | compute-agent |
-| Machine/NetworkInterface(ネットワークI/O) | tapデバイスのホスト側統計 | network-agent |
+| VirtualMachine(CPU/メモリ) | jailerが使うcgroup統計 | compute-agent |
+| VirtualMachine/NetworkInterface(ネットワークI/O) | tapデバイスのホスト側統計 | network-agent |
 | Volume/VolumeAttachment(IOPS/スループット) | ストレージノード側(ZFS/nvmet)の統計 | block-storage |
 
 **`resource_version`/Watchには混ぜない**: メトリクスは高頻度（例: 30秒毎）に更新されるため、
-`MachineStatus`に含めると`resource_version`が増え続けて`Watch`に`MODIFIED`が大量発生し、
+`VirtualMachineStatus`に含めると`resource_version`が増え続けて`Watch`に`MODIFIED`が大量発生し、
 KaaS側のreconcileループを無意味に起こしてしまう。`resource_version`は「reconcileすべき
-意味のある変化」だけを表すべきで、数値テレメトリの増分とは性質が違う。したがってMachine等の
+意味のある変化」だけを表すべきで、数値テレメトリの増分とは性質が違う。したがってVirtualMachine等の
 gRPC APIには含めず、以下のPrometheusエンドポイントとして独立に公開する。
 
 **厳密なテナント分離は前提としない**: kyuushaの想定利用者は「OpenStackには大きすぎるが
@@ -1303,7 +1303,7 @@ VMwareライセンスは厳しい」という**単一組織の社内プライベ
 Prometheus形式1本で足りる。専用gRPC RPCや専用テーブルは不要。
 
 - `/metrics`（system）: 既存のObservability設計（Sagaの補償回数、NATSキュー滞留等）のまま
-- `/metrics/resources`: Machine/NetworkInterface/Volumeのメトリクスを、`tenant_id`/`machine_id`等を
+- `/metrics/resources`: VirtualMachine/NetworkInterface/Volumeのメトリクスを、`tenant_id`/`vm_id`等を
   ラベルとして付与したPrometheus形式で公開する。テナント単位のアクセス制御はせず、
   運用ネットワークへの到達性という粗い境界のみ（`/metrics`と同じ扱い）
 
@@ -1317,8 +1317,8 @@ scrapeするなり`remote_write`で自分の長期保存基盤に転送するな
 
 ### Firecracker: jailerとtapデバイス
 
-- 各Machineの Firecracker プロセスは**jailerでラップする**（chroot + cgroup + namespace分離）。
-  同一ホストに複数テナントのMachineが同居する前提上、プロセス分離は必須と判断
+- 各VirtualMachineの Firecracker プロセスは**jailerでラップする**（chroot + cgroup + namespace分離）。
+  同一ホストに複数テナントのVirtualMachineが同居する前提上、プロセス分離は必須と判断
 - cgroupのCPU/メモリ制限は`spec.vcpu`/`spec.memory_mb`の値からそのまま設定する
 - tapデバイスは`NetworkInterface`ごとに決定的な名前（例: `tap-<interface-idの短縮形>`）で作成し、
   ホスト側ブリッジで`Subnet.status.vlan_id`のVLANタグを付与してFirecrackerに渡す
@@ -1332,9 +1332,9 @@ QEMU側は理論上VNC/SPICEも可能だが、対象がヘッドレスLinuxサ�
 
 2種類のAPIを用意する。
 
-- **`GetConsoleLog`（単項RPC、読み取り専用）**: compute-agentが各Machineのシリアル出力を
+- **`GetConsoleLog`（単項RPC、読み取り専用）**: compute-agentが各VirtualMachineのシリアル出力を
   直近分（例: 64KB）リングバッファに保持し、返す。書き込み不可で比較的低リスク。
-  `Error`/`Provisioning`が長引くMachineの自動診断に使う（KaaSコントローラーやAIエージェントが
+  `Error`/`Provisioning`が長引くVirtualMachineの自動診断に使う（KaaSコントローラーやAIエージェントが
   頻繁に使うのはこちら）
 - **`AttachConsole`（双方向ストリーミングRPC、対話的）**: 人間がデバッグのために実際に
   ログイン/操作するケース。実質的に物理コンソールアクセスと同等の強い権限になる
@@ -1345,14 +1345,14 @@ QEMU側は理論上VNC/SPICEも可能だが、対象がヘッドレスLinuxサ�
 （k8sが`kubectl exec`をwatch経路ではなくAPI server→kubeletへの直接HTTP接続で実現しているのと
 同じ理由）。
 
-- computeサービスは`MachineStatus.node`から対象ノードを特定し、そのcompute-agentへ
+- computeサービスは`VirtualMachineStatus.node`から対象ノードを特定し、そのcompute-agentへ
   **直接gRPC接続**する（既存のmTLS証明書をそのまま使う。新しい認証機構は不要）
 - compute-agentはFirecrackerのシリアルソケットとgRPCストリームの間でバイトを中継する
 - computeサービスは外部クライアントとcompute-agentの間の**プロキシ**として振る舞う
 
 **認可**: `AttachConsole`は実質rootアクセスと同等の強い操作のため、「認可の粒度」節で決めた
-「リソース種別ごとの細分化は時期尚早」の**例外**として、`machine.console.attach`という独立した
-OPA権限にする。Machineの一般的なR/Wを持つ人/エージェントでも、コンソールアクセスは別途許可が
+「リソース種別ごとの細分化は時期尚早」の**例外**として、`vm.console.attach`という独立した
+OPA権限にする。VirtualMachineの一般的なR/Wを持つ人/エージェントでも、コンソールアクセスは別途許可が
 必要という形にできる。セッションの開始/終了はaudit logへ記録する（内容の全量記録＝セッション
 レコーディングは今回はスコープ外）。
 
@@ -1410,7 +1410,7 @@ FirecrackerのvirtIO-block実装がQEMUに対しI/O性能で不利かどうか�
 
 #### ブロックストレージノード（NVMe-oF/TCP + ZFS）
 
-- **用途**: `Volume`/`VolumeAttachment`の実体。`persistent_root_disk: true`のMachineと、
+- **用途**: `Volume`/`VolumeAttachment`の実体。`persistent_root_disk: true`のVirtualMachineと、
   明示的なデータVolumeの永続化に使う（cattle系のデフォルト運用ではそもそも経由しない）
 - **技術要件**: 専用ストレージノード（1台〜数台）。ZFSでVolumeを管理し、**NVMe-oF/TCPを
   第一候補**としてexport（RDMA対応NIC等の特殊ハードウェア不要、通常のEthernetで動作。
@@ -1443,7 +1443,7 @@ privateにホストしたい組織のみ、S3互換オブジェクトストレ�
 
 **採用する**（詳細は「imageサービスのリソース: Image」節を参照）。ノード間の**軽量ピアフェッチ**
 （同一AZ内の既にキャッシュ済みノードから直接コピー）は「フリート内の誰かが既に取得済み」の
-ケースにしか効かず、「バルクMachine作成×新規Image」という主要ユースケースでは全員が同時に
+ケースにしか効かず、「バルクVirtualMachine作成×新規Image」という主要ユースケースでは全員が同時に
 originへ殺到するthundering herdを防げない。この具体的なトリガー条件に対する対策として、
 本番運用ではDragonflyを事実上必須級の推奨構成とする。各compute nodeでDragonflyのpeerデーモン
 (dfdaemon)がcompute-agentと並走する。Dragonfly Manager/Schedulerが新規のコントロールプレーン
@@ -1475,14 +1475,14 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - 各サービスのspec/statusフィールド詳細（Tenant/Subnet/NetworkInterface/Volume/VolumeAttachment）
 - Quota設計（`Tenant.spec.quota`が上限を持ち、各リソース所有サービスが`tenant_usage`をNode容量予約と同じ原子的トランザクションで強制。Create時の同期バリデーションとして拒否、Error化しない）
 - Observability方針（Prometheus/OpenTelemetry/構造化ログという業界標準に乗る。NATSメッセージヘッダへのtrace_id伝播、観測トラフィックをNATSコマンド/イベントバスと分離、集約基盤は任意の外部依存）
-- 払い出したリソース自身のメトリクス（Machine/NetworkInterface/Volume。ゲスト内エージェント不要でホスト側(cgroup/tap/ストレージノード)から取得。厳密なテナント分離は前提としない（単一組織の社内プライベートクラウドという想定利用者像のため）。`/metrics`(system)と`/metrics/resources`(リソース、tenant_idはラベルのみ)をPrometheus形式で分けて公開し、専用gRPC APIは作らない。利用者は自分の時系列DBへ自由にscrape/remote_write可能）
+- 払い出したリソース自身のメトリクス（VirtualMachine/NetworkInterface/Volume。ゲスト内エージェント不要でホスト側(cgroup/tap/ストレージノード)から取得。厳密なテナント分離は前提としない（単一組織の社内プライベートクラウドという想定利用者像のため）。`/metrics`(system)と`/metrics/resources`(リソース、tenant_idはラベルのみ)をPrometheus形式で分けて公開し、専用gRPC APIは作らない。利用者は自分の時系列DBへ自由にscrape/remote_write可能）
 - IP設定（DHCPは使わず、既存のNoCloud seed diskに`network-config`として相乗り）
 - Subnet内のDNS/名前解決（networkサービスがNetworkInterfaceのデータから権威DNSを兼ねる。軽量DNSレスポンダを自作、リゾルバの到達性は共有NATゲートウェイと同じルートリークに相乗り）
 - API消費者の多様化への備え（Createのべき等キー、dry_run、Condition形式での構造化エラー、gRPC Server Reflection。Terraformプロバイダ/MCPサーバー自体は今書かず、基盤の改善のみ先行）
-- コンソールアクセス（シリアルコンソールに統一。`GetConsoleLog`(読み取り専用)/`AttachConsole`(対話的、NATS原則の例外で直接gRPC)。`machine.console.attach`を独立したOPA権限に）
+- コンソールアクセス（シリアルコンソールに統一。`GetConsoleLog`(読み取り専用)/`AttachConsole`(対話的、NATS原則の例外で直接gRPC)。`vm.console.attach`を独立したOPA権限に）
 - 技術選定の一貫した基準（難しい分散システムの問題は既製品(CNCF濃度の高いOSS)に乗り、kyuusha固有のドメインロジックのみ自作する）
 - マルチノード前提（単一ホストは特別扱いしない、N=1の場合として同じコードパス）
-- 子リソースIDの決定的生成ルール（`iface-<machine-id>-<index>`, `volattach-<machine-id>-<index>`, `volattach-<machine-id>-root`, `rootvol-<machine-id>`）
+- 子リソースIDの決定的生成ルール（`iface-<vm-id>-<index>`, `volattach-<vm-id>-<index>`, `volattach-<vm-id>-root`, `rootvol-<vm-id>`）
 - 孤児リソースGCの実行頻度（10分間隔の定期スイープ）・検出ロジック（親への`Get`が`NotFound`か）
 - NetworkInterface/Volume/VolumeAttachmentのライフサイクルphase
 - Volume/NetworkInterfaceの排他制御・フェンシング問題への対処方針
@@ -1494,7 +1494,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Imageキャッシュのエビクションポリシー（LRU＋参照カウント除外＋サイズ閾値）とpre-staging方針（専用機構は作らずPrometheusで可視化のみ。Dragonflyの判断を先取りしない）
 - AZ間ルーティング（訂正: 全面的な非ゴールは誤りだった。同一テナントはRoute Targetによる自動ルート交換で必ずAZ間疎通できる。RTに関係ない任意AZ間の無条件メッシュ接続のみ非ゴール。`docs/network-deployment-guide.md`にも反映）
 - DNS/名前解決を拡張機能化（`SubnetSpec.dns_suffix`の有無自体をON/OFFスイッチにする。既定suffixは用意せずユーザー自由記述。共有リゾルバへのルートリークは物理側で常時オンにし、ソフトウェア側のON/OFFに追従させない）
-- Dragonfly採用（「必要になったら判断」を撤回。バルクMachine作成×新規Imageというthundering herd問題への必須級対策として、本番運用では推奨構成に確定。軽量ピアフェッチはフォールバックとして残す）
+- Dragonfly採用（「必要になったら判断」を撤回。バルクVirtualMachine作成×新規Imageというthundering herd問題への必須級対策として、本番運用では推奨構成に確定。軽量ピアフェッチはフォールバックとして残す）
 - イメージ作成体験（Firecrackerのスナップショット機能はwarm boot専用に限定し、Image作成手段としては使わない。Dockerfile/OCIイメージのエコシステムでrootfsの中身を定義し、`kyuusha image build`というCLIの薄いツールでext4変換＋カーネルペアリング＋Create一気通貫を実現）
 - Availability Zone設計（Subnet/Nodeにzoneを持たせ、AZを跨ぐVLANストレッチはしない。Regionはスコープ外）
 - block-storageのバックエンド方式（専用ストレージノード+NVMe-oF/TCP(ZFS)をv1デフォルトに、`StorageBackend`ドライバとして抽象化。Cephは将来オプション）
@@ -1507,7 +1507,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - ネットワークACL（`NetworkInterfaceSpec.ingress_rules`による最小限のホスト側ファイアウォール。SecurityGroupのような別リソースは導入しない）
 - テナント間の非疎通性はVLANではなくVRF+ルートリーク禁止で担保する（訂正済み。ACLのデフォルト拒否を二重防御として追加）
 - Image設計（`ImageFormat`: `KERNEL_ROOTFS`(直接カーネルブート系VMM用)/`QCOW2`(QEMU/libvirt用)、`driver_hint`との対応バリデーション、コンテンツアドレス型blobストア）
-- Flavor/machine_classという固定カタログの廃止（`MachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
+- Flavor/machine_classという固定カタログの廃止（`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
 - UserData/cloud-init注入（NoCloud seed disk方式、HTTPメタデータサービスは不採用）
 - コントロールプレーンサービス自体の可用性（API面はステートレス複製、reconcile面はDBリースによるリーダー選出）
 - Imageのストレージ方針（`ImageArtifact{url, digest}`による外部URL参照のみ。kyuushaはblobを一切保管しない。オブジェクトストレージは任意の外部依存に格下げ）

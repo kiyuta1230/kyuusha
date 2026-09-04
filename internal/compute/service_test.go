@@ -10,7 +10,7 @@ import (
 // CLI, ...) would: Create, observe it over Watch, Update with optimistic
 // concurrency, Delete, and confirm Watch reports all of it. Kept as a normal
 // test so it runs (and stays honest) under `go test ./...`.
-func TestPlayground_MachineLifecycleOverWatch(t *testing.T) {
+func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -22,7 +22,7 @@ func TestPlayground_MachineLifecycleOverWatch(t *testing.T) {
 		t.Fatalf("Watch: %v", err)
 	}
 
-	m, err := svc.Create(ctx, tenant, "web-1", MachineSpec{
+	m, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
 		ImageID:        "img-abc",
 		VCPU:           2,
 		MemoryMB:       4096,
@@ -32,14 +32,14 @@ func TestPlayground_MachineLifecycleOverWatch(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if m.Status.Phase != PhasePending {
-		t.Fatalf("new Machine phase = %q, want %q", m.Status.Phase, PhasePending)
+		t.Fatalf("new VirtualMachine phase = %q, want %q", m.Status.Phase, PhasePending)
 	}
 	if m.Spec.DriverHint != VmmDriverFirecracker {
 		t.Fatalf("DriverHint = %q, want default FIRECRACKER", m.Spec.DriverHint)
 	}
 
 	// Idempotent re-Create with the same name must not mint a new ID.
-	again, err := svc.Create(ctx, tenant, "web-1", MachineSpec{RecoveryPolicy: RecoveryPolicyNone})
+	again, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{RecoveryPolicy: RecoveryPolicyNone})
 	if err != nil {
 		t.Fatalf("idempotent Create: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestService_CreateRejectsUnspecifiedRecoveryPolicy(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService()
 
-	if _, err := svc.Create(ctx, "tenant-a", "x", MachineSpec{}); err == nil {
+	if _, err := svc.Create(ctx, "tenant-a", "x", VirtualMachineSpec{}); err == nil {
 		t.Fatal("expected validation error for unset RecoveryPolicy")
 	}
 }
@@ -101,7 +101,7 @@ func TestService_GetIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService()
 
-	m, err := svc.Create(ctx, "tenant-a", "", MachineSpec{RecoveryPolicy: RecoveryPolicyNone})
+	m, err := svc.Create(ctx, "tenant-a", "", VirtualMachineSpec{RecoveryPolicy: RecoveryPolicyNone})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
