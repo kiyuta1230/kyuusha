@@ -1,0 +1,307 @@
+// Package grpcserver adapts internal/compute.Service to the generated
+// VirtualMachineServiceServer interface. It only translates between wire
+// types and domain types; all behavior lives in compute.Service.
+package grpcserver
+
+import (
+	"context"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+
+	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+)
+
+type Server struct {
+	computev1.UnimplementedVirtualMachineServiceServer
+	svc *compute.Service
+}
+
+func New(svc *compute.Service) *Server {
+	return &Server{svc: svc}
+}
+
+func (s *Server) Create(ctx context.Context, req *computev1.CreateVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	vm, err := s.svc.Create(ctx, req.GetTenantId(), req.GetName(), fromSpec(req.GetSpec()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toVM(*vm), nil
+}
+
+func (s *Server) Get(ctx context.Context, req *computev1.GetVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	vm, err := s.svc.Get(ctx, req.GetTenantId(), req.GetId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toVM(*vm), nil
+}
+
+func (s *Server) List(ctx context.Context, req *computev1.ListVirtualMachinesRequest) (*computev1.ListVirtualMachinesResponse, error) {
+	vms, err := s.svc.List(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	out := &computev1.ListVirtualMachinesResponse{}
+	for _, vm := range vms {
+		out.Items = append(out.Items, toVM(vm))
+	}
+	return out, nil
+}
+
+func (s *Server) Update(ctx context.Context, req *computev1.UpdateVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	vm := fromVM(req.GetVm())
+	updated, err := s.svc.Update(ctx, &vm)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toVM(*updated), nil
+}
+
+func (s *Server) Delete(ctx context.Context, req *computev1.DeleteVirtualMachineRequest) (*emptypb.Empty, error) {
+	if err := s.svc.Delete(ctx, req.GetTenantId(), req.GetId()); err != nil {
+		return nil, toStatus(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *Server) Watch(req *computev1.WatchVirtualMachinesRequest, stream computev1.VirtualMachineService_WatchServer) error {
+	events, err := s.svc.Watch(stream.Context(), req.GetTenantId(), req.GetSinceResourceVersion())
+	if err != nil {
+		return toStatus(err)
+	}
+	for e := range events {
+		if err := stream.Send(toEvent(e)); err != nil {
+			return err
+		}
+	}
+	return stream.Context().Err()
+}
+
+func toStatus(err error) error {
+	switch err {
+	case compute.ErrNotFound:
+		return status.Error(codes.NotFound, err.Error())
+	case compute.ErrConflict:
+		return status.Error(codes.Aborted, err.Error())
+	case compute.ErrHistoryPruned:
+		return status.Error(codes.OutOfRange, err.Error())
+	}
+	if status.Code(err) != codes.Unknown {
+		return err
+	}
+	return status.Error(codes.InvalidArgument, err.Error())
+}
+
+func fromSpec(s *computev1.VirtualMachineSpec) compute.VirtualMachineSpec {
+	spec := compute.VirtualMachineSpec{
+		ImageID:            s.GetImageId(),
+		VCPU:               s.GetVcpu(),
+		MemoryMB:           s.GetMemoryMb(),
+		RecoveryPolicy:     fromRecoveryPolicy(s.GetRecoveryPolicy()),
+		PersistentRootDisk: s.GetPersistentRootDisk(),
+		UserData:           s.GetUserData(),
+		DriverHint:         fromDriver(s.GetDriverHint()),
+	}
+	for _, n := range s.GetNetworkInterfaces() {
+		spec.NetworkInterfaces = append(spec.NetworkInterfaces, compute.NetworkAttachment{
+			SubnetID: n.GetSubnetId(),
+			Primary:  n.GetPrimary(),
+		})
+	}
+	for _, v := range s.GetVolumes() {
+		spec.Volumes = append(spec.Volumes, compute.VolumeRequest{
+			VolumeID:   v.GetVolumeId(),
+			DeviceHint: v.GetDeviceHint(),
+		})
+	}
+	for _, p := range s.GetPciDevices() {
+		spec.PciDevices = append(spec.PciDevices, compute.PciDeviceRequest{
+			VendorID: p.GetVendorId(),
+			DeviceID: p.GetDeviceId(),
+			Count:    p.GetCount(),
+		})
+	}
+	return spec
+}
+
+func toSpec(s compute.VirtualMachineSpec) *computev1.VirtualMachineSpec {
+	out := &computev1.VirtualMachineSpec{
+		ImageId:            s.ImageID,
+		Vcpu:               s.VCPU,
+		MemoryMb:           s.MemoryMB,
+		RecoveryPolicy:     toRecoveryPolicy(s.RecoveryPolicy),
+		PersistentRootDisk: s.PersistentRootDisk,
+		UserData:           s.UserData,
+		DriverHint:         toDriver(s.DriverHint),
+	}
+	for _, n := range s.NetworkInterfaces {
+		out.NetworkInterfaces = append(out.NetworkInterfaces, &computev1.NetworkAttachment{
+			SubnetId: n.SubnetID,
+			Primary:  n.Primary,
+		})
+	}
+	for _, v := range s.Volumes {
+		out.Volumes = append(out.Volumes, &computev1.VolumeRequest{
+			VolumeId:   v.VolumeID,
+			DeviceHint: v.DeviceHint,
+		})
+	}
+	for _, p := range s.PciDevices {
+		out.PciDevices = append(out.PciDevices, &computev1.PciDeviceRequest{
+			VendorId: p.VendorID,
+			DeviceId: p.DeviceID,
+			Count:    p.Count,
+		})
+	}
+	return out
+}
+
+func toStatusProto(st compute.VirtualMachineStatus) *computev1.VirtualMachineStatus {
+	out := &computev1.VirtualMachineStatus{
+		Phase:                string(st.Phase),
+		Node:                 st.Node,
+		RootVolumeRef:        st.RootVolumeRef,
+		InterfaceRefs:        st.InterfaceRefs,
+		VolumeAttachmentRefs: st.VolumeAttachmentRefs,
+	}
+	for _, c := range st.Conditions {
+		out.Conditions = append(out.Conditions, &resourcev1.Condition{
+			Type:             c.Type,
+			Status:           string(c.Status),
+			Reason:           c.Reason,
+			Message:          c.Message,
+			LastTransitionAt: timestamppb.New(c.LastTransitionAt),
+		})
+	}
+	return out
+}
+
+func fromStatusProto(st *computev1.VirtualMachineStatus) compute.VirtualMachineStatus {
+	out := compute.VirtualMachineStatus{
+		Phase:                compute.Phase(st.GetPhase()),
+		Node:                 st.GetNode(),
+		RootVolumeRef:        st.GetRootVolumeRef(),
+		InterfaceRefs:        st.GetInterfaceRefs(),
+		VolumeAttachmentRefs: st.GetVolumeAttachmentRefs(),
+	}
+	for _, c := range st.GetConditions() {
+		out.Conditions = append(out.Conditions, resource.Condition{
+			Type:             c.GetType(),
+			Status:           resource.ConditionStatus(c.GetStatus()),
+			Reason:           c.GetReason(),
+			Message:          c.GetMessage(),
+			LastTransitionAt: c.GetLastTransitionAt().AsTime(),
+		})
+	}
+	return out
+}
+
+func toVM(vm compute.VirtualMachine) *computev1.VirtualMachine {
+	meta := &resourcev1.ObjectMeta{
+		Id:              vm.Meta.ID,
+		Name:            vm.Meta.Name,
+		TenantId:        vm.Meta.TenantID,
+		ResourceVersion: vm.Meta.ResourceVersion,
+		CreatedAt:       timestamppb.New(vm.Meta.CreatedAt),
+	}
+	if vm.Meta.DeletedAt != nil {
+		meta.DeletedAt = timestamppb.New(*vm.Meta.DeletedAt)
+	}
+	return &computev1.VirtualMachine{
+		Meta:   meta,
+		Spec:   toSpec(vm.Spec),
+		Status: toStatusProto(vm.Status),
+	}
+}
+
+func fromVM(vm *computev1.VirtualMachine) compute.VirtualMachine {
+	meta := vm.GetMeta()
+	out := compute.VirtualMachine{
+		Meta: resource.ObjectMeta{
+			ID:              meta.GetId(),
+			Name:            meta.GetName(),
+			TenantID:        meta.GetTenantId(),
+			ResourceVersion: meta.GetResourceVersion(),
+			CreatedAt:       meta.GetCreatedAt().AsTime(),
+		},
+		Spec:   fromSpec(vm.GetSpec()),
+		Status: fromStatusProto(vm.GetStatus()),
+	}
+	if meta.GetDeletedAt() != nil {
+		t := meta.GetDeletedAt().AsTime()
+		out.Meta.DeletedAt = &t
+	}
+	return out
+}
+
+func toEvent(e compute.Event) *computev1.VirtualMachineEvent {
+	out := &computev1.VirtualMachineEvent{ResourceVersion: e.ResourceVersion}
+	switch e.Type {
+	case compute.EventAdded:
+		out.Type = computev1.VirtualMachineEvent_ADDED
+	case compute.EventModified:
+		out.Type = computev1.VirtualMachineEvent_MODIFIED
+	case compute.EventDeleted:
+		out.Type = computev1.VirtualMachineEvent_DELETED
+	case compute.EventBookmark:
+		out.Type = computev1.VirtualMachineEvent_BOOKMARK
+	}
+	if out.Type != computev1.VirtualMachineEvent_BOOKMARK {
+		out.Vm = toVM(e.VM)
+	}
+	return out
+}
+
+func fromRecoveryPolicy(p computev1.RecoveryPolicy) compute.RecoveryPolicy {
+	switch p {
+	case computev1.RecoveryPolicy_RECOVERY_POLICY_NONE:
+		return compute.RecoveryPolicyNone
+	case computev1.RecoveryPolicy_RECOVERY_POLICY_SELF_HEAL:
+		return compute.RecoveryPolicySelfHeal
+	default:
+		return compute.RecoveryPolicyUnspecified
+	}
+}
+
+func toRecoveryPolicy(p compute.RecoveryPolicy) computev1.RecoveryPolicy {
+	switch p {
+	case compute.RecoveryPolicyNone:
+		return computev1.RecoveryPolicy_RECOVERY_POLICY_NONE
+	case compute.RecoveryPolicySelfHeal:
+		return computev1.RecoveryPolicy_RECOVERY_POLICY_SELF_HEAL
+	default:
+		return computev1.RecoveryPolicy_RECOVERY_POLICY_UNSPECIFIED
+	}
+}
+
+func fromDriver(d computev1.VmmDriver) compute.VmmDriver {
+	switch d {
+	case computev1.VmmDriver_VMM_DRIVER_FIRECRACKER:
+		return compute.VmmDriverFirecracker
+	case computev1.VmmDriver_VMM_DRIVER_QEMU:
+		return compute.VmmDriverQEMU
+	default:
+		return compute.VmmDriverUnspecified
+	}
+}
+
+func toDriver(d compute.VmmDriver) computev1.VmmDriver {
+	switch d {
+	case compute.VmmDriverFirecracker:
+		return computev1.VmmDriver_VMM_DRIVER_FIRECRACKER
+	case compute.VmmDriverQEMU:
+		return computev1.VmmDriver_VMM_DRIVER_QEMU
+	default:
+		return computev1.VmmDriver_VMM_DRIVER_UNSPECIFIED
+	}
+}

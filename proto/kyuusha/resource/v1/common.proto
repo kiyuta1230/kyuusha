@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package kyuusha.resource.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1;resourcev1";
+
+import "google/protobuf/timestamp.proto";
+
+// ObjectMeta is embedded in every top-level kyuusha resource.
+// See docs/architecture.md "リソース共通の型".
+message ObjectMeta {
+  string id = 1;
+  string name = 2;
+  string tenant_id = 3;
+  int64 resource_version = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp deleted_at = 6;
+}
+
+message Condition {
+  string type = 1;
+  string status = 2; // "True" | "False" | "Unknown"
+  string reason = 3;
+  string message = 4;
+  google.protobuf.Timestamp last_transition_at = 5;
+}

@@ -15,7 +15,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/computeagent"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
 )
 
 func startNATS(t *testing.T) *nats.Conn {

@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package kyuusha.compute.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// See docs/architecture.md "サービス共通のRPCパターン（例: VirtualMachine）"
+// and "設計原則: 命名はOpenStackを踏襲しない" (no fixed machine_class catalog:
+// vcpu/memory_mb are requested directly, governed by Quota instead).
+
+enum RecoveryPolicy {
+  RECOVERY_POLICY_UNSPECIFIED = 0; // rejected at Create time; no implicit default
+  RECOVERY_POLICY_NONE = 1;        // cattle
+  RECOVERY_POLICY_SELF_HEAL = 2;   // pet
+}
+
+enum VmmDriver {
+  VMM_DRIVER_UNSPECIFIED = 0; // treated as FIRECRACKER
+  VMM_DRIVER_FIRECRACKER = 1;
+  VMM_DRIVER_QEMU = 2;
+}
+
+message NetworkAttachment {
+  string subnet_id = 1;
+  bool primary = 2;
+}
+
+message VolumeRequest {
+  string volume_id = 1;
+  string device_hint = 2;
+}
+
+message PciDeviceRequest {
+  string vendor_id = 1;
+  string device_id = 2;
+  int32 count = 3;
+}
+
+message VirtualMachineSpec {
+  string image_id = 1;
+  int32 vcpu = 2;
+  int64 memory_mb = 3;
+  repeated NetworkAttachment network_interfaces = 4;
+  repeated VolumeRequest volumes = 5;
+  RecoveryPolicy recovery_policy = 6;
+  bool persistent_root_disk = 7;
+  string user_data = 8;
+  VmmDriver driver_hint = 9;
+  repeated PciDeviceRequest pci_devices = 10;
+}
+
+message VirtualMachineStatus {
+  string phase = 1;
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+  string node = 3;
+  string root_volume_ref = 4;
+  repeated string interface_refs = 5;
+  repeated string volume_attachment_refs = 6;
+}
+
+message VirtualMachine {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  VirtualMachineSpec spec = 2;
+  VirtualMachineStatus status = 3;
+}
+
+message CreateVirtualMachineRequest {
+  string tenant_id = 1;
+  string name = 2; // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing VM
+  VirtualMachineSpec spec = 3;
+  bool dry_run = 4;
+}
+
+message GetVirtualMachineRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
+message ListVirtualMachinesRequest {
+  string tenant_id = 1;
+}
+
+message ListVirtualMachinesResponse {
+  repeated VirtualMachine items = 1;
+}
+
+message UpdateVirtualMachineRequest {
+  VirtualMachine vm = 1; // vm.meta.resource_version must match the stored value
+  bool dry_run = 2;
+}
+
+message DeleteVirtualMachineRequest {
+  string tenant_id = 1;
+  string id = 2;
+  bool dry_run = 3;
+}
+
+message WatchVirtualMachinesRequest {
+  string tenant_id = 1;
+  int64 since_resource_version = 2;
+}
+
+message VirtualMachineEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  VirtualMachine vm = 2;
+  int64 resource_version = 3;
+}
+
+service VirtualMachineService {
+  rpc Create(CreateVirtualMachineRequest) returns (VirtualMachine);
+  rpc Get(GetVirtualMachineRequest) returns (VirtualMachine);
+  rpc List(ListVirtualMachinesRequest) returns (ListVirtualMachinesResponse);
+  rpc Update(UpdateVirtualMachineRequest) returns (VirtualMachine);
+  rpc Delete(DeleteVirtualMachineRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchVirtualMachinesRequest) returns (stream VirtualMachineEvent);
+}
