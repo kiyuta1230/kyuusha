@@ -1,11 +1,12 @@
 # Multi-hypervisor playground: one NATS/JetStream broker, api-gateway (the
 # only client-facing, JWT/OPA-checked entrypoint), one compute control-plane
 # and one identity control-plane (neither exposed to the host -- only
-# api-gateway may reach them), and three compute-agent "hypervisors" so the
-# (still-stub) round-robin scheduler has something to spread VMs across.
-# Bring it up with `docker compose up --build` and drive it with
-# playground/scenario.sh or `go run ./cmd/kyuusha vm|tenant ...
-# -addr=localhost:8080 -token=...` (`kyuusha token mint` for a dev token).
+# api-gateway may reach them), and three compute-agent "hypervisors" that
+# self-register with compute at startup, so the real scheduler (Ready phase +
+# driver + capacity filters, most-available-first pick) has real inventory to
+# spread VMs across. Bring it up with `docker compose up --build` and drive
+# it with playground/scenario.sh or `go run ./cmd/kyuusha vm|tenant|hypervisor
+# ... -addr=localhost:8080 -token=...` (`kyuusha token mint` for a dev token).
 name: kyuusha-playground
 
 services:
@@ -29,14 +30,15 @@ services:
       - "-nats-url=nats://nats:4222"
       - "-grpc-addr=:8081"
       - "-identity-addr=identity:8082"
-      - "-hypervisors=hypervisor-1,hypervisor-2,hypervisor-3"
     depends_on:
       nats:
         condition: service_healthy
       identity:
         condition: service_started
     # No ports exposed to the host: api-gateway is the only client-facing
-    # entrypoint. compute is reachable only from inside the compose network.
+    # entrypoint. compute is reachable only from inside the compose network
+    # (compute-agent also reaches it directly here, for Hypervisor
+    # self-registration -- that's east-west traffic, not through api-gateway).
 
   identity:
     build:
@@ -67,27 +69,45 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: compute-agent
-    command: ["-nats-url=nats://nats:4222", "-hypervisor=hypervisor-1"]
+    command:
+      - "-nats-url=nats://nats:4222"
+      - "-compute-addr=compute:8081"
+      - "-hypervisor=hypervisor-1"
+      - "-zone=zone-a"
     depends_on:
       nats:
         condition: service_healthy
+      compute:
+        condition: service_started
 
   compute-agent-2:
     build:
       context: .
       dockerfile: docker/Dockerfile
       target: compute-agent
-    command: ["-nats-url=nats://nats:4222", "-hypervisor=hypervisor-2"]
+    command:
+      - "-nats-url=nats://nats:4222"
+      - "-compute-addr=compute:8081"
+      - "-hypervisor=hypervisor-2"
+      - "-zone=zone-a"
     depends_on:
       nats:
         condition: service_healthy
+      compute:
+        condition: service_started
 
   compute-agent-3:
     build:
       context: .
       dockerfile: docker/Dockerfile
       target: compute-agent
-    command: ["-nats-url=nats://nats:4222", "-hypervisor=hypervisor-3"]
+    command:
+      - "-nats-url=nats://nats:4222"
+      - "-compute-addr=compute:8081"
+      - "-hypervisor=hypervisor-3"
+      - "-zone=zone-a"
     depends_on:
       nats:
         condition: service_healthy
+      compute:
+        condition: service_started

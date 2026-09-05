@@ -58,4 +58,5 @@ func (t *Tenant) GetTenantID() string         { return t.Meta.TenantID }
 func (t *Tenant) SetTenantID(id string)       { t.Meta.TenantID = id }
 func (t *Tenant) GetResourceVersion() int64   { return t.Meta.ResourceVersion }
 func (t *Tenant) SetResourceVersion(rv int64) { t.Meta.ResourceVersion = rv }
+func (t *Tenant) GetCreatedAt() time.Time     { return t.Meta.CreatedAt }
 func (t *Tenant) SetCreatedAt(tm time.Time)   { t.Meta.CreatedAt = tm }

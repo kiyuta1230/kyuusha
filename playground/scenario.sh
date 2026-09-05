@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Brings up the multi-hypervisor docker-compose playground and drives it
-# through api-gateway with the real CLI: mint an admin token, create a real
-# Tenant via identity, mint a token for that tenant, create several VMs
-# under it, and confirm the (still-stub) round-robin scheduler actually
-# spreads them across hypervisor-1/2/3. Also checks that Tenant creation is
-# admin-only and that a token for a different tenant is denied VM access.
-# Leaves the stack running afterwards; `docker compose down` when done.
+# through api-gateway with the real CLI: waits for all 3 compute-agents to
+# self-register as real Hypervisors, mints an admin token, creates a real
+# Tenant via identity, mints a token for that tenant, creates several VMs
+# under it, and confirms the real scheduler spreads them across
+# hypervisor-1/2/3. Also checks that Tenant creation and Hypervisor listing
+# are admin-only, and that a token for a different tenant is denied VM
+# access. Leaves the stack running afterwards; `docker compose down` when
+# done.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,8 +26,29 @@ done
 tenant_name="scenario-$(date +%s)"
 count=6
 
-echo "==> confirming Tenant creation is admin-only"
+admin_token="$(go run ./cmd/kyuusha token mint -tenant=bootstrap-admin -role=admin)"
+
+echo "==> confirming Hypervisor listing is admin-only"
 non_admin_token="$(go run ./cmd/kyuusha token mint -tenant=someone)"
+if KYUUSHA_TOKEN="$non_admin_token" go run ./cmd/kyuusha hypervisor list -addr=localhost:8080 2>/tmp/kyuusha-hypervisor-admin-check.log; then
+  echo "!! expected PermissionDenied but non-admin Hypervisor list succeeded" >&2
+  exit 1
+fi
+grep -q PermissionDenied /tmp/kyuusha-hypervisor-admin-check.log && echo "    denied as expected"
+
+echo "==> waiting for all 3 compute-agents to self-register"
+for _ in $(seq 1 30); do
+  ready="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha hypervisor list -addr=localhost:8080 | grep -c 'phase=Ready' || true)"
+  [ "$ready" -ge 3 ] && break
+  sleep 1
+done
+KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha hypervisor list -addr=localhost:8080
+if [ "$ready" -lt 3 ]; then
+  echo "!! only $ready/3 hypervisors self-registered as Ready" >&2
+  exit 1
+fi
+
+echo "==> confirming Tenant creation is admin-only"
 if KYUUSHA_TOKEN="$non_admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 -name="$tenant_name" -max-vcpu=8 -max-memory-mb=16384 -max-vms="$count" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048 2>/tmp/kyuusha-tenant-admin-check.log; then
   echo "!! expected PermissionDenied but non-admin Tenant create succeeded" >&2
   exit 1
@@ -33,7 +56,6 @@ fi
 grep -q PermissionDenied /tmp/kyuusha-tenant-admin-check.log && echo "    denied as expected"
 
 echo "==> creating Tenant $tenant_name via identity (admin token)"
-admin_token="$(go run ./cmd/kyuusha token mint -tenant=bootstrap-admin -role=admin)"
 tenant_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 \
   -name="$tenant_name" -display-name="Scenario Tenant" \
   -max-vcpu=8 -max-memory-mb=16384 -max-vms="$count" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
@@ -59,6 +81,9 @@ go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant"
 echo "==> hypervisor distribution (expect it spread across hypervisor-1/2/3)"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" \
   | grep -o 'hypervisor=[^ ]*' | sort | uniq -c
+
+echo "==> hypervisor capacity reservations (expect allocated=2/8vcpu on each)"
+KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha hypervisor list -addr=localhost:8080
 
 echo "==> confirming quota is enforced (max-vms=$count already reached)"
 if go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name="vm-over-quota" \

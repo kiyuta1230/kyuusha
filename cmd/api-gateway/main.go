@@ -56,6 +56,7 @@ func main() {
 	}
 	defer computeConn.Close()
 	vmProxy := gateway.NewVirtualMachineProxy(computev1.NewVirtualMachineServiceClient(computeConn))
+	hypervisorProxy := gateway.NewHypervisorProxy(computev1.NewHypervisorServiceClient(computeConn))
 
 	identityConn, err := grpc.NewClient(*identityAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -75,6 +76,7 @@ func main() {
 		grpc.ChainStreamInterceptor(verifier.StreamInterceptor(), authorizer.StreamInterceptor()),
 	)
 	computev1.RegisterVirtualMachineServiceServer(grpcServer, vmProxy)
+	computev1.RegisterHypervisorServiceServer(grpcServer, hypervisorProxy)
 	identityv1.RegisterTenantServiceServer(grpcServer, tenantProxy)
 
 	go func() {

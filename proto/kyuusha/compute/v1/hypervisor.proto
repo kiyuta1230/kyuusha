@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package kyuusha.compute.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1";
+
+import "kyuusha/resource/v1/common.proto";
+
+// See docs/architecture.md "computeサービスのリソース: Hypervisor": an internal
+// management object for scheduling, not a KaaS-facing resource. Register is
+// compute-agent's self-registration/re-registration at startup, called
+// directly by compute-agent -- never through api-gateway, since this is
+// east-west traffic, not north-south (see "Hypervisor自己登録とzone割当").
+// Get/List/Watch are the only externally (api-gateway) exposed RPCs.
+
+message PciDevice {
+  string pci_address = 1; // e.g. "0000:3b:00.0"
+  string vendor_id = 2;   // e.g. "10de" (NVIDIA)
+  string device_id = 3;   // e.g. "20b0" (A100)
+  bool allocated = 4;
+}
+
+message HypervisorStatus {
+  string phase = 1; // Ready / NotReady, heartbeat-based
+  string zone = 2;
+  int64 last_heartbeat_at = 3;
+  int32 allocatable_vcpu = 4;
+  int64 allocatable_memory_mb = 5;
+  int32 allocated_vcpu = 6;
+  int64 allocated_memory_mb = 7;
+  repeated string supported_drivers = 8; // e.g. ["firecracker", "qemu"]
+  repeated PciDevice available_devices = 9;
+}
+
+message Hypervisor {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  HypervisorStatus status = 2;
+}
+
+message RegisterHypervisorRequest {
+  string hypervisor = 1; // stable id, e.g. "hypervisor-1"; becomes meta.id and meta.name
+  string zone = 2;
+  int32 allocatable_vcpu = 3;
+  int64 allocatable_memory_mb = 4;
+  repeated string supported_drivers = 5;
+}
+
+message GetHypervisorRequest {
+  string hypervisor = 1;
+}
+
+message ListHypervisorsRequest {}
+
+message ListHypervisorsResponse {
+  repeated Hypervisor items = 1;
+}
+
+message WatchHypervisorsRequest {
+  int64 since_resource_version = 1;
+}
+
+message HypervisorEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  Hypervisor hypervisor = 2;
+  int64 resource_version = 3;
+}
+
+service HypervisorService {
+  // Idempotent: re-registering the same hypervisor (e.g. on compute-agent
+  // restart) refreshes zone/capacity/drivers rather than erroring, and
+  // preserves the scheduler's existing capacity reservations against it.
+  rpc Register(RegisterHypervisorRequest) returns (Hypervisor);
+  rpc Get(GetHypervisorRequest) returns (Hypervisor);
+  rpc List(ListHypervisorsRequest) returns (ListHypervisorsResponse);
+  rpc Watch(WatchHypervisorsRequest) returns (stream HypervisorEvent);
+}

@@ -8,6 +8,7 @@ package computeagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
+
+	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
 type Agent struct {
@@ -22,11 +25,26 @@ type Agent struct {
 	NC                *nats.Conn
 	JS                jetstream.JetStream
 	HeartbeatInterval time.Duration
+
+	// Hypervisors is compute's HypervisorService, dialed directly by
+	// cmd/compute-agent/main.go (bypassing api-gateway: this is east-west
+	// traffic -- see docs/architecture.md "Hypervisor自己登録とzone割当"). Used
+	// once at startup to self-register/re-register.
+	Hypervisors         computev1.HypervisorServiceClient
+	Zone                string
+	AllocatableVCPU     int32
+	AllocatableMemoryMB int64
+	SupportedDrivers    []string
 }
 
-// Run blocks, processing create commands and publishing heartbeats until ctx
-// is done.
+// Run registers with compute (retrying briefly in case it isn't up yet --
+// e.g. at docker-compose startup) and then blocks, processing create
+// commands and publishing heartbeats until ctx is done.
 func (a *Agent) Run(ctx context.Context) error {
+	if err := a.register(ctx); err != nil {
+		return fmt.Errorf("register hypervisor: %w", err)
+	}
+
 	if err := compute.EnsureStreams(ctx, a.JS); err != nil {
 		return err
 	}
@@ -63,6 +81,34 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.publishHeartbeat()
 		}
 	}
+}
+
+// register self-registers with compute's HypervisorService (idempotent --
+// see RegisterHypervisorRequest), retrying for a while since compute may not
+// have finished starting yet at the same moment this agent has.
+func (a *Agent) register(ctx context.Context) error {
+	req := &computev1.RegisterHypervisorRequest{
+		Hypervisor:          a.Hypervisor,
+		Zone:                a.Zone,
+		AllocatableVcpu:     a.AllocatableVCPU,
+		AllocatableMemoryMb: a.AllocatableMemoryMB,
+		SupportedDrivers:    a.SupportedDrivers,
+	}
+	var lastErr error
+	for attempt := 0; attempt < 30; attempt++ {
+		_, err := a.Hypervisors.Register(ctx, req)
+		if err == nil {
+			slog.Info("compute-agent: registered", "hypervisor", a.Hypervisor, "zone", a.Zone)
+			return nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return lastErr
 }
 
 // handleCreate acks on receipt (per docs/architecture.md: agents ack once

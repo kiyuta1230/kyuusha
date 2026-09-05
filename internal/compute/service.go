@@ -44,6 +44,8 @@ const (
 // that ever matters.
 type Service struct {
 	store          *resource.Store[VirtualMachine, *VirtualMachine]
+	hypervisors    *resource.Store[Hypervisor, *Hypervisor]
+	scheduler      SchedulingStrategy
 	identityClient identityv1.TenantServiceClient
 	quota          *quotaChecker
 
@@ -62,6 +64,12 @@ func NewService(ctx context.Context, identityClient identityv1.TenantServiceClie
 			Conflict:      ErrConflict,
 			HistoryPruned: ErrHistoryPruned,
 		}),
+		hypervisors: resource.NewStore[Hypervisor, *Hypervisor]("hypervisor", resource.StoreErrors{
+			NotFound:      ErrHypervisorNotFound,
+			Conflict:      ErrHypervisorConflict,
+			HistoryPruned: ErrHypervisorHistoryPruned,
+		}),
+		scheduler:      MostAvailableFirst{},
 		identityClient: identityClient,
 		quota:          quota,
 		usage:          make(map[string]tenantUsage),

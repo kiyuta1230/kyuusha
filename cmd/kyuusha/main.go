@@ -30,6 +30,8 @@ func main() {
 		vmCmd(os.Args[2:])
 	case "tenant":
 		tenantCmd(os.Args[2:])
+	case "hypervisor":
+		hypervisorCmd(os.Args[2:])
 	case "token":
 		tokenCmd(os.Args[2:])
 	default:
@@ -42,6 +44,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   kyuusha vm <create|get|list|watch> [flags]
   kyuusha tenant <create|get|list|watch> [flags]
+  kyuusha hypervisor <get|list|watch> [flags]   (admin-only; read-only observability)
   kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 
@@ -71,6 +74,14 @@ func dial(addr string) computev1.VirtualMachineServiceClient {
 		fatal("dial %s: %v", addr, err)
 	}
 	return computev1.NewVirtualMachineServiceClient(conn)
+}
+
+func dialHypervisors(addr string) computev1.HypervisorServiceClient {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		fatal("dial %s: %v", addr, err)
+	}
+	return computev1.NewHypervisorServiceClient(conn)
 }
 
 func dialIdentity(addr string) identityv1.TenantServiceClient {

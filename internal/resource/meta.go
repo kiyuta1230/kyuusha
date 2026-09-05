@@ -25,6 +25,7 @@ func (m *ObjectMeta) GetTenantID() string        { return m.TenantID }
 func (m *ObjectMeta) SetTenantID(id string)      { m.TenantID = id }
 func (m *ObjectMeta) GetResourceVersion() int64  { return m.ResourceVersion }
 func (m *ObjectMeta) SetResourceVersion(v int64) { m.ResourceVersion = v }
+func (m *ObjectMeta) GetCreatedAt() time.Time    { return m.CreatedAt }
 func (m *ObjectMeta) SetCreatedAt(t time.Time)   { m.CreatedAt = t }
 
 // Meta is the constraint every generic Store[T, PT] resource type's pointer
@@ -41,5 +42,6 @@ type Meta interface {
 	SetTenantID(string)
 	GetResourceVersion() int64
 	SetResourceVersion(int64)
+	GetCreatedAt() time.Time
 	SetCreatedAt(time.Time)
 }

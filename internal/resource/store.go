@@ -115,6 +115,40 @@ func (s *Store[T, PT]) create(id, tenantID, dedupeNamespace, name string, obj T)
 	return out, nil
 }
 
+// Put is Create+Update combined, for resources whose id is a caller-chosen,
+// stable identifier rather than something minted -- e.g. compute.Hypervisor,
+// keyed by the hypervisor string operators/agents already use elsewhere
+// (NATS subjects), not tenant-scoped, and re-registered (upserted) rather
+// than idempotently returned unchanged. Unlike Update, it ignores
+// resource_version entirely (there's no prior client-known value to
+// optimistically check against a self-registering agent) and never
+// conflicts: it creates on first call, overwrites on every later one,
+// preserving CreatedAt across the overwrite. Emits ADDED the first time,
+// MODIFIED after.
+func (s *Store[T, PT]) Put(ctx context.Context, id, tenantID, name string, obj T) T {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	p := PT(&obj)
+	p.SetID(id)
+	p.SetTenantID(tenantID)
+	p.SetName(name)
+
+	eventType := EventAdded
+	if current, ok := s.byID[id]; ok {
+		p.SetCreatedAt(PT(&current).GetCreatedAt())
+		eventType = EventModified
+	} else {
+		p.SetCreatedAt(time.Now())
+	}
+
+	out := s.putLocked(obj, eventType)
+	if name != "" {
+		s.byTenantName[tenantID+"/"+name] = id
+	}
+	return out
+}
+
 // LookupByName returns the object bound to (tenantID, name) by a prior
 // Create, without minting anything -- the read-only half of Create's own
 // idempotency check, exposed so a caller can run side effects (e.g. quota

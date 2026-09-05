@@ -90,6 +90,7 @@ func (v *VirtualMachine) SetID(id string)             { v.Meta.ID = id }
 func (v *VirtualMachine) GetName() string             { return v.Meta.Name }
 func (v *VirtualMachine) SetName(name string)         { v.Meta.Name = name }
 func (v *VirtualMachine) GetTenantID() string         { return v.Meta.TenantID }
+func (v *VirtualMachine) GetCreatedAt() time.Time     { return v.Meta.CreatedAt }
 func (v *VirtualMachine) SetTenantID(id string)       { v.Meta.TenantID = id }
 func (v *VirtualMachine) GetResourceVersion() int64   { return v.Meta.ResourceVersion }
 func (v *VirtualMachine) SetResourceVersion(rv int64) { v.Meta.ResourceVersion = rv }
