@@ -34,6 +34,10 @@ func main() {
 		hypervisorCmd(os.Args[2:])
 	case "image":
 		imageCmd(os.Args[2:])
+	case "subnet":
+		subnetCmd(os.Args[2:])
+	case "netif":
+		netifCmd(os.Args[2:])
 	case "token":
 		tokenCmd(os.Args[2:])
 	default:
@@ -48,6 +52,8 @@ func usage() {
   kyuusha tenant <create|get|list|watch> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
   kyuusha image <create|get|list|watch> [flags]
+  kyuusha subnet <create|get|list|watch> [flags]
+  kyuusha netif <create|get|list|watch> [flags]
   kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 

@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package kyuusha.network.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// See docs/architecture.md "networkサービスのリソース: Subnet / NetworkInterface"
+// and docs/specs/network.md.
+
+message FirewallRule {
+  string protocol = 1;     // tcp/udp/icmp
+  string port_range = 2;   // e.g. "22", "2379-2380"
+  string source_cidr = 3;
+  string action = 4;       // allow/deny
+}
+
+message NetworkInterfaceSpec {
+  string vm_id = 1;
+  string subnet_id = 2;
+  repeated FirewallRule ingress_rules = 3; // default-deny outside the Subnet's own CIDR; no separate SecurityGroup-like resource
+}
+
+message NetworkInterfaceStatus {
+  string phase = 1;    // Pending / Binding(IPAM割当+tap配線中) / Ready / Rebinding(SELF_HEAL再バインド中) / Deleting / Error
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+  string ip_address = 3;
+  string mac_address = 4;
+  string hypervisor = 5; // the Hypervisor a tap is currently wired on, if any
+}
+
+message NetworkInterface {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  NetworkInterfaceSpec spec = 2;
+  NetworkInterfaceStatus status = 3;
+}
+
+message CreateNetworkInterfaceRequest {
+  string tenant_id = 1;
+  string name = 2; // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing NetworkInterface
+  NetworkInterfaceSpec spec = 3;
+  bool dry_run = 4;
+}
+
+message GetNetworkInterfaceRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
+message ListNetworkInterfacesRequest {
+  string tenant_id = 1;
+}
+
+message ListNetworkInterfacesResponse {
+  repeated NetworkInterface items = 1;
+}
+
+message UpdateNetworkInterfaceRequest {
+  NetworkInterface network_interface = 1; // .meta.resource_version must match the stored value
+  bool dry_run = 2;
+  string tenant_id = 3; // mirrors network_interface.meta.tenant_id; see vm.proto's UpdateVirtualMachineRequest for why this stays top-level
+}
+
+message DeleteNetworkInterfaceRequest {
+  string tenant_id = 1;
+  string id = 2;
+  bool dry_run = 3;
+}
+
+message WatchNetworkInterfacesRequest {
+  string tenant_id = 1;
+  int64 since_resource_version = 2;
+}
+
+message NetworkInterfaceEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  NetworkInterface network_interface = 2;
+  int64 resource_version = 3;
+}
+
+service NetworkInterfaceService {
+  rpc Create(CreateNetworkInterfaceRequest) returns (NetworkInterface);
+  rpc Get(GetNetworkInterfaceRequest) returns (NetworkInterface);
+  rpc List(ListNetworkInterfacesRequest) returns (ListNetworkInterfacesResponse);
+  rpc Update(UpdateNetworkInterfaceRequest) returns (NetworkInterface);
+  rpc Delete(DeleteNetworkInterfaceRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchNetworkInterfacesRequest) returns (stream NetworkInterfaceEvent);
+}

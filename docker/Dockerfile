@@ -20,6 +20,7 @@ RUN CGO_ENABLED=0 go build -o /out/kyuusha ./cmd/kyuusha
 RUN CGO_ENABLED=0 go build -o /out/api-gateway ./cmd/api-gateway
 RUN CGO_ENABLED=0 go build -o /out/identity ./cmd/identity
 RUN CGO_ENABLED=0 go build -o /out/image ./cmd/image
+RUN CGO_ENABLED=0 go build -o /out/network ./cmd/network
 
 FROM alpine:3 AS compute
 COPY --from=builder /out/compute /usr/local/bin/compute
@@ -55,6 +56,10 @@ ENTRYPOINT ["/usr/local/bin/identity"]
 FROM alpine:3 AS image
 COPY --from=builder /out/image /usr/local/bin/image
 ENTRYPOINT ["/usr/local/bin/image"]
+
+FROM alpine:3 AS network
+COPY --from=builder /out/network /usr/local/bin/network
+ENTRYPOINT ["/usr/local/bin/network"]
 
 # ---- image-assets: prebuilt kernel + minimal rootfs for the playground's ----
 # Firecracker milestone (see docs/specs/firecracker-boot.md). A real Firecracker

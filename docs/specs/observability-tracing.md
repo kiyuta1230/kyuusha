@@ -15,7 +15,7 @@ OTLPを受け付けるものなら何でもよい。playgroundではJaegerを直
 - `-otlp-endpoint`フラグが空文字列の場合、トレーシングは無効（no-op）になる。ローカルの
   `go run`/テストがOTLPバックエンド起動を前提にしなくて済むようにするため
 - サンプリングは`AlwaysSample`（全件収集）。このシステムの規模では間引く理由がない
-- 対象バイナリ: api-gateway、compute、identity、image、compute-agent
+- 対象バイナリ: api-gateway、compute、identity、image、network、compute-agent
 
 ## gRPC呼び出しの計装
 
@@ -25,8 +25,9 @@ OTLPを受け付けるものなら何でもよい。playgroundではJaegerを直
 クライアントに設定している。W3C traceparentのgRPCメタデータでの伝播も含めて自動処理されるため、
 個々のRPCハンドラでの追加コードは不要。
 
-対象: api-gateway(server+2 client)、compute(server+1 client)、identity(server)、
-compute-agent(1 client)。
+対象: api-gateway(server+4 client: compute/identity/image/network)、
+compute(server+2 client: identity/image)、identity(server)、image(server)、
+network(server)、compute-agent(1 client)。
 
 ## NATSを挟む区間の計装
 

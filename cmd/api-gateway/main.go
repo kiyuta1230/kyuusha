@@ -26,6 +26,7 @@ import (
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
 
 func main() {
@@ -33,6 +34,7 @@ func main() {
 	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address")
 	imageAddr := flag.String("image-addr", "localhost:8083", "image service address")
+	networkAddr := flag.String("network-addr", "localhost:8084", "network service address")
 	jwtPublicKey := flag.String("jwt-public-key", "hack/devkeys/jwt-dev.pub", "PEM public key file to verify client JWTs against (dev/test; ignored if -jwt-jwks-url is set)")
 	jwtJWKSURL := flag.String("jwt-jwks-url", "", "JWKS endpoint to verify client JWTs against (e.g. a Keycloak realm's .../protocol/openid-connect/certs); takes precedence over -jwt-public-key")
 	metricsAddr := flag.String("metrics-addr", ":9093", "address to serve /metrics (Prometheus) on")
@@ -135,6 +137,18 @@ func main() {
 	defer imageConn.Close()
 	imageProxy := gateway.NewImageProxy(imagev1.NewImageServiceClient(imageConn))
 
+	networkConn, err := grpc.NewClient(*networkAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial network", "addr", *networkAddr, "err", err)
+		os.Exit(1)
+	}
+	defer networkConn.Close()
+	subnetProxy := gateway.NewSubnetProxy(networkv1.NewSubnetServiceClient(networkConn))
+	networkInterfaceProxy := gateway.NewNetworkInterfaceProxy(networkv1.NewNetworkInterfaceServiceClient(networkConn))
+
 	lis, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
 		slog.Error("listen", "addr", *listenAddr, "err", err)
@@ -149,13 +163,15 @@ func main() {
 	computev1.RegisterHypervisorServiceServer(grpcServer, hypervisorProxy)
 	identityv1.RegisterTenantServiceServer(grpcServer, tenantProxy)
 	imagev1.RegisterImageServiceServer(grpcServer, imageProxy)
+	networkv1.RegisterSubnetServiceServer(grpcServer, subnetProxy)
+	networkv1.RegisterNetworkInterfaceServiceServer(grpcServer, networkInterfaceProxy)
 
 	go func() {
 		<-ctx.Done()
 		grpcServer.GracefulStop()
 	}()
 
-	slog.Info("api-gateway: serving", "addr", *listenAddr, "compute-addr", *computeAddr, "identity-addr", *identityAddr, "image-addr", *imageAddr)
+	slog.Info("api-gateway: serving", "addr", *listenAddr, "compute-addr", *computeAddr, "identity-addr", *identityAddr, "image-addr", *imageAddr, "network-addr", *networkAddr)
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("grpc serve", "err", err)
 		os.Exit(1)

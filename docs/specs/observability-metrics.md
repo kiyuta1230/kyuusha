@@ -26,6 +26,7 @@ exposition形式の`/metrics`をpull型で公開する。バックエンド非�
 | api-gateway | `:9093` |
 | compute-agent | `:9094` |
 | image | `:9095` |
+| network | `:9096` |
 
 ## 主要メトリクス（実測値）
 

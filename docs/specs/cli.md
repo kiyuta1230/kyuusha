@@ -62,6 +62,35 @@ image向け。`create`は`-tenant`を持つためadmin-onlyではない（テナ
 
 `delete`はgRPC APIとしては存在するがCLIには未実装。
 
+## `kyuusha subnet <create|get|list|watch>`
+
+network向け（[network仕様](network.md)参照）。`create`は`-tenant`を持つためadmin-onlyでは
+ない。現状`vlan_id`はモック（Create時に即Ready）。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-zone`(必須) `-cidr`(必須、例`10.0.1.0/24`) `-gateway-ip` `-dns-servers`(カンマ区切り) `-dns-suffix` |
+| `get` | `-tenant`(必須) `-id`(必須) |
+| `list` | `-tenant`(必須) |
+| `watch` | `-tenant`(必須) `-since-resource-version` |
+
+`update`/`delete`はgRPC APIとしては存在するがCLIには未実装。
+
+## `kyuusha netif <create|get|list|watch>`
+
+network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`のCLI名は
+`netif`（プロト上のメッセージ名は`NetworkInterface`）。`ip_address`/`hypervisor`は
+現状モック（`ip_address`は常に`0.0.0.0`、`hypervisor`は常に空）。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-vm`(VM ID、必須) `-subnet`(Subnet ID、必須) |
+| `get` | `-tenant`(必須) `-id`(必須) |
+| `list` | `-tenant`(必須) |
+| `watch` | `-tenant`(必須) `-since-resource-version` |
+
+`update`/`delete`はgRPC APIとしては存在するがCLIには未実装。
+
 ## `kyuusha token mint`
 
 devonly。ローカルのECDSA秘密鍵でJWTを署名するだけで、実際のOIDC発行元を経由しない

@@ -1,0 +1,185 @@
+package grpcserver
+
+import (
+	"context"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/network"
+
+	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
+)
+
+type NetworkInterfaceServer struct {
+	networkv1.UnimplementedNetworkInterfaceServiceServer
+	svc *network.Service
+}
+
+func NewNetworkInterfaceServer(svc *network.Service) *NetworkInterfaceServer {
+	return &NetworkInterfaceServer{svc: svc}
+}
+
+func (s *NetworkInterfaceServer) Create(ctx context.Context, req *networkv1.CreateNetworkInterfaceRequest) (*networkv1.NetworkInterface, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	n, err := s.svc.CreateNetworkInterface(ctx, req.GetTenantId(), req.GetName(), fromNetworkInterfaceSpec(req.GetSpec()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toNetworkInterface(*n), nil
+}
+
+func (s *NetworkInterfaceServer) Get(ctx context.Context, req *networkv1.GetNetworkInterfaceRequest) (*networkv1.NetworkInterface, error) {
+	n, err := s.svc.GetNetworkInterface(ctx, req.GetTenantId(), req.GetId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toNetworkInterface(*n), nil
+}
+
+func (s *NetworkInterfaceServer) List(ctx context.Context, req *networkv1.ListNetworkInterfacesRequest) (*networkv1.ListNetworkInterfacesResponse, error) {
+	ifaces, err := s.svc.ListNetworkInterfaces(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	out := &networkv1.ListNetworkInterfacesResponse{}
+	for _, n := range ifaces {
+		out.Items = append(out.Items, toNetworkInterface(n))
+	}
+	return out, nil
+}
+
+func (s *NetworkInterfaceServer) Update(ctx context.Context, req *networkv1.UpdateNetworkInterfaceRequest) (*networkv1.NetworkInterface, error) {
+	if req.GetTenantId() == "" || req.GetTenantId() != req.GetNetworkInterface().GetMeta().GetTenantId() {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id must be set and match network_interface.meta.tenant_id")
+	}
+	n := fromNetworkInterface(req.GetNetworkInterface())
+	updated, err := s.svc.UpdateNetworkInterface(ctx, &n)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toNetworkInterface(*updated), nil
+}
+
+func (s *NetworkInterfaceServer) Delete(ctx context.Context, req *networkv1.DeleteNetworkInterfaceRequest) (*emptypb.Empty, error) {
+	if err := s.svc.DeleteNetworkInterface(ctx, req.GetTenantId(), req.GetId()); err != nil {
+		return nil, toStatus(err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+func (s *NetworkInterfaceServer) Watch(req *networkv1.WatchNetworkInterfacesRequest, stream networkv1.NetworkInterfaceService_WatchServer) error {
+	events, err := s.svc.WatchNetworkInterfaces(stream.Context(), req.GetTenantId(), req.GetSinceResourceVersion())
+	if err != nil {
+		return toStatus(err)
+	}
+	for e := range events {
+		if err := stream.Send(toNetworkInterfaceEvent(e)); err != nil {
+			return err
+		}
+	}
+	return stream.Context().Err()
+}
+
+func fromFirewallRule(r *networkv1.FirewallRule) network.FirewallRule {
+	return network.FirewallRule{
+		Protocol:   r.GetProtocol(),
+		PortRange:  r.GetPortRange(),
+		SourceCIDR: r.GetSourceCidr(),
+		Action:     r.GetAction(),
+	}
+}
+
+func toFirewallRule(r network.FirewallRule) *networkv1.FirewallRule {
+	return &networkv1.FirewallRule{
+		Protocol:   r.Protocol,
+		PortRange:  r.PortRange,
+		SourceCidr: r.SourceCIDR,
+		Action:     r.Action,
+	}
+}
+
+func fromNetworkInterfaceSpec(s *networkv1.NetworkInterfaceSpec) network.NetworkInterfaceSpec {
+	spec := network.NetworkInterfaceSpec{
+		VMID:     s.GetVmId(),
+		SubnetID: s.GetSubnetId(),
+	}
+	for _, r := range s.GetIngressRules() {
+		spec.IngressRules = append(spec.IngressRules, fromFirewallRule(r))
+	}
+	return spec
+}
+
+func toNetworkInterfaceSpec(s network.NetworkInterfaceSpec) *networkv1.NetworkInterfaceSpec {
+	out := &networkv1.NetworkInterfaceSpec{
+		VmId:     s.VMID,
+		SubnetId: s.SubnetID,
+	}
+	for _, r := range s.IngressRules {
+		out.IngressRules = append(out.IngressRules, toFirewallRule(r))
+	}
+	return out
+}
+
+func toNetworkInterfaceStatusProto(st network.NetworkInterfaceStatus) *networkv1.NetworkInterfaceStatus {
+	out := &networkv1.NetworkInterfaceStatus{
+		Phase:      string(st.Phase),
+		IpAddress:  st.IPAddress,
+		MacAddress: st.MACAddress,
+		Hypervisor: st.Hypervisor,
+	}
+	for _, c := range st.Conditions {
+		out.Conditions = append(out.Conditions, toConditionProto(c))
+	}
+	return out
+}
+
+func fromNetworkInterfaceStatusProto(st *networkv1.NetworkInterfaceStatus) network.NetworkInterfaceStatus {
+	out := network.NetworkInterfaceStatus{
+		Phase:      network.NetworkInterfacePhase(st.GetPhase()),
+		IPAddress:  st.GetIpAddress(),
+		MACAddress: st.GetMacAddress(),
+		Hypervisor: st.GetHypervisor(),
+	}
+	for _, c := range st.GetConditions() {
+		out.Conditions = append(out.Conditions, fromConditionProto(c))
+	}
+	return out
+}
+
+func toNetworkInterface(n network.NetworkInterface) *networkv1.NetworkInterface {
+	return &networkv1.NetworkInterface{
+		Meta:   toMetaProto(n.Meta),
+		Spec:   toNetworkInterfaceSpec(n.Spec),
+		Status: toNetworkInterfaceStatusProto(n.Status),
+	}
+}
+
+func fromNetworkInterface(n *networkv1.NetworkInterface) network.NetworkInterface {
+	return network.NetworkInterface{
+		Meta:   fromMetaProto(n.GetMeta()),
+		Spec:   fromNetworkInterfaceSpec(n.GetSpec()),
+		Status: fromNetworkInterfaceStatusProto(n.GetStatus()),
+	}
+}
+
+func toNetworkInterfaceEvent(e network.NetworkInterfaceEvent) *networkv1.NetworkInterfaceEvent {
+	out := &networkv1.NetworkInterfaceEvent{ResourceVersion: e.ResourceVersion}
+	switch e.Type {
+	case network.EventAdded:
+		out.Type = networkv1.NetworkInterfaceEvent_ADDED
+	case network.EventModified:
+		out.Type = networkv1.NetworkInterfaceEvent_MODIFIED
+	case network.EventDeleted:
+		out.Type = networkv1.NetworkInterfaceEvent_DELETED
+	case network.EventBookmark:
+		out.Type = networkv1.NetworkInterfaceEvent_BOOKMARK
+	}
+	if out.Type != networkv1.NetworkInterfaceEvent_BOOKMARK {
+		out.NetworkInterface = toNetworkInterface(e.Object)
+	}
+	return out
+}

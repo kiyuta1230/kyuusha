@@ -14,6 +14,9 @@ scrape_configs:
   - job_name: image
     static_configs:
       - targets: ["image:9095"]
+  - job_name: network
+    static_configs:
+      - targets: ["network:9096"]
   - job_name: compute-agent
     static_configs:
       - targets: ["compute-agent-1:9094", "compute-agent-2:9094", "compute-agent-3:9094"]

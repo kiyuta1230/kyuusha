@@ -6,9 +6,11 @@
 # via the image service and waits for it to reach Ready, creates several VMs
 # referencing it (booting real Firecracker microVMs -- see
 # docs/specs/firecracker-boot.md -- if /dev/kvm is available), and confirms
-# the real scheduler spreads them across hypervisor-1/2/3. Also checks that
-# Tenant creation and Hypervisor listing are admin-only, and that a token for
-# a different tenant is denied VM access. Leaves the stack running
+# the real scheduler spreads them across hypervisor-1/2/3. Also creates a
+# Subnet and a NetworkInterface (network service -- see docs/specs/network.md;
+# VLAN/IP allocation is mocked at this stage), checks that Tenant creation
+# and Hypervisor listing are admin-only, and that a token for a different
+# tenant is denied VM access. Leaves the stack running
 # afterwards; `docker compose -f playground/docker-compose.yml down` when
 # done.
 set -euo pipefail
@@ -115,6 +117,31 @@ if go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$
 else
   echo "!! could not confirm a real guest boot for vm-1 (no /dev/kvm on this host? try: kyuusha vm console -tenant=$tenant -id=$vm1_id)" >&2
 fi
+
+echo "==> creating Subnet for tenant $tenant (zone-a; see docs/specs/network.md -- vlan_id is mocked, Create goes straight to Ready)"
+subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-subnet -zone=zone-a -cidr=10.0.1.0/24)"
+echo "$subnet_line"
+subnet="$(echo "$subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if [ -z "$subnet" ] || ! echo "$subnet_line" | grep -q 'phase=Ready'; then
+  echo "!! subnet was not created Ready: $subnet_line" >&2
+  exit 1
+fi
+
+echo "==> creating NetworkInterface for vm-1 on subnet $subnet (ip/mac are mocked; see docs/specs/network.md)"
+netif_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-netif -vm="$vm1_id" -subnet="$subnet")"
+echo "$netif_line"
+if ! echo "$netif_line" | grep -q 'phase=Ready'; then
+  echo "!! network interface was not created Ready: $netif_line" >&2
+  exit 1
+fi
+
+echo "==> confirming NetworkInterface Create rejects an unknown subnet_id"
+if go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-netif-bad \
+  -vm="$vm1_id" -subnet=subnet-does-not-exist 2>/tmp/kyuusha-netif-validation-check.log; then
+  echo "!! expected InvalidArgument but netif create with an unknown subnet_id succeeded" >&2
+  exit 1
+fi
+grep -q InvalidArgument /tmp/kyuusha-netif-validation-check.log && echo "    rejected as expected"
 
 echo "==> hypervisor distribution (expect it spread across hypervisor-1/2/3)"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" \

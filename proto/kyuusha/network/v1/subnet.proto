@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package kyuusha.network.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// See docs/architecture.md "networkサービスのリソース: Subnet / NetworkInterface"
+// and docs/specs/network.md. A tenant (KaaS cluster) holds one or more
+// Subnets, each independently issued a VLAN ID; a multi-homed cluster is
+// expressed as multiple Subnets, not a separate "Network" grouping resource.
+
+message SubnetSpec {
+  string zone = 1;                            // required: the Availability Zone this Subnet (VLAN) belongs to
+  string cidr = 2;                            // required, e.g. "10.0.1.0/24"
+  string gateway_ip = 3;
+  repeated string dns_servers = 4;             // if empty and dns_suffix is set, kyuusha's shared resolver IP is implied
+  repeated string shared_with_tenant_ids = 5;  // declares intent to share a route to other tenants (optional)
+  string dns_suffix = 6;                       // empty disables the (extension) name resolution feature
+}
+
+message SubnetStatus {
+  string phase = 1;    // Pending(VLAN未払い出し) / Ready / Deleting / Error
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+  int32 vlan_id = 3;   // issued VLAN ID
+}
+
+message Subnet {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  SubnetSpec spec = 2;
+  SubnetStatus status = 3;
+}
+
+message CreateSubnetRequest {
+  string tenant_id = 1;
+  string name = 2; // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing Subnet
+  SubnetSpec spec = 3;
+  bool dry_run = 4;
+}
+
+message GetSubnetRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
+message ListSubnetsRequest {
+  string tenant_id = 1;
+}
+
+message ListSubnetsResponse {
+  repeated Subnet items = 1;
+}
+
+message UpdateSubnetRequest {
+  Subnet subnet = 1; // subnet.meta.resource_version must match the stored value
+  bool dry_run = 2;
+  string tenant_id = 3; // mirrors subnet.meta.tenant_id; see vm.proto's UpdateVirtualMachineRequest for why this stays top-level
+}
+
+message DeleteSubnetRequest {
+  string tenant_id = 1;
+  string id = 2;
+  bool dry_run = 3;
+}
+
+message WatchSubnetsRequest {
+  string tenant_id = 1;
+  int64 since_resource_version = 2;
+}
+
+message SubnetEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  Subnet subnet = 2;
+  int64 resource_version = 3;
+}
+
+service SubnetService {
+  rpc Create(CreateSubnetRequest) returns (Subnet);
+  rpc Get(GetSubnetRequest) returns (Subnet);
+  rpc List(ListSubnetsRequest) returns (ListSubnetsResponse);
+  rpc Update(UpdateSubnetRequest) returns (Subnet);
+  rpc Delete(DeleteSubnetRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchSubnetsRequest) returns (stream SubnetEvent);
+}
