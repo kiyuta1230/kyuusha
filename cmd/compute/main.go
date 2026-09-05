@@ -126,7 +126,7 @@ func main() {
 		os.Exit(1)
 	}
 	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
-	computev1.RegisterVirtualMachineServiceServer(grpcServer, grpcserver.New(svc))
+	computev1.RegisterVirtualMachineServiceServer(grpcServer, grpcserver.New(svc, recon))
 	computev1.RegisterHypervisorServiceServer(grpcServer, grpcserver.NewHypervisorServer(svc))
 
 	go func() {

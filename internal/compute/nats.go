@@ -30,6 +30,14 @@ func EvtSubjectHeartbeat(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.evt.%s.heartbeat", hypervisor)
 }
 
+// ConsoleRequestSubject is deliberately NOT under `ms.compute.cmd.>`: console
+// access is ephemeral/live, not a durable work-queue command, so it must not
+// be captured (and retained) by the COMPUTE_CMD JetStream stream. Published
+// and subscribed via plain NATS core (see console.go).
+func ConsoleRequestSubject(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.console.%s.request", hypervisor)
+}
+
 const (
 	cmdStreamName = "COMPUTE_CMD"
 	evtStreamName = "COMPUTE_EVT"
@@ -78,6 +86,29 @@ type HeartbeatMsg struct {
 	Hypervisor string    `json:"hypervisor"`
 	At         time.Time `json:"at"`
 }
+
+// ConsoleRequest is published to ConsoleRequestSubject(hypervisor) when a
+// client wants to read or follow a VM's serial console (see
+// docs/specs/firecracker-boot.md and console.go). compute-agent tails its
+// local console log for VMID and publishes raw byte chunks to ReplySubject:
+// an immediate zero-length message first (so the caller's bounded wait for
+// a first response succeeds even when there's nothing new to say yet, e.g.
+// an already-quiet Follow session), then TailBytes worth of history, then
+// -- if Follow -- new output as it's written. A message carrying
+// ConsoleDoneHeader marks the end (with ConsoleErrorHeader set if it ended
+// because of an error, e.g. no console for this VM). Follow sessions stop
+// when a message arrives on ReplySubject+".stop", or after a safety timeout.
+type ConsoleRequest struct {
+	VMID         string `json:"vm_id"`
+	TailBytes    int64  `json:"tail_bytes"`
+	Follow       bool   `json:"follow"`
+	ReplySubject string `json:"reply_subject"`
+}
+
+const (
+	ConsoleDoneHeader  = "Kyuusha-Console-Done"
+	ConsoleErrorHeader = "Kyuusha-Console-Error"
+)
 
 // EnsureStreams creates COMPUTE_CMD/COMPUTE_EVT if they don't already exist.
 // Safe to call from both compute and compute-agent at startup.

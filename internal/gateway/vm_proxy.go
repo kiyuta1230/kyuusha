@@ -66,3 +66,22 @@ func (p *VirtualMachineProxy) Watch(req *computev1.WatchVirtualMachinesRequest, 
 		}
 	}
 }
+
+func (p *VirtualMachineProxy) StreamConsole(req *computev1.StreamConsoleRequest, stream computev1.VirtualMachineService_StreamConsoleServer) error {
+	backendStream, err := p.backend.StreamConsole(stream.Context(), req)
+	if err != nil {
+		return err
+	}
+	for {
+		chunk, err := backendStream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := stream.Send(chunk); err != nil {
+			return err
+		}
+	}
+}

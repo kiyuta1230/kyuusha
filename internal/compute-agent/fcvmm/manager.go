@@ -96,6 +96,14 @@ func (m *Manager) runDir() string {
 	return "/var/lib/kyuusha/fc-run"
 }
 
+// ConsoleLogPath is where Boot(vmID's spec) captures Firecracker's stdout/
+// stderr (== the guest's serial console, ttyS0) -- see docs/specs/
+// firecracker-boot.md. It exists only once Boot has actually run for this
+// vmID (never, for a stub-succeeded QEMU VM or one that hasn't booted yet).
+func (m *Manager) ConsoleLogPath(vmID string) string {
+	return filepath.Join(m.runDir(), vmID, "console.log")
+}
+
 // Boot fetches (or reuses cached copies of) spec's kernel/rootfs, gives the
 // VM its own writable rootfs copy and run directory, and starts Firecracker
 // against them. It returns once Firecracker has either exited immediately

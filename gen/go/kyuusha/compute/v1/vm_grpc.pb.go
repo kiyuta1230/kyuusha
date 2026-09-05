@@ -20,12 +20,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	VirtualMachineService_Create_FullMethodName = "/kyuusha.compute.v1.VirtualMachineService/Create"
-	VirtualMachineService_Get_FullMethodName    = "/kyuusha.compute.v1.VirtualMachineService/Get"
-	VirtualMachineService_List_FullMethodName   = "/kyuusha.compute.v1.VirtualMachineService/List"
-	VirtualMachineService_Update_FullMethodName = "/kyuusha.compute.v1.VirtualMachineService/Update"
-	VirtualMachineService_Delete_FullMethodName = "/kyuusha.compute.v1.VirtualMachineService/Delete"
-	VirtualMachineService_Watch_FullMethodName  = "/kyuusha.compute.v1.VirtualMachineService/Watch"
+	VirtualMachineService_Create_FullMethodName        = "/kyuusha.compute.v1.VirtualMachineService/Create"
+	VirtualMachineService_Get_FullMethodName           = "/kyuusha.compute.v1.VirtualMachineService/Get"
+	VirtualMachineService_List_FullMethodName          = "/kyuusha.compute.v1.VirtualMachineService/List"
+	VirtualMachineService_Update_FullMethodName        = "/kyuusha.compute.v1.VirtualMachineService/Update"
+	VirtualMachineService_Delete_FullMethodName        = "/kyuusha.compute.v1.VirtualMachineService/Delete"
+	VirtualMachineService_Watch_FullMethodName         = "/kyuusha.compute.v1.VirtualMachineService/Watch"
+	VirtualMachineService_StreamConsole_FullMethodName = "/kyuusha.compute.v1.VirtualMachineService/StreamConsole"
 )
 
 // VirtualMachineServiceClient is the client API for VirtualMachineService service.
@@ -38,6 +39,10 @@ type VirtualMachineServiceClient interface {
 	Update(ctx context.Context, in *UpdateVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	Delete(ctx context.Context, in *DeleteVirtualMachineRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Watch(ctx context.Context, in *WatchVirtualMachinesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VirtualMachineEvent], error)
+	// Serial console (see docs/specs/firecracker-boot.md). Only meaningful
+	// for a VM that has actually been scheduled and had a real VMM boot
+	// attempted; NotFound/FailedPrecondition otherwise.
+	StreamConsole(ctx context.Context, in *StreamConsoleRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConsoleChunk], error)
 }
 
 type virtualMachineServiceClient struct {
@@ -117,6 +122,25 @@ func (c *virtualMachineServiceClient) Watch(ctx context.Context, in *WatchVirtua
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type VirtualMachineService_WatchClient = grpc.ServerStreamingClient[VirtualMachineEvent]
 
+func (c *virtualMachineServiceClient) StreamConsole(ctx context.Context, in *StreamConsoleRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConsoleChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &VirtualMachineService_ServiceDesc.Streams[1], VirtualMachineService_StreamConsole_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamConsoleRequest, ConsoleChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VirtualMachineService_StreamConsoleClient = grpc.ServerStreamingClient[ConsoleChunk]
+
 // VirtualMachineServiceServer is the server API for VirtualMachineService service.
 // All implementations must embed UnimplementedVirtualMachineServiceServer
 // for forward compatibility.
@@ -127,6 +151,10 @@ type VirtualMachineServiceServer interface {
 	Update(context.Context, *UpdateVirtualMachineRequest) (*VirtualMachine, error)
 	Delete(context.Context, *DeleteVirtualMachineRequest) (*emptypb.Empty, error)
 	Watch(*WatchVirtualMachinesRequest, grpc.ServerStreamingServer[VirtualMachineEvent]) error
+	// Serial console (see docs/specs/firecracker-boot.md). Only meaningful
+	// for a VM that has actually been scheduled and had a real VMM boot
+	// attempted; NotFound/FailedPrecondition otherwise.
+	StreamConsole(*StreamConsoleRequest, grpc.ServerStreamingServer[ConsoleChunk]) error
 	mustEmbedUnimplementedVirtualMachineServiceServer()
 }
 
@@ -154,6 +182,9 @@ func (UnimplementedVirtualMachineServiceServer) Delete(context.Context, *DeleteV
 }
 func (UnimplementedVirtualMachineServiceServer) Watch(*WatchVirtualMachinesRequest, grpc.ServerStreamingServer[VirtualMachineEvent]) error {
 	return status.Error(codes.Unimplemented, "method Watch not implemented")
+}
+func (UnimplementedVirtualMachineServiceServer) StreamConsole(*StreamConsoleRequest, grpc.ServerStreamingServer[ConsoleChunk]) error {
+	return status.Error(codes.Unimplemented, "method StreamConsole not implemented")
 }
 func (UnimplementedVirtualMachineServiceServer) mustEmbedUnimplementedVirtualMachineServiceServer() {}
 func (UnimplementedVirtualMachineServiceServer) testEmbeddedByValue()                               {}
@@ -277,6 +308,17 @@ func _VirtualMachineService_Watch_Handler(srv interface{}, stream grpc.ServerStr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type VirtualMachineService_WatchServer = grpc.ServerStreamingServer[VirtualMachineEvent]
 
+func _VirtualMachineService_StreamConsole_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamConsoleRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(VirtualMachineServiceServer).StreamConsole(m, &grpc.GenericServerStream[StreamConsoleRequest, ConsoleChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type VirtualMachineService_StreamConsoleServer = grpc.ServerStreamingServer[ConsoleChunk]
+
 // VirtualMachineService_ServiceDesc is the grpc.ServiceDesc for VirtualMachineService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -309,6 +351,11 @@ var VirtualMachineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Watch",
 			Handler:       _VirtualMachineService_Watch_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamConsole",
+			Handler:       _VirtualMachineService_StreamConsole_Handler,
 			ServerStreams: true,
 		},
 	},

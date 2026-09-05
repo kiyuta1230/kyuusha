@@ -22,7 +22,9 @@ VM作成自体はできるがゲストの実起動は失敗する（スタック
 Tenant作成→Image作成→Ready待ち→VM作成（実Firecracker起動、`/dev/kvm`があれば）→スケジュール→
 Quota強制→認可拒否まで一通り確認する（詳細は各仕様書参照）。CLIを直接使う場合は
 `go run ./cmd/kyuusha ... -addr=localhost:8080 -token=$KYUUSHA_TOKEN`
-（`kyuusha token mint`で開発用トークンを発行）。
+（`kyuusha token mint`で開発用トークンを発行）。VMのシリアルコンソールは
+`kyuusha vm console -tenant=... -id=... [-follow]`で確認できる
+（[Firecracker起動仕様](../docs/specs/firecracker-boot.md)参照）。
 
 ## 構成
 

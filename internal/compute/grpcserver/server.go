@@ -22,10 +22,14 @@ import (
 type Server struct {
 	computev1.UnimplementedVirtualMachineServiceServer
 	svc *compute.Service
+	// console is only used by StreamConsole: the NATS request/relay it
+	// needs already lives on Reconciler (which owns the NATS connection),
+	// so this just reuses it rather than duplicating that plumbing here.
+	console *compute.Reconciler
 }
 
-func New(svc *compute.Service) *Server {
-	return &Server{svc: svc}
+func New(svc *compute.Service, console *compute.Reconciler) *Server {
+	return &Server{svc: svc, console: console}
 }
 
 func (s *Server) Create(ctx context.Context, req *computev1.CreateVirtualMachineRequest) (*computev1.VirtualMachine, error) {
@@ -88,6 +92,22 @@ func (s *Server) Watch(req *computev1.WatchVirtualMachinesRequest, stream comput
 	}
 	for e := range events {
 		if err := stream.Send(toEvent(e)); err != nil {
+			return err
+		}
+	}
+	return stream.Context().Err()
+}
+
+func (s *Server) StreamConsole(req *computev1.StreamConsoleRequest, stream computev1.VirtualMachineService_StreamConsoleServer) error {
+	if req.GetTenantId() == "" {
+		return status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	chunks, err := s.console.StreamConsole(stream.Context(), req.GetTenantId(), req.GetId(), req.GetTailBytes(), req.GetFollow())
+	if err != nil {
+		return toStatus(err)
+	}
+	for data := range chunks {
+		if err := stream.Send(&computev1.ConsoleChunk{Data: data}); err != nil {
 			return err
 		}
 	}

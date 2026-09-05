@@ -95,6 +95,15 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	defer deleteConsumeCtx.Stop()
 
+	// Plain NATS core subscription, not JetStream: console access is
+	// ephemeral/live, not a durable work-queue command -- see
+	// compute.ConsoleRequestSubject.
+	consoleSub, err := a.NC.Subscribe(compute.ConsoleRequestSubject(a.Hypervisor), a.handleConsoleRequest)
+	if err != nil {
+		return err
+	}
+	defer consoleSub.Unsubscribe()
+
 	interval := a.HeartbeatInterval
 	if interval <= 0 {
 		interval = 5 * time.Second

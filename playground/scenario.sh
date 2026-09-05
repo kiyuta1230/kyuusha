@@ -107,16 +107,13 @@ done
 echo "==> final state"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant"
 
-echo "==> confirming vm-1 actually booted a real Firecracker guest (console log; needs /dev/kvm -- see docs/specs/firecracker-boot.md)"
-vm1_line="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-1 ')"
-vm1_id="$(echo "$vm1_line" | grep -o 'id=[^ ]*' | cut -d= -f2)"
-vm1_hv="$(echo "$vm1_line" | grep -o 'hypervisor=[^ ]*' | cut -d= -f2)"
-agent_service="compute-agent-${vm1_hv#hypervisor-}"
-if docker compose -f playground/docker-compose.yml exec -T "$agent_service" \
-    cat "/var/lib/kyuusha/fc-run/$vm1_id/console.log" 2>/dev/null | grep -q "kyuusha: firecracker guest booted OK"; then
+echo "==> confirming vm-1 actually booted a real Firecracker guest (via kyuusha vm console; needs /dev/kvm -- see docs/specs/firecracker-boot.md)"
+vm1_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-1 ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
+if go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$vm1_id" 2>/dev/null \
+    | grep -q "kyuusha: firecracker guest booted OK"; then
   echo "    confirmed: real Firecracker guest booted"
 else
-  echo "!! could not confirm a real guest boot for vm-1 (no /dev/kvm on this host? check $agent_service's console.log)" >&2
+  echo "!! could not confirm a real guest boot for vm-1 (no /dev/kvm on this host? try: kyuusha vm console -tenant=$tenant -id=$vm1_id)" >&2
 fi
 
 echo "==> hypervisor distribution (expect it spread across hypervisor-1/2/3)"

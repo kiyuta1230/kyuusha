@@ -50,11 +50,15 @@ JSON。protobufは使わない（gRPC APIとは異なる領域として意図的
 
 ```go
 type CreateCommand struct {
-	VMID     string `json:"vm_id"`
-	TenantID string `json:"tenant_id"`
-	ImageID  string `json:"image_id"`
-	VCPU     int32  `json:"vcpu"`
-	MemoryMB int64  `json:"memory_mb"`
+	VMID       string `json:"vm_id"`
+	TenantID   string `json:"tenant_id"`
+	ImageID    string `json:"image_id"`
+	VCPU       int32  `json:"vcpu"`
+	MemoryMB   int64  `json:"memory_mb"`
+	DriverHint string `json:"driver_hint"`
+	KernelURL  string `json:"kernel_url,omitempty"`
+	RootfsURL  string `json:"rootfs_url,omitempty"`
+	BootArgs   string `json:"boot_args,omitempty"`
 }
 
 type CreateResult struct {
@@ -63,11 +67,41 @@ type CreateResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// fire-and-forget: no result event (see docs/specs/firecracker-boot.md)
+type DeleteCommand struct {
+	VMID string `json:"vm_id"`
+}
+
 type HeartbeatMsg struct {
 	Hypervisor string    `json:"hypervisor"`
 	At         time.Time `json:"at"`
 }
 ```
+
+## コンソールアクセス: reply-subject方式（cmd/evtとは別系統）
+
+`VirtualMachineService.StreamConsole`（[Firecracker起動仕様](firecracker-boot.md)参照）は
+上記のcmd/evt/work-queueパターンに乗らない。理由は、(1) 配信保証・再配送が要らない
+ライブ/エフェメラルなデータであること、(2)応答が複数メッセージにまたがる
+ストリームであること、(3) `follow`時は呼び出し元がキャンセルするまで続く可能性があること。
+このため`ms.compute.cmd.>`/`ms.compute.evt.>`のどちらにも属さない専用subject
+（`ms.compute.console.<hypervisor>.request`）を使い、JetStreamのどちらのstreamにも
+乗らない**プレーンNATS core**（永続化なし、at-most-once）で実装している。
+
+```
+ms.compute.console.<hypervisor>.request
+```
+
+1. Reconcilerが`nc.NewInbox()`で使い捨ての返信subject（`reply_subject`）を作り、
+   `ConsoleRequest{vm_id, tail_bytes, follow, reply_subject}`を上記subjectへpublishする
+2. compute-agentは`reply_subject`へ生バイト列のchunkを直接publishする（JSON envelopeなし）。
+   最初の1通は空メッセージでも即座に送る（履歴が空でもReconciler側の初回応答待ちが
+   タイムアウトしないように）
+3. 終了は`reply_subject`宛のメッセージの`Kyuusha-Console-Done`ヘッダで示す
+   （失敗時は`Kyuusha-Console-Error`ヘッダにメッセージを乗せる）
+4. `follow`時、呼び出し元（gRPCクライアント）が切断すると、Reconcilerが
+   `<reply_subject>.stop`へpublishしてcompute-agent側のtailループを止める
+   （念のためcompute-agent側にも30分の安全上限がある）
 
 ## トレース伝播
 

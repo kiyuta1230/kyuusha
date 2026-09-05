@@ -44,7 +44,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  kyuusha vm <create|get|list|watch> [flags]
+  kyuusha vm <create|get|list|watch|console> [flags]
   kyuusha tenant <create|get|list|watch> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
   kyuusha image <create|get|list|watch> [flags]
@@ -65,6 +65,8 @@ func vmCmd(args []string) {
 		vmList(args[1:])
 	case "watch":
 		vmWatch(args[1:])
+	case "console":
+		vmConsole(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -264,6 +266,46 @@ func vmWatch(args []string) {
 		vm := ev.GetVm()
 		fmt.Printf("%-10s %-24s phase=%-12s hypervisor=%s rv=%d\n",
 			ev.GetType(), vm.GetMeta().GetId(), vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(), ev.GetResourceVersion())
+	}
+}
+
+// vmConsole streams a VM's serial console (see docs/specs/firecracker-boot.md)
+// straight to stdout as raw bytes -- no framing, so it's pipeable/pageable
+// like any other log. -follow keeps it open for new output, like `tail -f`;
+// without it, the command exits once existing history has been replayed.
+func vmConsole(args []string) {
+	fs := flag.NewFlagSet("vm console", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	tailBytes := fs.Int64("tail-bytes", 0, "trailing bytes of existing console output to replay (0: server default ~64KiB; negative: entire log)")
+	follow := fs.Bool("follow", false, "keep streaming new console output after replaying history, like tail -f")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+	stream, err := client.StreamConsole(ctx, &computev1.StreamConsoleRequest{
+		TenantId:  *tenant,
+		Id:        *id,
+		TailBytes: *tailBytes,
+		Follow:    *follow,
+	})
+	if err != nil {
+		fatal("console: %v", err)
+	}
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			fatal("console: %v", err)
+		}
+		os.Stdout.Write(chunk.GetData())
 	}
 }
 

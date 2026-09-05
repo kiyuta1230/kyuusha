@@ -9,7 +9,7 @@
 - `-token`: bearerトークン（省略時は環境変数`$KYUUSHA_TOKEN`）。両方空なら実行時エラー
 - 認証・認可の詳細は[認証・認可仕様](authn-authz.md)を参照
 
-## `kyuusha vm <create|get|list|watch>`
+## `kyuusha vm <create|get|list|watch|console>`
 
 | サブコマンド | フラグ |
 |---|---|
@@ -17,6 +17,11 @@
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
+| `console` | `-tenant`(必須) `-id`(必須) `-tail-bytes`(既定0=サーバ既定値~64KiB、負値で全量) `-follow`(`tail -f`同様に新規出力を流し続ける) |
+
+`console`はVMのシリアルコンソール（[Firecracker起動仕様](firecracker-boot.md)参照）を
+標準出力へそのまま垂れ流す（フレーミングなし、パイプ/ページャに渡せる）。スケジュール
+されたことがない、または実VMMを一度も起動していないVMに対してはエラーになる。
 
 `update`/`delete`はgRPC APIとしては存在するがCLIには未実装。
 

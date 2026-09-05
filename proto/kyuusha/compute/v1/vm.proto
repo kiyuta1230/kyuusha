@@ -120,6 +120,17 @@ message VirtualMachineEvent {
   int64 resource_version = 3;
 }
 
+message StreamConsoleRequest {
+  string tenant_id = 1;
+  string id = 2;         // vm id
+  int64 tail_bytes = 3;  // 0: server default (~64KiB); negative: entire log
+  bool follow = 4;       // keep streaming new output after replaying history, like `tail -f`
+}
+
+message ConsoleChunk {
+  bytes data = 1;
+}
+
 service VirtualMachineService {
   rpc Create(CreateVirtualMachineRequest) returns (VirtualMachine);
   rpc Get(GetVirtualMachineRequest) returns (VirtualMachine);
@@ -127,4 +138,8 @@ service VirtualMachineService {
   rpc Update(UpdateVirtualMachineRequest) returns (VirtualMachine);
   rpc Delete(DeleteVirtualMachineRequest) returns (google.protobuf.Empty);
   rpc Watch(WatchVirtualMachinesRequest) returns (stream VirtualMachineEvent);
+  // Serial console (see docs/specs/firecracker-boot.md). Only meaningful
+  // for a VM that has actually been scheduled and had a real VMM boot
+  // attempted; NotFound/FailedPrecondition otherwise.
+  rpc StreamConsole(StreamConsoleRequest) returns (stream ConsoleChunk);
 }

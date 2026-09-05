@@ -53,6 +53,22 @@ publishする（結果イベントなし -- VM削除自体はこれの完了を�
 該当VMIDのFirecrackerプロセスにSIGTERMを送り、3秒待ってSIGKILLする。stub経路で一度も
 実プロセスを起動していないVMのDeleteCommandは無害（何もしない）。
 
+## シリアルコンソールアクセス（`VirtualMachineService.StreamConsole`）
+
+`kyuusha vm console -tenant=... -id=... [-tail-bytes=N] [-follow]`で、`<vm_id>/console.log`
+（＝Firecrackerの標準出力＝ゲストのシリアルコンソール`ttyS0`）を読める。ネットワークが
+まだ無いこの実装では、ゲストの状態を外から確認する唯一の手段（`docs/specs/audit-logging.md`
+のような監査目的ではなく、デバッグ目的）。
+
+- **既定**: 末尾64KiB相当を返して終了（`-tail-bytes`未指定時）。`-tail-bytes`に負の値を
+  渡すとログ全体、正の値を渡すとその バイト数分の末尾を返す
+- **`-follow`**: 既存分を返した後、`tail -f`同様に新規出力をストリームし続ける。クライアント
+  が切断すると即座に止まる（Reconcilerが停止シグナルをpublishする）。念のためcompute-agent側
+  にも30分の安全上限がある（[NATSメッセージ仕様](nats-messaging.md)参照）
+
+対象VMが一度もスケジュールされていない（`status.hypervisor`が空）場合や、
+（QEMUドライバ等）実プロセスを一度も起動していない場合はエラーになる。
+
 ## `-fc-*`フラグ（`cmd/compute-agent`）
 
 | フラグ | 既定値 | 説明 |
@@ -73,14 +89,12 @@ publishする（結果イベントなし -- VM削除自体はこれの完了を�
   Alpine minirootfsを土台にした自前rootfs（`docker/fc-guest-init.sh`をPID 1として動かす。
   Alpineの`/sbin/init`（openrc前提）は完全ではないため、`boot_args`に`init=/init`を必須とする
   -- compute-agent側のデフォルト`boot_args`には最初から含まれている）
-- `playground/scenario.sh`が作るImageはこのkernel/rootfsを指す。VM作成後、該当ホストの
-  compute-agentコンテナに入って`console.log`に起動確認メッセージがあることを確認する
+- `playground/scenario.sh`が作るImageはこのkernel/rootfsを指す。VM作成後、
+  `kyuusha vm console`で実際に起動確認メッセージが読めることを確認する
 
 ## この実装がカバーしないもの
 
 - ネットワーク（tap/VLAN。networkサービス実装後の別途対応）
 - jailer（chroot/cgroup/namespace分離。本番運用前に必須、docs/architecture.md参照）
-- シリアルコンソールのライブストリーミング（`console.log`はファイルに書きっぱなしで、
-  gRPCストリーム越しに配信する機能はまだない）
 - ダウンロードした`kernel_url`/`rootfs_url`の内容のdigest検証
 - Stop（一時停止）/Restart。今あるのは起動（Boot）と削除に伴う強制終了（Stop=プロセス終了）のみ
