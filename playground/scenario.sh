@@ -4,11 +4,13 @@
 # self-register as real Hypervisors, mints an admin token, creates a real
 # Tenant via identity, mints a token for that tenant, creates a real Image
 # via the image service and waits for it to reach Ready, creates several VMs
-# referencing it, and confirms the real scheduler spreads them across
-# hypervisor-1/2/3. Also checks that Tenant creation and Hypervisor listing
-# are admin-only, and that a token for a different tenant is denied VM
-# access. Leaves the stack running afterwards;
-# `docker compose -f playground/docker-compose.yml down` when done.
+# referencing it (booting real Firecracker microVMs -- see
+# docs/specs/firecracker-boot.md -- if /dev/kvm is available), and confirms
+# the real scheduler spreads them across hypervisor-1/2/3. Also checks that
+# Tenant creation and Hypervisor listing are admin-only, and that a token for
+# a different tenant is denied VM access. Leaves the stack running
+# afterwards; `docker compose -f playground/docker-compose.yml down` when
+# done.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -70,9 +72,9 @@ fi
 export KYUUSHA_TOKEN
 KYUUSHA_TOKEN="$(go run ./cmd/kyuusha token mint -tenant="$tenant")"
 
-echo "==> creating Image for tenant $tenant (kernel_rootfs; reachability probed against nats's own healthz -- content doesn't matter, only that the URL resolves)"
+echo "==> creating Image for tenant $tenant (kernel_rootfs; a real Firecracker kernel + Alpine rootfs served by image-assets -- see docs/specs/firecracker-boot.md)"
 image_line="$(go run ./cmd/kyuusha image create -addr=localhost:8080 -tenant="$tenant" -name=scenario-image \
-  -format=kernel_rootfs -kernel-url=http://nats:8222/healthz -rootfs-url=http://nats:8222/healthz)"
+  -format=kernel_rootfs -kernel-url=http://image-assets/vmlinux -rootfs-url=http://image-assets/rootfs.ext4)"
 echo "$image_line"
 image="$(echo "$image_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 if [ -z "$image" ]; then
@@ -99,11 +101,23 @@ fi
 echo "==> creating $count VMs for tenant $tenant"
 for i in $(seq 1 "$count"); do
   go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name="vm-$i" \
-    -image="$image" -vcpu=1 -memory-mb=512 -wait
+    -image="$image" -vcpu=1 -memory-mb=128 -wait
 done
 
 echo "==> final state"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant"
+
+echo "==> confirming vm-1 actually booted a real Firecracker guest (console log; needs /dev/kvm -- see docs/specs/firecracker-boot.md)"
+vm1_line="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-1 ')"
+vm1_id="$(echo "$vm1_line" | grep -o 'id=[^ ]*' | cut -d= -f2)"
+vm1_hv="$(echo "$vm1_line" | grep -o 'hypervisor=[^ ]*' | cut -d= -f2)"
+agent_service="compute-agent-${vm1_hv#hypervisor-}"
+if docker compose -f playground/docker-compose.yml exec -T "$agent_service" \
+    cat "/var/lib/kyuusha/fc-run/$vm1_id/console.log" 2>/dev/null | grep -q "kyuusha: firecracker guest booted OK"; then
+  echo "    confirmed: real Firecracker guest booted"
+else
+  echo "!! could not confirm a real guest boot for vm-1 (no /dev/kvm on this host? check $agent_service's console.log)" >&2
+fi
 
 echo "==> hypervisor distribution (expect it spread across hypervisor-1/2/3)"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" \

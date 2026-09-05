@@ -4,7 +4,12 @@
 # the host -- only api-gateway may reach them), and three compute-agent
 # "hypervisors" that self-register with compute at startup, so the real
 # scheduler (Ready phase + driver + capacity filters, most-available-first
-# pick) has real inventory to spread VMs across. Bring it up with
+# pick) has real inventory to spread VMs across. compute-agent boots real
+# Firecracker microVMs (see docs/specs/firecracker-boot.md) using kernel/
+# rootfs served by image-assets, and needs /dev/kvm passed through -- if the
+# host doesn't have KVM (or your user can't access /dev/kvm), this will fail
+# to boot the actual guest but everything else in the stack still works.
+# Bring it up with
 # `docker compose -f playground/docker-compose.yml up -d --build` (from the
 # repo root) and drive it with playground/scenario.sh or
 # `go run ./cmd/kyuusha vm|tenant|hypervisor|image ... -addr=localhost:8080
@@ -144,6 +149,16 @@ services:
     ports:
       - "8080:8080"
 
+  # Prebuilt Firecracker kernel + rootfs for the playground's real microVM
+  # boot milestone (see docs/specs/firecracker-boot.md), served over plain
+  # HTTP so compute-agent can fetch them as ordinary Image artifact URLs --
+  # not reachable from the host, only from compute-agent containers.
+  image-assets:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: image-assets-server
+
   compute-agent-1:
     build:
       context: ..
@@ -156,6 +171,8 @@ services:
       - "-zone=zone-a"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
+    devices:
+      - /dev/kvm
     depends_on:
       nats:
         condition: service_healthy
@@ -174,6 +191,8 @@ services:
       - "-zone=zone-a"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
+    devices:
+      - /dev/kvm
     depends_on:
       nats:
         condition: service_healthy
@@ -192,6 +211,8 @@ services:
       - "-zone=zone-a"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
+    devices:
+      - /dev/kvm
     depends_on:
       nats:
         condition: service_healthy

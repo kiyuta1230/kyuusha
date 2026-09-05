@@ -9,14 +9,18 @@
 docker compose -f playground/docker-compose.yml up -d --build
 ```
 
+`compute-agent-1/2/3`は`/dev/kvm`を要求する（実Firecracker起動、
+[Firecracker起動仕様](../docs/specs/firecracker-boot.md)参照）。ホストにKVMがない場合、
+VM作成自体はできるがゲストの実起動は失敗する（スタックの他の部分には影響しない）。
+
 ## 動作確認
 
 ```sh
 ./playground/scenario.sh
 ```
 
-Tenant作成→Image作成→Ready待ち→VM作成→スケジュール→Quota強制→認可拒否まで一通り確認する
-（詳細は各仕様書参照）。CLIを直接使う場合は
+Tenant作成→Image作成→Ready待ち→VM作成（実Firecracker起動、`/dev/kvm`があれば）→スケジュール→
+Quota強制→認可拒否まで一通り確認する（詳細は各仕様書参照）。CLIを直接使う場合は
 `go run ./cmd/kyuusha ... -addr=localhost:8080 -token=$KYUUSHA_TOKEN`
 （`kyuusha token mint`で開発用トークンを発行）。
 
@@ -33,6 +37,7 @@ observabilityコンポーネントのみ挙げる。
 | `grafana` | 公式`grafana/grafana` | `playground/grafana/provisioning`をマウント。`3000`をホストへ公開、匿名admin有効 |
 | `loki` | 公式`grafana/loki` | ログ集約。ホストにポート非公開 |
 | `promtail` | 公式`grafana/promtail` | Dockerソケットをマウントし全コンテナのログを収集、Lokiへpush |
+| `image-assets` | `docker/Dockerfile`の`image-assets-server`ステージ | playground用のFirecracker kernel/rootfsを配信する静的ファイルサーバ。ホストにポート非公開（[Firecracker起動仕様](../docs/specs/firecracker-boot.md)参照） |
 
 ## Observability
 

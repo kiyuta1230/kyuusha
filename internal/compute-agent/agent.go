@@ -1,8 +1,8 @@
 // Package computeagent is the compute-agent side of the NATS command/event
-// exchange described in docs/architecture.md. It deliberately stubs out the
-// actual VMM work (Firecracker/QEMU) for now: every create command
-// "succeeds" instantly. The point of this pass is the NATS plumbing, not the
-// hypervisor integration.
+// exchange described in docs/architecture.md. driver_hint=FIRECRACKER VMs
+// are booted for real via fcvmm (see docs/specs/firecracker-boot.md for
+// what that milestone does and doesn't cover); QEMU remains a stub, since
+// that driver has no implementation at all yet.
 package computeagent
 
 import (
@@ -17,6 +17,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	computeagentfc "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/fcvmm"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
@@ -41,6 +43,12 @@ type Agent struct {
 	AllocatableVCPU     int32
 	AllocatableMemoryMB int64
 	SupportedDrivers    []string
+
+	// Firecracker boots/tears down driver_hint=FIRECRACKER VMs. Never nil in
+	// practice (cmd/compute-agent/main.go always constructs one), but
+	// handleCreate falls back to the old stub behavior if it is, so tests
+	// that don't set it keep working.
+	Firecracker *computeagentfc.Manager
 }
 
 // Run registers with compute (retrying briefly in case it isn't up yet --
@@ -72,6 +80,20 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	defer consumeCtx.Stop()
+
+	deleteCons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "compute-agent-" + a.Hypervisor + "-delete",
+		FilterSubject: compute.CmdSubjectDelete(a.Hypervisor),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	deleteConsumeCtx, err := deleteCons.Consume(a.handleDelete)
+	if err != nil {
+		return err
+	}
+	defer deleteConsumeCtx.Stop()
 
 	interval := a.HeartbeatInterval
 	if interval <= 0 {
@@ -118,8 +140,11 @@ func (a *Agent) register(ctx context.Context) error {
 }
 
 // handleCreate acks on receipt (per docs/architecture.md: agents ack once
-// the work is durably accepted, not once it completes) and then reports
-// success immediately, since there is no real VMM call yet.
+// the work is durably accepted, not once it completes). driver_hint=
+// FIRECRACKER commands with both artifact URLs set are booted for real via
+// fcvmm; everything else (QEMU, or a Firecracker command missing URLs --
+// shouldn't happen given compute's validation, but handled defensively)
+// stub-succeeds as before.
 func (a *Agent) handleCreate(msg jetstream.Msg) {
 	_ = msg.Ack()
 
@@ -138,8 +163,25 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 	)
 	defer span.End()
 
-	slog.Info("compute-agent: stub-creating VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor)
 	result := compute.CreateResult{VMID: cmd.VMID, Success: true}
+	if a.Firecracker != nil && cmd.DriverHint == string(compute.VmmDriverFirecracker) && cmd.KernelURL != "" && cmd.RootfsURL != "" {
+		slog.Info("compute-agent: booting VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor)
+		if err := a.Firecracker.Boot(ctx, computeagentfc.BootSpec{
+			VMID:      cmd.VMID,
+			VCPU:      cmd.VCPU,
+			MemoryMB:  cmd.MemoryMB,
+			KernelURL: cmd.KernelURL,
+			RootfsURL: cmd.RootfsURL,
+			BootArgs:  cmd.BootArgs,
+		}); err != nil {
+			span.RecordError(err)
+			slog.Error("compute-agent: boot failed", "vm_id", cmd.VMID, "err", err)
+			result = compute.CreateResult{VMID: cmd.VMID, Success: false, Error: err.Error()}
+		}
+	} else {
+		slog.Info("compute-agent: stub-creating VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "driver_hint", cmd.DriverHint)
+	}
+
 	payload, _ := json.Marshal(result)
 	resultMsg := nats.NewMsg(compute.EvtSubjectCreateResult(a.Hypervisor))
 	resultMsg.Data = payload
@@ -147,6 +189,22 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 	if _, err := a.JS.PublishMsg(ctx, resultMsg); err != nil {
 		span.RecordError(err)
 		slog.Error("compute-agent: publish create-result failed", "vm_id", cmd.VMID, "err", err)
+	}
+}
+
+// handleDelete tears down whatever real process Firecracker may have
+// booted for this VM. Fire-and-forget: no result event, see
+// reconciler.go's releaseIfReserved.
+func (a *Agent) handleDelete(msg jetstream.Msg) {
+	_ = msg.Ack()
+
+	var cmd compute.DeleteCommand
+	if err := json.Unmarshal(msg.Data(), &cmd); err != nil {
+		slog.Error("compute-agent: bad delete command", "err", err)
+		return
+	}
+	if a.Firecracker != nil {
+		a.Firecracker.Stop(cmd.VMID)
 	}
 }
 

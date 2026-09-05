@@ -15,6 +15,8 @@ import (
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
+
+	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
 var tracer = otel.Tracer("gitlab.com/ki.yuta1230/kyuusha/internal/compute")
@@ -144,12 +146,30 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 		defer span.End()
 
 		cmd := CreateCommand{
-			VMID:     vm.Meta.ID,
-			TenantID: vm.Meta.TenantID,
-			ImageID:  vm.Spec.ImageID,
-			VCPU:     vm.Spec.VCPU,
-			MemoryMB: vm.Spec.MemoryMB,
+			VMID:       vm.Meta.ID,
+			TenantID:   vm.Meta.TenantID,
+			ImageID:    vm.Spec.ImageID,
+			VCPU:       vm.Spec.VCPU,
+			MemoryMB:   vm.Spec.MemoryMB,
+			DriverHint: string(vm.Spec.DriverHint),
 		}
+		// Resolve the Image to concrete boot inputs now (not at Create time:
+		// the Image could have changed, and compute-agent has no image
+		// service client of its own -- see nats.go's CreateCommand doc).
+		// Create() already validated this Image exists/is Ready/matches
+		// driver_hint, so a failure here is an unexpected race (e.g. the
+		// Image was deleted between Create and this reconcile); leave the VM
+		// in Provisioning and log rather than guess at a recovery.
+		img, err := r.svc.imageClient.Get(ctx, &imagev1.GetImageRequest{TenantId: vm.Meta.TenantID, Id: vm.Spec.ImageID})
+		if err != nil {
+			span.RecordError(err)
+			slog.Error("provision: resolve image failed", "vm_id", vm.Meta.ID, "image_id", vm.Spec.ImageID, "err", err)
+			return
+		}
+		cmd.KernelURL = img.GetSpec().GetKernel().GetUrl()
+		cmd.RootfsURL = img.GetSpec().GetRootfs().GetUrl()
+		cmd.BootArgs = img.GetSpec().GetBootArgs()
+
 		payload, _ := json.Marshal(cmd)
 		msg := nats.NewMsg(CmdSubjectCreate(vm.Status.Hypervisor))
 		msg.Data = payload
@@ -165,11 +185,23 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 // deletion, if it had ever reached far enough to hold one (Status.Hypervisor
 // is only ever set by a successful schedule). A VM deleted while still
 // Pending never held a reservation, so there is nothing to release.
+//
+// It also tells that Hypervisor's compute-agent to tear down whatever real
+// process it may have started (fire-and-forget: VM deletion isn't gated on
+// this, matching the rest of this system's "compute-agent state is
+// best-effort, never authoritative" stance -- see docs/specs/vm-scheduling.md).
 func (r *Reconciler) releaseIfReserved(ctx context.Context, vm VirtualMachine) {
 	if vm.Status.Hypervisor == "" {
 		return
 	}
 	r.svc.releaseHypervisorCapacity(ctx, vm.Status.Hypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
+
+	payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
+	msg := nats.NewMsg(CmdSubjectDelete(vm.Status.Hypervisor))
+	msg.Data = payload
+	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+		slog.Error("delete: publish delete command failed", "vm_id", vm.Meta.ID, "err", err)
+	}
 }
 
 // upsertCondition replaces the condition with the same Type if one exists,

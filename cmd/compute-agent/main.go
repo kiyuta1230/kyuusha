@@ -1,6 +1,7 @@
 // Command compute-agent runs the NATS side of compute-agent: it accepts
-// vm.create commands and reports success, but does not talk to a real VMM
-// yet. See docs/architecture.md and internal/compute-agent.
+// vm.create/vm.delete commands and boots real Firecracker microVMs for
+// driver_hint=FIRECRACKER VMs (see internal/compute-agent/fcvmm and
+// docs/specs/firecracker-boot.md); QEMU remains a stub.
 package main
 
 import (
@@ -21,6 +22,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/fcvmm"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
@@ -37,6 +39,9 @@ func main() {
 	heartbeat := flag.Duration("heartbeat", 5*time.Second, "heartbeat interval")
 	metricsAddr := flag.String("metrics-addr", ":9094", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
+	fcBin := flag.String("firecracker-bin", "firecracker", "firecracker binary to exec for driver_hint=FIRECRACKER VMs")
+	fcCacheDir := flag.String("fc-cache-dir", "/var/lib/kyuusha/fc-cache", "directory caching downloaded kernel/rootfs artifacts, shared across VMs")
+	fcRunDir := flag.String("fc-run-dir", "/var/lib/kyuusha/fc-run", "directory holding each running VM's writable rootfs copy, API socket, and console log")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -115,6 +120,11 @@ func main() {
 		AllocatableVCPU:     int32(*vcpu),
 		AllocatableMemoryMB: *memoryMB,
 		SupportedDrivers:    strings.Split(*drivers, ","),
+		Firecracker: &fcvmm.Manager{
+			BinPath:  *fcBin,
+			CacheDir: *fcCacheDir,
+			RunDir:   *fcRunDir,
+		},
 	}
 	slog.Info("compute-agent: starting", "hypervisor", *hypervisor, "zone", *zone)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {

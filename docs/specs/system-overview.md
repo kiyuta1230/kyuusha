@@ -14,7 +14,7 @@ kyuusha自体の構成要素ではない。それらのエンドポイント・d
 | `identity` | Tenant（テナント・Quota上限値）を管理するCRUD+Watchサービス |
 | `image` | Image（外部URL参照+digestのメタデータ）を管理するCRUD+Watchサービス。Create時にURL到達性・format整合性を検証し、Pending→Ready/Errorへ非同期遷移させる |
 | `compute` | VirtualMachine・Hypervisorを管理するサービス。スケジューラ、Quota強制、Image検証（identity/imageへの同期参照）、compute-agentとのNATSやり取りを持つ |
-| `compute-agent` | 各ハイパーバイザー上で動くagent。起動時にcomputeへ自己登録し、NATS経由でVM作成コマンドを受けて処理する（現状VMM呼び出しはstub） |
+| `compute-agent` | 各ハイパーバイザー上で動くagent。起動時にcomputeへ自己登録し、NATS経由でVM作成/削除コマンドを受けて処理する。`driver_hint=FIRECRACKER`は実際にFirecracker microVMを起動する（[Firecracker起動仕様](firecracker-boot.md)参照）。QEMUドライバは未実装のまま |
 | `NATS (JetStream)` | compute ↔ compute-agent間の非同期コマンド/イベントバス |
 
 未実装のコンポーネント（設計のみ）: network, block-storage, Dragonfly。
