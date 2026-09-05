@@ -31,7 +31,8 @@ func main() {
 	listenAddr := flag.String("listen-addr", ":8080", "address to serve the client-facing API on")
 	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address")
-	jwtPublicKey := flag.String("jwt-public-key", "hack/devkeys/jwt-dev.pub", "PEM file used to verify client JWTs")
+	jwtPublicKey := flag.String("jwt-public-key", "hack/devkeys/jwt-dev.pub", "PEM public key file to verify client JWTs against (dev/test; ignored if -jwt-jwks-url is set)")
+	jwtJWKSURL := flag.String("jwt-jwks-url", "", "JWKS endpoint to verify client JWTs against (e.g. a Keycloak realm's .../protocol/openid-connect/certs); takes precedence over -jwt-public-key")
 	metricsAddr := flag.String("metrics-addr", ":9093", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
@@ -73,12 +74,21 @@ func main() {
 		}
 	}()
 
-	pubKey, err := authn.LoadECDSAPublicKeyPEM(*jwtPublicKey)
-	if err != nil {
-		slog.Error("load jwt public key", "err", err)
-		os.Exit(1)
+	var verifier *authn.Verifier
+	if *jwtJWKSURL != "" {
+		verifier, err = authn.NewJWKSVerifier(ctx, *jwtJWKSURL)
+		if err != nil {
+			slog.Error("setup jwks verifier", "url", *jwtJWKSURL, "err", err)
+			os.Exit(1)
+		}
+	} else {
+		pubKey, err := authn.LoadECDSAPublicKeyPEM(*jwtPublicKey)
+		if err != nil {
+			slog.Error("load jwt public key", "err", err)
+			os.Exit(1)
+		}
+		verifier = authn.NewStaticKeyVerifier(pubKey)
 	}
-	verifier := &authn.Verifier{PublicKey: pubKey}
 
 	authorizer, err := authz.New(ctx)
 	if err != nil {

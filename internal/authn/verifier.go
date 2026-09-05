@@ -2,11 +2,12 @@ package authn
 
 import (
 	"context"
-	"crypto/ecdsa"
+	"crypto"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -18,12 +19,38 @@ import (
 
 type ctxKey struct{}
 
-// Verifier checks bearer JWTs against a fixed ECDSA public key. Swapping
-// this for JWKS-based verification against a real OIDC provider later
-// doesn't change anything downstream: callers only ever see *Claims via
-// FromContext.
+// validSigningMethods is the algorithm allowlist enforced regardless of key
+// source: a JWT's own "alg" header is never trusted blindly (the classic
+// algorithm-confusion attack), only these two, matching the two issuers this
+// has actually been run against -- the dev-only ES256 signer (hack/devkeys)
+// and Keycloak's RS256 default. Add to this list, don't remove the check,
+// if another issuer needs a different algorithm.
+var validSigningMethods = []string{"ES256", "RS256"}
+
+// Verifier checks bearer JWTs. Callers only ever see *Claims via
+// FromContext regardless of which key source below produced it.
 type Verifier struct {
-	PublicKey *ecdsa.PublicKey
+	KeyFunc jwt.Keyfunc
+}
+
+// NewStaticKeyVerifier builds a Verifier that always verifies against one
+// fixed public key -- e.g. loaded from a PEM file via
+// LoadECDSAPublicKeyPEM. There's no real OIDC provider to fetch a JWKS from
+// in dev/test/playground use, so this is what hack/devkeys pairs with.
+func NewStaticKeyVerifier(key crypto.PublicKey) *Verifier {
+	return &Verifier{KeyFunc: func(*jwt.Token) (any, error) { return key, nil }}
+}
+
+// NewJWKSVerifier builds a Verifier that resolves each token's verification
+// key from a JWKS endpoint (the standard OIDC key-publication mechanism --
+// e.g. Keycloak's .../protocol/openid-connect/certs), keyed by the token's
+// kid header, with the key set cached and refreshed automatically.
+func NewJWKSVerifier(ctx context.Context, jwksURL string) (*Verifier, error) {
+	k, err := keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
+	if err != nil {
+		return nil, fmt.Errorf("fetch jwks from %s: %w", jwksURL, err)
+	}
+	return &Verifier{KeyFunc: k.Keyfunc}, nil
 }
 
 // FromContext returns the authenticated caller's claims. Only meaningful
@@ -81,12 +108,7 @@ func (v *Verifier) authenticate(ctx context.Context) (*Claims, error) {
 
 func (v *Verifier) parse(token string) (*Claims, error) {
 	claims := &Claims{}
-	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
-			return nil, fmt.Errorf("unexpected signing method %v", t.Method.Alg())
-		}
-		return v.PublicKey, nil
-	})
+	_, err := jwt.ParseWithClaims(token, claims, v.KeyFunc, jwt.WithValidMethods(validSigningMethods))
 	if err != nil {
 		return nil, err
 	}
