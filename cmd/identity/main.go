@@ -9,24 +9,59 @@ import (
 	"flag"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/identity"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/identity/grpcserver"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":8082", "address to serve TenantService on")
+	metricsAddr := flag.String("metrics-addr", ":9091", "address to serve /metrics (Prometheus) on")
+	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracing, err := telemetry.Setup(ctx, "identity", *otlpEndpoint)
+	if err != nil {
+		slog.Error("setup tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(shutdownCtx)
+	}()
+
+	metricsHandler, shutdownMetrics, err := telemetry.SetupMetrics("identity")
+	if err != nil {
+		slog.Error("setup metrics", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownMetrics(shutdownCtx)
+	}()
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metricsHandler)
+		if err := http.ListenAndServe(*metricsAddr, mux); err != nil {
+			slog.Error("metrics server stopped", "err", err)
+		}
+	}()
 
 	svc := identity.NewService()
 
@@ -35,7 +70,7 @@ func main() {
 		slog.Error("listen", "addr", *grpcAddr, "err", err)
 		os.Exit(1)
 	}
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	identityv1.RegisterTenantServiceServer(grpcServer, grpcserver.New(svc))
 
 	go func() {

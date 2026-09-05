@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: api-gateway
+    static_configs:
+      - targets: ["api-gateway:9093"]
+  - job_name: compute
+    static_configs:
+      - targets: ["compute:9092"]
+  - job_name: identity
+    static_configs:
+      - targets: ["identity:9091"]
+  - job_name: compute-agent
+    static_configs:
+      - targets: ["compute-agent-1:9094", "compute-agent-2:9094", "compute-agent-3:9094"]

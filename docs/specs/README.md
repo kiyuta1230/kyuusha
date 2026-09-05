@@ -11,3 +11,5 @@
 - [VMスケジュール](vm-scheduling.md)
 - [Quota](quota.md)
 - [NATSメッセージ](nats-messaging.md)
+- [トレーシング](observability-tracing.md)
+- [メトリクス](observability-metrics.md)

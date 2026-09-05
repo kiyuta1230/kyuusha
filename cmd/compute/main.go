@@ -8,17 +8,21 @@ import (
 	"flag"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute/grpcserver"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
@@ -28,10 +32,41 @@ func main() {
 	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL")
 	grpcAddr := flag.String("grpc-addr", ":8081", "address to serve VirtualMachineService/HypervisorService on")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
+	metricsAddr := flag.String("metrics-addr", ":9092", "address to serve /metrics (Prometheus) on")
+	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracing, err := telemetry.Setup(ctx, "compute", *otlpEndpoint)
+	if err != nil {
+		slog.Error("setup tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(shutdownCtx)
+	}()
+
+	metricsHandler, shutdownMetrics, err := telemetry.SetupMetrics("compute")
+	if err != nil {
+		slog.Error("setup metrics", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownMetrics(shutdownCtx)
+	}()
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metricsHandler)
+		if err := http.ListenAndServe(*metricsAddr, mux); err != nil {
+			slog.Error("metrics server stopped", "err", err)
+		}
+	}()
 
 	nc, err := nats.Connect(*natsURL)
 	if err != nil {
@@ -48,7 +83,10 @@ func main() {
 
 	// compute -> identity is plaintext for now; see api-gateway's identical
 	// note on the mTLS follow-up.
-	identityConn, err := grpc.NewClient(*identityAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	identityConn, err := grpc.NewClient(*identityAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		slog.Error("dial identity", "addr", *identityAddr, "err", err)
 		os.Exit(1)
@@ -72,7 +110,7 @@ func main() {
 		slog.Error("listen", "addr", *grpcAddr, "err", err)
 		os.Exit(1)
 	}
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	computev1.RegisterVirtualMachineServiceServer(grpcServer, grpcserver.New(svc))
 	computev1.RegisterHypervisorServiceServer(grpcServer, grpcserver.NewHypervisorServer(svc))
 

@@ -14,11 +14,17 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
+
+var tracer = otel.Tracer("gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent")
 
 type Agent struct {
 	Hypervisor        string
@@ -123,10 +129,23 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 		return
 	}
 
+	// Linked to (not a child of) whatever span published this command --
+	// see docs/specs/nats-messaging.md: this hop's producer and consumer are
+	// separated by an unpredictable queueing delay.
+	ctx, span := tracer.Start(context.Background(), "compute-agent.handle_create",
+		trace.WithLinks(telemetry.LinkFromNATSHeader(msg.Headers())),
+		trace.WithAttributes(attribute.String("vm_id", cmd.VMID), attribute.String("hypervisor", a.Hypervisor)),
+	)
+	defer span.End()
+
 	slog.Info("compute-agent: stub-creating VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor)
 	result := compute.CreateResult{VMID: cmd.VMID, Success: true}
 	payload, _ := json.Marshal(result)
-	if _, err := a.JS.Publish(context.Background(), compute.EvtSubjectCreateResult(a.Hypervisor), payload); err != nil {
+	resultMsg := nats.NewMsg(compute.EvtSubjectCreateResult(a.Hypervisor))
+	resultMsg.Data = payload
+	telemetry.InjectNATSHeader(ctx, resultMsg.Header)
+	if _, err := a.JS.PublishMsg(ctx, resultMsg); err != nil {
+		span.RecordError(err)
 		slog.Error("compute-agent: publish create-result failed", "vm_id", cmd.VMID, "err", err)
 	}
 }

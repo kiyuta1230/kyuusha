@@ -8,16 +8,20 @@ import (
 	"flag"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/authz"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/gateway"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
@@ -28,10 +32,41 @@ func main() {
 	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address")
 	jwtPublicKey := flag.String("jwt-public-key", "hack/devkeys/jwt-dev.pub", "PEM file used to verify client JWTs")
+	metricsAddr := flag.String("metrics-addr", ":9093", "address to serve /metrics (Prometheus) on")
+	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracing, err := telemetry.Setup(ctx, "api-gateway", *otlpEndpoint)
+	if err != nil {
+		slog.Error("setup tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(shutdownCtx)
+	}()
+
+	metricsHandler, shutdownMetrics, err := telemetry.SetupMetrics("api-gateway")
+	if err != nil {
+		slog.Error("setup metrics", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownMetrics(shutdownCtx)
+	}()
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metricsHandler)
+		if err := http.ListenAndServe(*metricsAddr, mux); err != nil {
+			slog.Error("metrics server stopped", "err", err)
+		}
+	}()
 
 	pubKey, err := authn.LoadECDSAPublicKeyPEM(*jwtPublicKey)
 	if err != nil {
@@ -49,7 +84,10 @@ func main() {
 	// api-gateway -> compute is plaintext for now; see docs/architecture.md's
 	// mTLS design for the follow-up (backends should only trust api-gateway,
 	// not accept unauthenticated connections from anywhere on the network).
-	computeConn, err := grpc.NewClient(*computeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	computeConn, err := grpc.NewClient(*computeAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		slog.Error("dial compute", "addr", *computeAddr, "err", err)
 		os.Exit(1)
@@ -58,7 +96,10 @@ func main() {
 	vmProxy := gateway.NewVirtualMachineProxy(computev1.NewVirtualMachineServiceClient(computeConn))
 	hypervisorProxy := gateway.NewHypervisorProxy(computev1.NewHypervisorServiceClient(computeConn))
 
-	identityConn, err := grpc.NewClient(*identityAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	identityConn, err := grpc.NewClient(*identityAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		slog.Error("dial identity", "addr", *identityAddr, "err", err)
 		os.Exit(1)
@@ -72,6 +113,7 @@ func main() {
 		os.Exit(1)
 	}
 	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(verifier.UnaryInterceptor(), authorizer.UnaryInterceptor()),
 		grpc.ChainStreamInterceptor(verifier.StreamInterceptor(), authorizer.StreamInterceptor()),
 	)

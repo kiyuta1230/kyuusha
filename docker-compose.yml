@@ -7,6 +7,10 @@
 # spread VMs across. Bring it up with `docker compose up --build` and drive
 # it with playground/scenario.sh or `go run ./cmd/kyuusha vm|tenant|hypervisor
 # ... -addr=localhost:8080 -token=...` (`kyuusha token mint` for a dev token).
+#
+# Also brings up Jaeger (traces), Prometheus (metrics), and Grafana
+# (dashboards over both, pre-provisioned as datasources) -- see
+# docs/specs/observability-tracing.md and observability-metrics.md.
 name: kyuusha-playground
 
 services:
@@ -21,6 +25,33 @@ services:
       timeout: 2s
       retries: 15
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # Jaeger UI
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./playground/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./playground/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - jaeger
+
   compute:
     build:
       context: .
@@ -30,10 +61,14 @@ services:
       - "-nats-url=nats://nats:4222"
       - "-grpc-addr=:8081"
       - "-identity-addr=identity:8082"
+      - "-metrics-addr=:9092"
+      - "-otlp-endpoint=jaeger:4317"
     depends_on:
       nats:
         condition: service_healthy
       identity:
+        condition: service_started
+      jaeger:
         condition: service_started
     # No ports exposed to the host: api-gateway is the only client-facing
     # entrypoint. compute is reachable only from inside the compose network
@@ -47,6 +82,11 @@ services:
       target: identity
     command:
       - "-grpc-addr=:8082"
+      - "-metrics-addr=:9091"
+      - "-otlp-endpoint=jaeger:4317"
+    depends_on:
+      jaeger:
+        condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
 
   api-gateway:
@@ -58,9 +98,12 @@ services:
       - "-listen-addr=:8080"
       - "-compute-addr=compute:8081"
       - "-identity-addr=identity:8082"
+      - "-metrics-addr=:9093"
+      - "-otlp-endpoint=jaeger:4317"
     depends_on:
       - compute
       - identity
+      - jaeger
     ports:
       - "8080:8080"
 
@@ -74,6 +117,8 @@ services:
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-1"
       - "-zone=zone-a"
+      - "-metrics-addr=:9094"
+      - "-otlp-endpoint=jaeger:4317"
     depends_on:
       nats:
         condition: service_healthy
@@ -90,6 +135,8 @@ services:
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-2"
       - "-zone=zone-a"
+      - "-metrics-addr=:9094"
+      - "-otlp-endpoint=jaeger:4317"
     depends_on:
       nats:
         condition: service_healthy
@@ -106,6 +153,8 @@ services:
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-3"
       - "-zone=zone-a"
+      - "-metrics-addr=:9094"
+      - "-otlp-endpoint=jaeger:4317"
     depends_on:
       nats:
         condition: service_healthy

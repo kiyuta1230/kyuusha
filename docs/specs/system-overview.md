@@ -10,6 +10,9 @@
 | `compute` | VirtualMachine・Hypervisorを管理するサービス。スケジューラ、Quota強制、compute-agentとのNATSやり取りを持つ |
 | `compute-agent` | 各ハイパーバイザー上で動くagent。起動時にcomputeへ自己登録し、NATS経由でVM作成コマンドを受けて処理する（現状VMM呼び出しはstub） |
 | `NATS (JetStream)` | compute ↔ compute-agent間の非同期コマンド/イベントバス |
+| `Jaeger` | トレースの収集・表示（[トレーシング仕様](observability-tracing.md)） |
+| `Prometheus` | メトリクスのscrape（[メトリクス仕様](observability-metrics.md)） |
+| `Grafana` | Prometheus/Jaegerを可視化するダッシュボード |
 
 未実装のコンポーネント（設計のみ）: network, block-storage, image, Dragonfly。
 
@@ -28,6 +31,16 @@ flowchart LR
     CA1 <--> NATS
     CA2 <--> NATS
     CA3 <--> NATS
+
+    GW -.->|OTLP trace| J["Jaeger"]
+    CO -.->|OTLP trace| J
+    ID -.->|OTLP trace| J
+    CA1 -.->|OTLP trace| J
+    P["Prometheus"] -.->|scrape /metrics| GW
+    P -.->|scrape /metrics| CO
+    P -.->|scrape /metrics| ID
+    Gr["Grafana"] --> P
+    Gr --> J
 ```
 
 - clientが到達できるのは`api-gateway`のみ。`compute`/`identity`はネットワーク的に到達可能でも
@@ -44,6 +57,12 @@ flowchart LR
 | `compute` | `:8081` | `VirtualMachineService`, `HypervisorService`（Registerを含む全RPC） |
 | `identity` | `:8082` | `TenantService` |
 | `NATS` | `:4222`（client）, `:8222`（監視用HTTP、compose環境のみ） | JetStream |
+| `Jaeger` | `:4317`（OTLP/gRPC受信）, `:16686`（UI） | - |
+| `Prometheus` | `:9090` | - |
+| `Grafana` | `:3000` | - |
+
+各サービス自身の`/metrics`（`-metrics-addr`）: identity `:9091`, compute `:9092`,
+api-gateway `:9093`, compute-agent `:9094`。詳細は[メトリクス仕様](observability-metrics.md)。
 
 ## docker-composeサービス構成
 
@@ -56,6 +75,9 @@ flowchart LR
 | `compute` | `cmd/compute` | ホストにポート非公開 |
 | `api-gateway` | `cmd/api-gateway` | `8080:8080`のみホストへ公開 |
 | `compute-agent-1/2/3` | `cmd/compute-agent` | それぞれ`-hypervisor=hypervisor-N`で起動、compute/NATSへ接続 |
+| `jaeger` | 公式`jaegertracing/all-in-one`イメージ | `16686`をホストへ公開 |
+| `prometheus` | 公式`prom/prometheus`イメージ | `playground/prometheus.yml`をマウント。`9090`をホストへ公開 |
+| `grafana` | 公式`grafana/grafana`イメージ | `playground/grafana/provisioning`をマウント。`3000`をホストへ公開、匿名admin有効 |
 
 ## 認証・認可
 

@@ -9,9 +9,15 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 )
+
+var tracer = otel.Tracer("gitlab.com/ki.yuta1230/kyuusha/internal/compute")
 
 // pendingSweepInterval implements docs/architecture.md's "Pendingのまま...
 // 報告し続け" retry: reconcile() only runs off VM Watch events, so a VM that
@@ -122,6 +128,21 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			slog.Error("provision: update failed", "vm_id", vm.Meta.ID, "err", err)
 			return
 		}
+
+		// This span is the root of its own trace, not a continuation of
+		// whatever triggered the original Create() call: reconcile() runs off
+		// an internal Watch loop, arbitrarily long after that call returned.
+		// Its context is injected into the NATS message header so the
+		// consuming compute-agent can link back to it (see
+		// docs/specs/nats-messaging.md); vm_id is the correlation key that
+		// actually lets this VM's whole lifecycle be found across the
+		// resulting separate traces.
+		ctx, span := tracer.Start(ctx, "compute.publish_create_command", trace.WithAttributes(
+			attribute.String("vm_id", vm.Meta.ID),
+			attribute.String("hypervisor", vm.Status.Hypervisor),
+		))
+		defer span.End()
+
 		cmd := CreateCommand{
 			VMID:     vm.Meta.ID,
 			TenantID: vm.Meta.TenantID,
@@ -130,7 +151,11 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			MemoryMB: vm.Spec.MemoryMB,
 		}
 		payload, _ := json.Marshal(cmd)
-		if _, err := r.js.Publish(ctx, CmdSubjectCreate(vm.Status.Hypervisor), payload); err != nil {
+		msg := nats.NewMsg(CmdSubjectCreate(vm.Status.Hypervisor))
+		msg.Data = payload
+		telemetry.InjectNATSHeader(ctx, msg.Header)
+		if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+			span.RecordError(err)
 			slog.Error("provision: publish create command failed", "vm_id", vm.Meta.ID, "err", err)
 		}
 	}
@@ -183,7 +208,13 @@ func (r *Reconciler) consumeResults(ctx context.Context) error {
 			slog.Error("create-result: bad payload", "err", err)
 			return
 		}
-		r.handleCreateResult(ctx, res)
+
+		spanCtx, span := tracer.Start(ctx, "compute.handle_create_result",
+			trace.WithLinks(telemetry.LinkFromNATSHeader(msg.Headers())),
+			trace.WithAttributes(attribute.String("vm_id", res.VMID)),
+		)
+		defer span.End()
+		r.handleCreateResult(spanCtx, res)
 	})
 	return err
 }

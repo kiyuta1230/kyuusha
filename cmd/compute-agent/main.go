@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,10 +16,12 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
@@ -32,6 +35,8 @@ func main() {
 	memoryMB := flag.Int64("memory-mb", 16384, "allocatable memory capacity to report, in MB")
 	drivers := flag.String("drivers", "FIRECRACKER", "comma-separated VMM drivers this hypervisor supports (FIRECRACKER|QEMU)")
 	heartbeat := flag.Duration("heartbeat", 5*time.Second, "heartbeat interval")
+	metricsAddr := flag.String("metrics-addr", ":9094", "address to serve /metrics (Prometheus) on")
+	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
 
 	if *hypervisor == "" {
@@ -41,6 +46,35 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracing, err := telemetry.Setup(ctx, "compute-agent", *otlpEndpoint)
+	if err != nil {
+		slog.Error("setup tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(shutdownCtx)
+	}()
+
+	metricsHandler, shutdownMetrics, err := telemetry.SetupMetrics("compute-agent")
+	if err != nil {
+		slog.Error("setup metrics", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownMetrics(shutdownCtx)
+	}()
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", metricsHandler)
+		if err := http.ListenAndServe(*metricsAddr, mux); err != nil {
+			slog.Error("metrics server stopped", "err", err)
+		}
+	}()
 
 	nc, err := nats.Connect(*natsURL)
 	if err != nil {
@@ -59,7 +93,10 @@ func main() {
 	// identical note on the mTLS follow-up. Also unauthenticated: the real
 	// design verifies a zone-scoped bootstrap token here (see
 	// docs/architecture.md and docs/open-questions.md).
-	computeConn, err := grpc.NewClient(*computeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	computeConn, err := grpc.NewClient(*computeAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		slog.Error("dial compute", "addr", *computeAddr, "err", err)
 		os.Exit(1)
