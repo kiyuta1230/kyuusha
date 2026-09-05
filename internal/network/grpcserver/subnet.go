@@ -115,6 +115,8 @@ func fromSubnetSpec(s *networkv1.SubnetSpec) network.SubnetSpec {
 		DNSServers:          s.GetDnsServers(),
 		SharedWithTenantIDs: s.GetSharedWithTenantIds(),
 		DNSSuffix:           s.GetDnsSuffix(),
+		MeshGroup:           s.GetMeshGroup(),
+		AllocatableIPRanges: s.GetAllocatableIpRanges(),
 	}
 }
 
@@ -126,6 +128,8 @@ func toSubnetSpec(s network.SubnetSpec) *networkv1.SubnetSpec {
 		DnsServers:          s.DNSServers,
 		SharedWithTenantIds: s.SharedWithTenantIDs,
 		DnsSuffix:           s.DNSSuffix,
+		MeshGroup:           s.MeshGroup,
+		AllocatableIpRanges: s.AllocatableIPRanges,
 	}
 }
 

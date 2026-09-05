@@ -86,6 +86,8 @@ type SubnetSpec struct {
 	DnsServers          []string               `protobuf:"bytes,4,rep,name=dns_servers,json=dnsServers,proto3" json:"dns_servers,omitempty"`                                // if empty and dns_suffix is set, kyuusha's shared resolver IP is implied
 	SharedWithTenantIds []string               `protobuf:"bytes,5,rep,name=shared_with_tenant_ids,json=sharedWithTenantIds,proto3" json:"shared_with_tenant_ids,omitempty"` // declares intent to share a route to other tenants (optional)
 	DnsSuffix           string                 `protobuf:"bytes,6,opt,name=dns_suffix,json=dnsSuffix,proto3" json:"dns_suffix,omitempty"`                                   // empty disables the (extension) name resolution feature
+	MeshGroup           string                 `protobuf:"bytes,7,opt,name=mesh_group,json=meshGroup,proto3" json:"mesh_group,omitempty"`                                   // declares intent: Subnets sharing a non-empty value (same tenant only) are meant to default-allow each other, bypassing the normal cross-Subnet deny -- not enforced yet, no ACL engine exists (see docs/specs/network.md)
+	AllocatableIpRanges []string               `protobuf:"bytes,8,rep,name=allocatable_ip_ranges,json=allocatableIpRanges,proto3" json:"allocatable_ip_ranges,omitempty"`   // e.g. ["10.0.1.3-10.0.1.127", "10.0.1.136-10.0.1.254"]; empty means the whole cidr (minus network/broadcast/gateway_ip) is allocatable
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -160,6 +162,20 @@ func (x *SubnetSpec) GetDnsSuffix() string {
 		return x.DnsSuffix
 	}
 	return ""
+}
+
+func (x *SubnetSpec) GetMeshGroup() string {
+	if x != nil {
+		return x.MeshGroup
+	}
+	return ""
+}
+
+func (x *SubnetSpec) GetAllocatableIpRanges() []string {
+	if x != nil {
+		return x.AllocatableIpRanges
+	}
+	return nil
 }
 
 type SubnetStatus struct {
@@ -726,7 +742,7 @@ var File_kyuusha_network_v1_subnet_proto protoreflect.FileDescriptor
 
 const file_kyuusha_network_v1_subnet_proto_rawDesc = "" +
 	"\n" +
-	"\x1fkyuusha/network/v1/subnet.proto\x12\x12kyuusha.network.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xc8\x01\n" +
+	"\x1fkyuusha/network/v1/subnet.proto\x12\x12kyuusha.network.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\x9b\x02\n" +
 	"\n" +
 	"SubnetSpec\x12\x12\n" +
 	"\x04zone\x18\x01 \x01(\tR\x04zone\x12\x12\n" +
@@ -737,7 +753,10 @@ const file_kyuusha_network_v1_subnet_proto_rawDesc = "" +
 	"dnsServers\x123\n" +
 	"\x16shared_with_tenant_ids\x18\x05 \x03(\tR\x13sharedWithTenantIds\x12\x1d\n" +
 	"\n" +
-	"dns_suffix\x18\x06 \x01(\tR\tdnsSuffix\"}\n" +
+	"dns_suffix\x18\x06 \x01(\tR\tdnsSuffix\x12\x1d\n" +
+	"\n" +
+	"mesh_group\x18\a \x01(\tR\tmeshGroup\x122\n" +
+	"\x15allocatable_ip_ranges\x18\b \x03(\tR\x13allocatableIpRanges\"}\n" +
 	"\fSubnetStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +

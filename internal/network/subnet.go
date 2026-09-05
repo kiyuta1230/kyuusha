@@ -21,6 +21,16 @@ type SubnetSpec struct {
 	DNSServers          []string
 	SharedWithTenantIDs []string
 	DNSSuffix           string
+	// MeshGroup declares intent only (see docs/specs/network.md): Subnets
+	// sharing a non-empty MeshGroup (same tenant only) are meant to
+	// default-allow each other, bypassing the normal cross-Subnet deny.
+	// Nothing enforces this yet -- no ACL engine exists, the same stage
+	// IngressRules itself is in.
+	MeshGroup string
+	// AllocatableIPRanges restricts IPAM to these "<start>-<end>" IPv4
+	// ranges instead of the whole CIDR (see ipam.go); empty means the
+	// default (whole CIDR minus network/broadcast/GatewayIP).
+	AllocatableIPRanges []string
 }
 
 type SubnetPhase string

@@ -120,7 +120,7 @@ func (s *Service) retryPendingNetworkInterfaces(ctx context.Context) {
 		if err != nil || subnet.Status.Phase != SubnetPhaseReady {
 			continue
 		}
-		s.tryAllocateIP(ctx, &ifaces[i], subnet.Spec.CIDR, subnet.Spec.GatewayIP)
+		s.tryAllocateIP(ctx, &ifaces[i], subnet.Spec.CIDR, subnet.Spec.GatewayIP, subnet.Spec.AllocatableIPRanges)
 	}
 }
 
@@ -145,6 +145,9 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 	}
 	if spec.GatewayIP != "" && net.ParseIP(spec.GatewayIP) == nil {
 		return nil, fmt.Errorf("%w: spec.gateway_ip is invalid", ErrValidation)
+	}
+	if err := validateAllocatableIPRanges(spec.CIDR, spec.AllocatableIPRanges); err != nil {
+		return nil, fmt.Errorf("%w: spec.allocatable_ip_ranges: %v", ErrValidation, err)
 	}
 
 	if existing, ok := s.subnets.LookupByName(tenantID, name); ok {
@@ -266,15 +269,16 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 	if err != nil {
 		return nil, err
 	}
-	s.tryAllocateIP(ctx, &out, subnet.Spec.CIDR, subnet.Spec.GatewayIP)
+	s.tryAllocateIP(ctx, &out, subnet.Spec.CIDR, subnet.Spec.GatewayIP, subnet.Spec.AllocatableIPRanges)
 	return &out, nil
 }
 
 // tryAllocateIP mirrors tryAllocateVLAN: mutates n in place, Ready+IPAddress
 // on success, still Pending with an IPPoolExhausted condition (retried
-// later) if the Subnet's CIDR has no free address left.
-func (s *Service) tryAllocateIP(ctx context.Context, n *NetworkInterface, cidr, gatewayIP string) {
-	ip, ok := s.ips.allocate(n.Spec.SubnetID, cidr, gatewayIP)
+// later) if the Subnet's CIDR (or allocatableRanges, if set) has no free
+// address left.
+func (s *Service) tryAllocateIP(ctx context.Context, n *NetworkInterface, cidr, gatewayIP string, allocatableRanges []string) {
+	ip, ok := s.ips.allocate(n.Spec.SubnetID, cidr, gatewayIP, allocatableRanges)
 	if !ok {
 		n.Status.Conditions = upsertCondition(n.Status.Conditions, resource.Condition{
 			Type: "IPPoolExhausted", Status: resource.ConditionTrue, LastTransitionAt: time.Now(),

@@ -26,6 +26,12 @@ proto（`proto/kyuusha/network/v1/subnet.proto`・`networkinterface.proto`）参
   アドレス・ブロードキャストアドレス・（設定されていれば）`spec.gateway_ip`は対象外。
   `/31`・`/32`（利用可能なホストアドレスが無い）や IPv6 CIDR は現状非対応で、常に
   「枯渇」として扱われる
+- **`spec.allocatable_ip_ranges`**: 空なら上記の通りCIDR全体が対象。指定した場合は
+  `["10.0.1.10-10.0.1.20", ...]`のように`<開始>-<終了>`形式のIPv4範囲だけが払い出し対象になる
+  （例: 既存の静的割当や将来予約でCIDRの一部を空けておきたい場合）。Create時に各範囲が
+  `spec.cidr`の外に出ていないかを検証する（`ErrValidation`）。範囲内であってもネットワーク
+  アドレス・ブロードキャストアドレス・`gateway_ip`は常に除外される（範囲側でうっかり
+  含めても無視されるだけで、エラーにはしない）
 - **MACアドレス**: グローバルな連番から生成する簡易実装。枯渇しうる共有プールではないため
   IPAMとしての特別な設計は不要（今後もこのままで問題ない見込み）
 
@@ -46,6 +52,21 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
 - SubnetのDelete/NetworkInterfaceのDeleteは、`Ready`で実際に払い出し済みだった場合のみ
   VLAN ID/IPアドレスをプールへ返却する
 
+## `spec.mesh_group`（宣言のみ、ACL強制はまだ）
+
+同一テナントが複数のAZにまたがってSubnetを持つ場合（AZ毎に別Subnet/別VLANになる設計、
+`docs/architecture.md`「マルチAZにまたがるVirtualMachineは作れない」参照）、AZ間の
+**経路**はRoute Targetによる自動交換で疎通するが、`NetworkInterfaceSpec.ingress_rules`の
+**ACL**はSubnet CIDR外を既定で拒否するため、AZ間で通信したい場合は本来Subnetの組み合わせ
+ごとに手動でallowルールを書く必要がある。
+
+`spec.mesh_group`は、この手間を減らすための**意図の宣言**フィールド（`shared_with_tenant_ids`
+と同じ位置づけ）: 同一テナント内で同じ`mesh_group`値を持つSubnet同士は、デフォルトで
+互いを許可する対象とみなす、という設計上の意図だけを表す。**現状これを実際に強制する
+ACLエンジンはどこにも存在しない**（`ingress_rules`自体もまだ実際のホスト側ファイアウォール
+に反映されていない、同じ段階）。tap配線・ACL適用が実装される時に、`mesh_group`が一致する
+Subnetの組み合わせを自動許可する、という形で参照される想定。
+
 ## Create時のバリデーション
 
 `NetworkInterface.Create`は`spec.subnet_id`が指す`Subnet`が存在し、同じテナントに属し、
@@ -60,7 +81,9 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
   ——compute-agentに統合する。理由は、tap配線がVM起動と同じ物理ホスト内で完結する処理で
   あり、OpenStackのnova-compute/neutron-agent分離のような**プロセス間の往復調整**
   （ポートbind要求→plugged eventの待ち合わせ）を持ち込む必要がないため。`NetworkInterface.
-  status.hypervisor`は現状常に空文字列で、tap配線が実装された時に反映される
+  status.hypervisor`は現状常に空文字列で、tap配線が実装された時に反映される。この配線を
+  CNIのように任意バイナリへ委譲するプラガブルな仕組みにすべきかは判断保留中
+  （`docs/architecture.md`「未決事項」3.参照）
 - **compute側の統合**: VM Create時に`spec.network_interfaces`からNetworkInterfaceを
   作る/参照する連携はまだない。今のcomputeの`VirtualMachineSpec.network_interfaces`
   フィールド自体は存在するが、networkサービスへの問い合わせはしていない

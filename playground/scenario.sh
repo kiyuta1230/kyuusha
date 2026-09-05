@@ -158,6 +158,24 @@ if ! echo "$exhausted_line" | grep -q 'phase=Pending'; then
 fi
 echo "    confirmed: created Pending rather than rejected, as expected"
 
+echo "==> confirming allocatable_ip_ranges restricts IPAM to a narrow range (and mesh_group round-trips)"
+ranged_subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-ranged-subnet \
+  -zone=zone-a -cidr=10.0.6.0/24 -mesh-group=scenario-mesh -allocatable-ip-ranges=10.0.6.10-10.0.6.11)"
+echo "$ranged_subnet_line"
+ranged_subnet="$(echo "$ranged_subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if ! echo "$ranged_subnet_line" | grep -q 'mesh_group=scenario-mesh'; then
+  echo "!! mesh_group did not round-trip: $ranged_subnet_line" >&2
+  exit 1
+fi
+ranged_netif_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-ranged-netif -vm="$vm1_id" -subnet="$ranged_subnet")"
+echo "$ranged_netif_line"
+ranged_ip="$(echo "$ranged_netif_line" | grep -o 'ip=[^ ]*' | cut -d= -f2)"
+if [ "$ranged_ip" != "10.0.6.10" ] && [ "$ranged_ip" != "10.0.6.11" ]; then
+  echo "!! expected ip_address inside the 10.0.6.10-10.0.6.11 allocatable range, got: $ranged_netif_line" >&2
+  exit 1
+fi
+echo "    confirmed: ip_address stayed inside the configured allocatable_ip_ranges"
+
 echo "==> hypervisor distribution (expect it spread across hypervisor-1/2/3)"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" \
   | grep -o 'hypervisor=[^ ]*' | sort | uniq -c

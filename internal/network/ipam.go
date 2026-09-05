@@ -2,7 +2,9 @@ package network
 
 import (
 	"encoding/binary"
+	"fmt"
 	"net"
+	"strings"
 	"sync"
 )
 
@@ -54,8 +56,9 @@ func (p *vlanPool) release(zone string, id int32) {
 
 // ipPool hands out exclusive IPv4 addresses per Subnet, drawn from that
 // Subnet's own spec.cidr (network/broadcast addresses and, if set,
-// gateway_ip are never handed out). IPv6 CIDRs and /31,/32 (no usable host
-// range in this simple model) always report exhausted.
+// gateway_ip are never handed out, regardless of allocatableRanges below).
+// IPv6 CIDRs and /31,/32 (no usable host range in this simple model) always
+// report exhausted.
 type ipPool struct {
 	mu   sync.Mutex
 	used map[string]map[string]bool // subnetID -> allocated IP strings
@@ -65,14 +68,40 @@ func newIPPool() *ipPool {
 	return &ipPool{used: make(map[string]map[string]bool)}
 }
 
-func (p *ipPool) allocate(subnetID, cidr, gatewayIP string) (ip string, ok bool) {
+// allocate draws from allocatableRanges if given (each already validated at
+// Create time by validateAllocatableIPRanges, but re-clamped here to the
+// CIDR's real usable host range defensively -- e.g. in case a Subnet's spec
+// was mutated after Create without going back through that validation, see
+// Service.UpdateSubnet), or the whole CIDR's usable host range otherwise.
+func (p *ipPool) allocate(subnetID, cidr, gatewayIP string, allocatableRanges []string) (ip string, ok bool) {
 	_, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return "", false
 	}
-	start, end, ok := hostRange(ipnet)
+	hostStart, hostEnd, ok := hostRange(ipnet)
 	if !ok {
 		return "", false
+	}
+
+	ranges := []ipRange{{hostStart, hostEnd}}
+	if len(allocatableRanges) > 0 {
+		ranges = ranges[:0]
+		for _, r := range allocatableRanges {
+			start, end, err := parseIPRange(r)
+			if err != nil {
+				continue // already validated at Create time; defensively skip
+			}
+			if ipAfter(hostStart, start) {
+				start = hostStart
+			}
+			if ipAfter(end, hostEnd) {
+				end = hostEnd
+			}
+			if ipAfter(start, end) {
+				continue // this range doesn't overlap the usable host range at all
+			}
+			ranges = append(ranges, ipRange{start, end})
+		}
 	}
 
 	p.mu.Lock()
@@ -83,21 +112,64 @@ func (p *ipPool) allocate(subnetID, cidr, gatewayIP string) (ip string, ok bool)
 		subnetUsed = make(map[string]bool)
 		p.used[subnetID] = subnetUsed
 	}
-	for cur := start; !ipAfter(cur, end); cur = nextIP(cur) {
-		s := cur.String()
-		if s == gatewayIP || subnetUsed[s] {
-			continue
+	for _, rg := range ranges {
+		for cur := rg.start; !ipAfter(cur, rg.end); cur = nextIP(cur) {
+			s := cur.String()
+			if s == gatewayIP || subnetUsed[s] {
+				continue
+			}
+			subnetUsed[s] = true
+			return s, true
 		}
-		subnetUsed[s] = true
-		return s, true
 	}
 	return "", false
+}
+
+type ipRange struct{ start, end net.IP }
+
+// parseIPRange parses "<start-ip>-<end-ip>" (both IPv4) into its inclusive
+// bounds.
+func parseIPRange(s string) (start, end net.IP, err error) {
+	parts := strings.SplitN(s, "-", 2)
+	if len(parts) != 2 {
+		return nil, nil, fmt.Errorf("expected \"<start-ip>-<end-ip>\", got %q", s)
+	}
+	start = net.ParseIP(strings.TrimSpace(parts[0])).To4()
+	end = net.ParseIP(strings.TrimSpace(parts[1])).To4()
+	if start == nil || end == nil {
+		return nil, nil, fmt.Errorf("invalid IPv4 address in range %q", s)
+	}
+	if ipAfter(start, end) {
+		return nil, nil, fmt.Errorf("range start is after its end in %q", s)
+	}
+	return start, end, nil
 }
 
 func (p *ipPool) release(subnetID, ip string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.used[subnetID], ip)
+}
+
+// validateAllocatableIPRanges checks each range parses and falls entirely
+// within cidr -- called at Subnet Create time so a typo'd range (e.g. from
+// the wrong subnet entirely) is rejected up front rather than silently
+// shrinking the pool to nothing.
+func validateAllocatableIPRanges(cidr string, ranges []string) error {
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return err // CIDR itself is validated by the caller first
+	}
+	for _, r := range ranges {
+		start, end, err := parseIPRange(r)
+		if err != nil {
+			return err
+		}
+		if !ipnet.Contains(start) || !ipnet.Contains(end) {
+			return fmt.Errorf("range %q is outside %s", r, cidr)
+		}
+	}
+	return nil
 }
 
 // hostRange returns the usable host address range for ipnet (network and

@@ -53,6 +53,8 @@ func subnetCreate(args []string) {
 	gatewayIP := fs.String("gateway-ip", "", "gateway IP")
 	dnsServers := fs.String("dns-servers", "", "comma-separated DNS server IPs")
 	dnsSuffix := fs.String("dns-suffix", "", "DNS suffix; empty disables name resolution")
+	meshGroup := fs.String("mesh-group", "", "declares intent to default-allow other Subnets sharing this value (same tenant only); not enforced yet, see docs/specs/network.md")
+	allocatableIPRanges := fs.String("allocatable-ip-ranges", "", "comma-separated \"<start-ip>-<end-ip>\" ranges IPAM may draw from; empty means the whole cidr (minus network/broadcast/gateway-ip)")
 	fs.Parse(args)
 
 	if *tenant == "" || *zone == "" || *cidr == "" {
@@ -67,9 +69,13 @@ func subnetCreate(args []string) {
 		Cidr:      *cidr,
 		GatewayIp: *gatewayIP,
 		DnsSuffix: *dnsSuffix,
+		MeshGroup: *meshGroup,
 	}
 	if *dnsServers != "" {
 		spec.DnsServers = strings.Split(*dnsServers, ",")
+	}
+	if *allocatableIPRanges != "" {
+		spec.AllocatableIpRanges = strings.Split(*allocatableIPRanges, ",")
 	}
 
 	sn, err := client.Create(ctx, &networkv1.CreateSubnetRequest{
@@ -163,8 +169,8 @@ func subnetWatch(args []string) {
 }
 
 func printSubnet(sn *networkv1.Subnet) {
-	fmt.Printf("id=%s name=%s tenant=%s zone=%s cidr=%s phase=%s vlan_id=%d rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s zone=%s cidr=%s mesh_group=%s phase=%s vlan_id=%d rv=%d\n",
 		sn.GetMeta().GetId(), sn.GetMeta().GetName(), sn.GetMeta().GetTenantId(),
-		sn.GetSpec().GetZone(), sn.GetSpec().GetCidr(),
+		sn.GetSpec().GetZone(), sn.GetSpec().GetCidr(), sn.GetSpec().GetMeshGroup(),
 		sn.GetStatus().GetPhase(), sn.GetStatus().GetVlanId(), sn.GetMeta().GetResourceVersion())
 }

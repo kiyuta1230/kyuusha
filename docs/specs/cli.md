@@ -65,11 +65,12 @@ image向け。`create`は`-tenant`を持つためadmin-onlyではない（テナ
 ## `kyuusha subnet <create|get|list|watch>`
 
 network向け（[network仕様](network.md)参照）。`create`は`-tenant`を持つためadmin-onlyでは
-ない。現状`vlan_id`はモック（Create時に即Ready）。
+ない。`vlan_id`/`ip_address`はIPAMにより実際に払い出される（プール枯渇時はエラーではなく
+`Pending`で受理、[network仕様](network.md)参照）。
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-zone`(必須) `-cidr`(必須、例`10.0.1.0/24`) `-gateway-ip` `-dns-servers`(カンマ区切り) `-dns-suffix` |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-zone`(必須) `-cidr`(必須、例`10.0.1.0/24`) `-gateway-ip` `-dns-servers`(カンマ区切り) `-dns-suffix` `-mesh-group`(同じ値を持つSubnet同士の既定許可を宣言。ACL強制はまだ) `-allocatable-ip-ranges`(カンマ区切りの`<開始>-<終了>`範囲。未指定ならCIDR全体) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |

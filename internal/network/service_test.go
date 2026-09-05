@@ -22,6 +22,38 @@ func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 	if _, err := svc.CreateSubnet(ctx, "tenant-a", "z", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "not-an-ip"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected ErrValidation for bad gateway_ip, got %v", err)
 	}
+	if _, err := svc.CreateSubnet(ctx, "tenant-a", "w", SubnetSpec{
+		Zone: "zone-a", CIDR: "10.0.1.0/24", AllocatableIPRanges: []string{"10.0.2.10-10.0.2.20"},
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected ErrValidation for an allocatable_ip_ranges entry outside the cidr, got %v", err)
+	}
+}
+
+func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService()
+
+	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{
+		Zone: "zone-a", CIDR: "10.0.1.0/24", AllocatableIPRanges: []string{"10.0.1.10-10.0.1.10"},
+	})
+	if err != nil {
+		t.Fatalf("CreateSubnet: %v", err)
+	}
+
+	n1, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID})
+	if err != nil || n1.Status.Phase != NetworkInterfacePhaseReady || n1.Status.IPAddress != "10.0.1.10" {
+		t.Fatalf("expected phase=Ready ip=10.0.1.10, got phase=%s ip=%q err=%v", n1.Status.Phase, n1.Status.IPAddress, err)
+	}
+
+	// The range only has one address, so a second NetworkInterface must be
+	// Pending (exhausted), even though the rest of the /24 is untouched.
+	n2, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID})
+	if err != nil {
+		t.Fatalf("CreateNetworkInterface: %v", err)
+	}
+	if n2.Status.Phase != NetworkInterfacePhasePending {
+		t.Fatalf("expected phase Pending (allocatable_ip_ranges exhausted), got %s", n2.Status.Phase)
+	}
 }
 
 func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
