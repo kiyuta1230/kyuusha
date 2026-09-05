@@ -1,2 +1,3 @@
 .git
 docs
+hack/devkeys/jwt-dev.key
