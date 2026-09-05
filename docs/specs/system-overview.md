@@ -12,7 +12,8 @@
 | `NATS (JetStream)` | compute ↔ compute-agent間の非同期コマンド/イベントバス |
 | `Jaeger` | トレースの収集・表示（[トレーシング仕様](observability-tracing.md)） |
 | `Prometheus` | メトリクスのscrape（[メトリクス仕様](observability-metrics.md)） |
-| `Grafana` | Prometheus/Jaegerを可視化するダッシュボード |
+| `Loki` / `Promtail` | ログ（監査ログ含む）の収集・保存（[監査ログ仕様](audit-logging.md)） |
+| `Grafana` | Prometheus/Jaeger/Lokiを可視化するダッシュボード |
 
 未実装のコンポーネント（設計のみ）: network, block-storage, image, Dragonfly。
 
@@ -39,8 +40,13 @@ flowchart LR
     P["Prometheus"] -.->|scrape /metrics| GW
     P -.->|scrape /metrics| CO
     P -.->|scrape /metrics| ID
+    PT["Promtail"] -.->|read via docker socket| GW
+    PT -.->|read via docker socket| CO
+    PT -.->|read via docker socket| ID
+    PT -->|push| L["Loki"]
     Gr["Grafana"] --> P
     Gr --> J
+    Gr --> L
 ```
 
 - clientが到達できるのは`api-gateway`のみ。`compute`/`identity`はネットワーク的に到達可能でも
@@ -59,6 +65,7 @@ flowchart LR
 | `NATS` | `:4222`（client）, `:8222`（監視用HTTP、compose環境のみ） | JetStream |
 | `Jaeger` | `:4317`（OTLP/gRPC受信）, `:16686`（UI） | - |
 | `Prometheus` | `:9090` | - |
+| `Loki` | `:3100`（社内ネットワークのみ、ホスト非公開） | - |
 | `Grafana` | `:3000` | - |
 
 各サービス自身の`/metrics`（`-metrics-addr`）: identity `:9091`, compute `:9092`,
@@ -78,6 +85,8 @@ api-gateway `:9093`, compute-agent `:9094`。詳細は[メトリクス仕様](ob
 | `jaeger` | 公式`jaegertracing/all-in-one`イメージ | `16686`をホストへ公開 |
 | `prometheus` | 公式`prom/prometheus`イメージ | `playground/prometheus.yml`をマウント。`9090`をホストへ公開 |
 | `grafana` | 公式`grafana/grafana`イメージ | `playground/grafana/provisioning`をマウント。`3000`をホストへ公開、匿名admin有効 |
+| `loki` | 公式`grafana/loki`イメージ | ホストにポート非公開 |
+| `promtail` | 公式`grafana/promtail`イメージ | Dockerソケットをマウントし全コンテナのログを収集、Lokiへpush |
 
 ## 認証・認可
 

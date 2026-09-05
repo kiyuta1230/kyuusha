@@ -39,6 +39,8 @@ func main() {
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
 
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	if *hypervisor == "" {
 		slog.Error("-hypervisor is required")
 		os.Exit(1)

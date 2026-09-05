@@ -12,6 +12,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/audit"
 )
 
 type ctxKey struct{}
@@ -35,6 +37,7 @@ func (v *Verifier) UnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		claims, err := v.authenticate(ctx)
 		if err != nil {
+			audit.Log(ctx, audit.Record{Event: audit.EventAuthnFailed, RPCMethod: info.FullMethod, Err: err})
 			return nil, err
 		}
 		return handler(context.WithValue(ctx, ctxKey{}, claims), req)
@@ -45,6 +48,7 @@ func (v *Verifier) StreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		claims, err := v.authenticate(ss.Context())
 		if err != nil {
+			audit.Log(ss.Context(), audit.Record{Event: audit.EventAuthnFailed, RPCMethod: info.FullMethod, Err: err})
 			return err
 		}
 		return handler(srv, &authenticatedStream{

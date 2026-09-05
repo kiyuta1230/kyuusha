@@ -27,6 +27,7 @@ func tokenMint(args []string) {
 	keyPath := fs.String("key", "hack/devkeys/jwt-dev.key", "PEM private key to sign with (dev only)")
 	tenant := fs.String("tenant", "", "tenant_id claim (required)")
 	role := fs.String("role", "", "role claim, e.g. admin (optional)")
+	sub := fs.String("sub", "", "sub claim: who is asking (human operator or service account), for audit logging (optional; self-asserted here, see docs/specs/audit-logging.md)")
 	ttl := fs.Duration("ttl", time.Hour, "token lifetime")
 	fs.Parse(args)
 
@@ -43,6 +44,7 @@ func tokenMint(args []string) {
 		TenantID: *tenant,
 		Role:     *role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   *sub,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(*ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},

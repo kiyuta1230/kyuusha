@@ -8,9 +8,11 @@
 # it with playground/scenario.sh or `go run ./cmd/kyuusha vm|tenant|hypervisor
 # ... -addr=localhost:8080 -token=...` (`kyuusha token mint` for a dev token).
 #
-# Also brings up Jaeger (traces), Prometheus (metrics), and Grafana
-# (dashboards over both, pre-provisioned as datasources) -- see
-# docs/specs/observability-tracing.md and observability-metrics.md.
+# Also brings up Jaeger (traces), Prometheus (metrics), Loki+Promtail (logs,
+# including the audit trail -- see internal/audit and
+# docs/specs/audit-logging.md), and Grafana (dashboards over all three,
+# pre-provisioned as datasources) -- see docs/specs/observability-tracing.md
+# and observability-metrics.md.
 name: kyuusha-playground
 
 services:
@@ -39,6 +41,19 @@ services:
     ports:
       - "9090:9090"
 
+  loki:
+    image: grafana/loki:3.3.2
+    command: -config.file=/etc/loki/local-config.yaml
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./playground/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
   grafana:
     image: grafana/grafana:11.3.0
     environment:
@@ -51,6 +66,7 @@ services:
     depends_on:
       - prometheus
       - jaeger
+      - loki
 
   compute:
     build:

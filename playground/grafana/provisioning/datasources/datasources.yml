@@ -13,3 +13,18 @@ datasources:
     type: jaeger
     access: proxy
     url: http://jaeger:16686
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      derivedFields:
+        # Lets a log line carrying a trace_id (every audit record -- see
+        # internal/audit -- and any log emitted via slog's *Context variants
+        # inside a traced request) jump straight to that trace in Jaeger.
+        - datasourceUid: jaeger
+          matcherRegex: '"trace_id":"([0-9a-f]+)"'
+          name: TraceID
+          url: "$${__value.raw}"

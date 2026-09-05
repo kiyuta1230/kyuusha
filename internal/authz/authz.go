@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"gitlab.com/ki.yuta1230/kyuusha/internal/audit"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
 )
 
@@ -46,10 +47,14 @@ func New(ctx context.Context) (*Authorizer, error) {
 	return &Authorizer{query: query}, nil
 }
 
-func (a *Authorizer) authorize(ctx context.Context, req any) error {
+// authorize returns the caller's claims (nil only in the "authz ran before
+// authn" internal-error case) and the request's own tenant_id alongside the
+// allow/deny error, so callers can audit-log both the decision and, for a
+// successful one, the eventual RPC outcome without recomputing anything.
+func (a *Authorizer) authorize(ctx context.Context, req any) (*authn.Claims, string, error) {
 	claims, ok := authn.FromContext(ctx)
 	if !ok {
-		return status.Error(codes.Internal, "authz ran before authn")
+		return nil, "", status.Error(codes.Internal, "authz ran before authn")
 	}
 	var requestTenantID string
 	if tenantGetter, ok := req.(TenantIDGetter); ok {
@@ -67,24 +72,31 @@ func (a *Authorizer) authorize(ctx context.Context, req any) error {
 	}
 	results, err := a.query.Eval(ctx, rego.EvalInput(input))
 	if err != nil {
-		return status.Errorf(codes.Internal, "policy evaluation failed: %v", err)
+		return claims, requestTenantID, status.Errorf(codes.Internal, "policy evaluation failed: %v", err)
 	}
 	if len(results) == 0 || len(results[0].Expressions) == 0 {
-		return status.Error(codes.PermissionDenied, "no policy decision")
+		return claims, requestTenantID, status.Error(codes.PermissionDenied, "no policy decision")
 	}
 	allowed, _ := results[0].Expressions[0].Value.(bool)
 	if !allowed {
-		return status.Error(codes.PermissionDenied, "not authorized for this tenant")
+		return claims, requestTenantID, status.Error(codes.PermissionDenied, "not authorized for this tenant")
 	}
-	return nil
+	return claims, requestTenantID, nil
 }
 
 func (a *Authorizer) UnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if err := a.authorize(ctx, req); err != nil {
+		claims, requestTenantID, err := a.authorize(ctx, req)
+		if err != nil {
+			auditDenied(ctx, info.FullMethod, requestTenantID, claims, err)
 			return nil, err
 		}
-		return handler(ctx, req)
+		resp, err := handler(ctx, req)
+		audit.Log(ctx, audit.Record{
+			Event: audit.EventRPCCompleted, RPCMethod: info.FullMethod, RequestTenantID: requestTenantID,
+			TenantID: claims.TenantID, Sub: claims.Subject, Role: claims.Role, Err: err,
+		})
+		return resp, err
 	}
 }
 
@@ -92,17 +104,41 @@ func (a *Authorizer) UnaryInterceptor() grpc.UnaryServerInterceptor {
 // request the first time it's received: protoc-gen-go-grpc's handler for a
 // server-streaming method decodes the request via stream.RecvMsg before
 // calling into our service code, so wrapping RecvMsg is what actually lets
-// us see it.
+// us see it. The audit record for the RPC's overall completion is emitted
+// once handler returns, i.e. when the stream itself ends (client
+// disconnects, Watch's ctx is canceled, etc.), not per message.
 func (a *Authorizer) StreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		return handler(srv, &authorizedStream{ServerStream: ss, a: a})
+		wrapped := &authorizedStream{ServerStream: ss, a: a, rpcMethod: info.FullMethod}
+		err := handler(srv, wrapped)
+		if wrapped.claims != nil {
+			audit.Log(ss.Context(), audit.Record{
+				Event: audit.EventRPCCompleted, RPCMethod: info.FullMethod, RequestTenantID: wrapped.requestTenantID,
+				TenantID: wrapped.claims.TenantID, Sub: wrapped.claims.Subject, Role: wrapped.claims.Role, Err: err,
+			})
+		}
+		return err
 	}
+}
+
+func auditDenied(ctx context.Context, rpcMethod, requestTenantID string, claims *authn.Claims, err error) {
+	if claims == nil {
+		return // "authz ran before authn": an internal bug, not a real access attempt
+	}
+	audit.Log(ctx, audit.Record{
+		Event: audit.EventAuthzDenied, RPCMethod: rpcMethod, RequestTenantID: requestTenantID,
+		TenantID: claims.TenantID, Sub: claims.Subject, Role: claims.Role, Err: err,
+	})
 }
 
 type authorizedStream struct {
 	grpc.ServerStream
-	a       *Authorizer
-	checked bool
+	a         *Authorizer
+	rpcMethod string
+
+	checked         bool
+	claims          *authn.Claims
+	requestTenantID string
 }
 
 func (s *authorizedStream) RecvMsg(m any) error {
@@ -111,7 +147,10 @@ func (s *authorizedStream) RecvMsg(m any) error {
 	}
 	if !s.checked {
 		s.checked = true
-		if err := s.a.authorize(s.Context(), m); err != nil {
+		claims, requestTenantID, err := s.a.authorize(s.Context(), m)
+		s.claims, s.requestTenantID = claims, requestTenantID
+		if err != nil {
+			auditDenied(s.Context(), s.rpcMethod, requestTenantID, claims, err)
 			return err
 		}
 	}

@@ -36,6 +36,11 @@ func main() {
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
 
+	// JSON structured logging (docs/architecture.md's Observability design),
+	// so a log pipeline (Loki in the playground) can parse fields like the
+	// audit records internal/audit emits.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

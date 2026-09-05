@@ -26,7 +26,7 @@ done
 tenant_name="scenario-$(date +%s)"
 count=6
 
-admin_token="$(go run ./cmd/kyuusha token mint -tenant=bootstrap-admin -role=admin)"
+admin_token="$(go run ./cmd/kyuusha token mint -tenant=bootstrap-admin -role=admin -sub=scenario-admin@example.com)"
 
 echo "==> confirming Hypervisor listing is admin-only"
 non_admin_token="$(go run ./cmd/kyuusha token mint -tenant=someone)"

@@ -40,7 +40,7 @@ func TestAuthorize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := authn.NewContextForTest(ctx, &tt.claims)
-			err := a.authorize(ctx, fakeReq{tenantID: tt.reqTenant})
+			_, _, err := a.authorize(ctx, fakeReq{tenantID: tt.reqTenant})
 			denied := status.Code(err) == codes.PermissionDenied
 			if denied != tt.wantDenied {
 				t.Fatalf("authorize() err=%v, denied=%v, want denied=%v", err, denied, tt.wantDenied)
@@ -57,12 +57,12 @@ func TestAuthorize_UnscopedRequestIsAdminOnly(t *testing.T) {
 	}
 
 	nonAdmin := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "tenant-a"})
-	if err := a.authorize(nonAdmin, fakeUnscopedReq{}); status.Code(err) != codes.PermissionDenied {
+	if _, _, err := a.authorize(nonAdmin, fakeUnscopedReq{}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("non-admin on unscoped request: got %v, want PermissionDenied", err)
 	}
 
 	admin := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "tenant-a", Role: "admin"})
-	if err := a.authorize(admin, fakeUnscopedReq{}); err != nil {
+	if _, _, err := a.authorize(admin, fakeUnscopedReq{}); err != nil {
 		t.Fatalf("admin on unscoped request: got %v, want allowed", err)
 	}
 }
