@@ -66,7 +66,7 @@ PVC/CDIというコンテナ向けボリューム抽象の流用、CNI(コンテ
 
 ## 設計原則: 難しい分散システムの問題は自前で作らず、CNCF濃度の高い既製品に乗る
 
-これまでの選定を振り返ると、認証(Dex/Hydra)・認可(OPA)・非同期通信(NATS)・観測性
+これまでの選定を振り返ると、認証(OIDC認証基盤)・認可(OPA)・非同期通信(NATS)・観測性
 (Prometheus/OpenTelemetry)・P2P配信(Dragonfly)と、**ほぼ全てCNCFプロジェクトか
 CNCF濃度の高いエコシステムに自然と収束している**。偶然ではなく、「枯れていて・Go親和性が高く・
 特定ベンダーに縛られない」という選定基準を素直に適用した結果である。
@@ -827,11 +827,13 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
 JWT署名・OAuth2/OIDCフロー・鍵ローテーションは自前実装が事故に直結する領域であり、車輪の
 再発明はしない。NATS/NVMe-oF選定と同じ「軽量な既製品に乗る」姿勢を踏襲する。
 
-- **トークン発行**: `identity`サービス自身にOAuth2/OIDCプロトコルを実装させず、**Dexまたは
-  ORY Hydra**をラップする。両方Go製・ヘッドレス（ログインUIを持たない）で、KaaSコントローラー相手の
-  machine-to-machine(client_credentialsグラント)用途に合う。Keycloakはユーザーフェデレーション等
-  不要な機能が多く、JVMベースで運用コストもこれまでの判断基準からすると重すぎるため採用しない。
-  `identity`はkyuusha固有の概念（tenant=KaaSクラスタ、quota）を持つ薄いラッパーに留める
+- **トークン発行**: `identity`サービス自身にOAuth2/OIDCプロトコルを実装させず、外部のOIDC認証基盤に
+  委ねる。求める要件は「カスタムクレーム（`tenant_id`必須、`role`は任意）をトークンに追加できること」
+  のみで、特定製品を前提にしない。`identity`はkyuusha固有の概念（tenant=KaaSクラスタ、quota）を持つ
+  薄いラッパーに留める。api-gateway側の鍵検証方式（固定公開鍵/JWKS）を含む具体的な実装は
+  [認証・認可仕様](specs/authn-authz.md)を参照
+  （訂正: 当初はDexまたはORY Hydra限定でKeycloakは運用コストを理由に不採用としていたが、
+  検証側をJWKS対応に汎用化したため製品を問わない要件へ改めた）
 - **KaaS→api-gateway（南北）**: 発行されたJWTをapi-gatewayが公開鍵でローカル検証する（毎リクエストで
   identityへ問い合わせない。「書き込みは同期・高速」の原則と同じ理由）。claimに`tenant_id`を含め、
   以降の認可判定に使う
@@ -1239,7 +1241,7 @@ Panko(イベント)とプロジェクトが何度も分裂・作り直しにな�
 ### 方針: 自前のテレメトリ基盤は作らず、業界標準に乗る
 
 KubeVirtの教訓（オブジェクトモデルは自作するがAPIの見た目は借用する）、認証の教訓
-（Dex/Hydra/OPAに乗る）と同じ判断基準をここでも適用する。
+（OIDC認証基盤/OPAに乗る）と同じ判断基準をここでも適用する。
 
 - **メトリクスはpull型**: 各サービスがPrometheus形式の`/metrics`エンドポイントを公開するだけ。
   Ceilometer的な「監視対象への定期ポーリング」は作らない
@@ -1500,7 +1502,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - block-storageのバックエンド方式（専用ストレージノード+NVMe-oF/TCP(ZFS)をv1デフォルトに、`StorageBackend`ドライバとして抽象化。Cephは将来オプション）
 - DRBDミラーリング導入タイミング（pet系ワークロードが本番相当で使われ始めた時点）
 - NATS JetStreamのsubject/stream設計（`ms.<service>.<cmd|evt>.<hypervisor>...`、CMD/EVTストリームの分離）
-- gRPC認証方式（南北=Dex/HydraによるJWT発行+ローカル検証、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）
+- gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）
 - 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）
 - Watchの再開設計（resource_version + Bookmarkイベント、履歴保持は有限で古すぎたら再List）
 - Firecrackerのjailer/tapデバイス運用方針

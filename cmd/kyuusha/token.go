@@ -20,8 +20,8 @@ func tokenCmd(args []string) {
 
 // tokenMint is dev-only: it signs a token with a local private key instead
 // of going through an OIDC provider's token endpoint. See
-// hack/devkeys/README.md and docs/architecture.md's auth design — real
-// deployments issue tokens via Dex/Hydra, not this.
+// hack/devkeys/README.md and docs/specs/authn-authz.md — real deployments
+// issue tokens via whatever OIDC platform is connected, not this.
 func tokenMint(args []string) {
 	fs := flag.NewFlagSet("token mint", flag.ExitOnError)
 	keyPath := fs.String("key", "hack/devkeys/jwt-dev.key", "PEM private key to sign with (dev only)")

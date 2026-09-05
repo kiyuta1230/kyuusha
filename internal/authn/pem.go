@@ -32,8 +32,9 @@ func LoadECDSAPublicKeyPEM(path string) (*ecdsa.PublicKey, error) {
 
 // LoadECDSAPrivateKeyPEM reads a PEM-encoded EC private key (as produced by
 // `openssl ecparam -genkey`), for dev/test token minting only. Production
-// token issuance is Dex/Hydra's job (see docs/architecture.md); nothing in
-// kyuusha's own services holds a signing key.
+// token issuance is whatever OIDC platform is connected's job (see
+// docs/specs/authn-authz.md); nothing in kyuusha's own services holds a
+// signing key.
 func LoadECDSAPrivateKeyPEM(path string) (*ecdsa.PrivateKey, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
