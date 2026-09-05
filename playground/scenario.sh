@@ -7,10 +7,10 @@
 # referencing it (booting real Firecracker microVMs -- see
 # docs/specs/firecracker-boot.md -- if /dev/kvm is available), and confirms
 # the real scheduler spreads them across hypervisor-1/2/3. Also creates a
-# Subnet and a NetworkInterface (network service -- see docs/specs/network.md;
-# VLAN/IP allocation is mocked at this stage), checks that Tenant creation
-# and Hypervisor listing are admin-only, and that a token for a different
-# tenant is denied VM access. Leaves the stack running
+# Subnet and a NetworkInterface (network service, real IPAM -- see
+# docs/specs/network.md), checks that Tenant creation and Hypervisor listing
+# are admin-only, and that a token for a different tenant is denied VM
+# access. Leaves the stack running
 # afterwards; `docker compose -f playground/docker-compose.yml down` when
 # done.
 set -euo pipefail
@@ -118,20 +118,22 @@ else
   echo "!! could not confirm a real guest boot for vm-1 (no /dev/kvm on this host? try: kyuusha vm console -tenant=$tenant -id=$vm1_id)" >&2
 fi
 
-echo "==> creating Subnet for tenant $tenant (zone-a; see docs/specs/network.md -- vlan_id is mocked, Create goes straight to Ready)"
+echo "==> creating Subnet for tenant $tenant (zone-a; real IPAM -- see docs/specs/network.md)"
 subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-subnet -zone=zone-a -cidr=10.0.1.0/24)"
 echo "$subnet_line"
 subnet="$(echo "$subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
-if [ -z "$subnet" ] || ! echo "$subnet_line" | grep -q 'phase=Ready'; then
-  echo "!! subnet was not created Ready: $subnet_line" >&2
+vlan_id="$(echo "$subnet_line" | grep -o 'vlan_id=[^ ]*' | cut -d= -f2)"
+if [ -z "$subnet" ] || ! echo "$subnet_line" | grep -q 'phase=Ready' || [ -z "$vlan_id" ] || [ "$vlan_id" = "0" ]; then
+  echo "!! subnet was not created Ready with a real vlan_id: $subnet_line" >&2
   exit 1
 fi
 
-echo "==> creating NetworkInterface for vm-1 on subnet $subnet (ip/mac are mocked; see docs/specs/network.md)"
+echo "==> creating NetworkInterface for vm-1 on subnet $subnet (real IP allocated from its CIDR; see docs/specs/network.md)"
 netif_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-netif -vm="$vm1_id" -subnet="$subnet")"
 echo "$netif_line"
-if ! echo "$netif_line" | grep -q 'phase=Ready'; then
-  echo "!! network interface was not created Ready: $netif_line" >&2
+netif_ip="$(echo "$netif_line" | grep -o 'ip=[^ ]*' | cut -d= -f2)"
+if ! echo "$netif_line" | grep -q 'phase=Ready' || [ "${netif_ip#10.0.1.}" = "$netif_ip" ]; then
+  echo "!! network interface was not created Ready with an ip inside 10.0.1.0/24: $netif_line" >&2
   exit 1
 fi
 
@@ -142,6 +144,19 @@ if go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -nam
   exit 1
 fi
 grep -q InvalidArgument /tmp/kyuusha-netif-validation-check.log && echo "    rejected as expected"
+
+echo "==> confirming IP pool exhaustion leaves a NetworkInterface Pending instead of rejecting Create (/30 has 2 usable addresses)"
+small_subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-subnet -zone=zone-a -cidr=10.0.9.0/30)"
+small_subnet="$(echo "$small_subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-1 -vm="$vm1_id" -subnet="$small_subnet" >/dev/null
+go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-2 -vm="$vm1_id" -subnet="$small_subnet" >/dev/null
+exhausted_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-3 -vm="$vm1_id" -subnet="$small_subnet")"
+echo "$exhausted_line"
+if ! echo "$exhausted_line" | grep -q 'phase=Pending'; then
+  echo "!! expected the 3rd NetworkInterface on a /30 to be Pending (IP pool exhausted), got: $exhausted_line" >&2
+  exit 1
+fi
+echo "    confirmed: created Pending rather than rejected, as expected"
 
 echo "==> hypervisor distribution (expect it spread across hypervisor-1/2/3)"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" \

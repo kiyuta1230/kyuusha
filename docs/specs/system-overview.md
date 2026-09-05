@@ -13,7 +13,7 @@ kyuusha自体の構成要素ではない。それらのエンドポイント・d
 | `api-gateway` | client向けの唯一の公開エンドポイント。JWT検証＋OPA認可を行い、backendへフォワードする |
 | `identity` | Tenant（テナント・Quota上限値）を管理するCRUD+Watchサービス |
 | `image` | Image（外部URL参照+digestのメタデータ）を管理するCRUD+Watchサービス。Create時にURL到達性・format整合性を検証し、Pending→Ready/Errorへ非同期遷移させる |
-| `network` | Subnet・NetworkInterfaceを管理するCRUD+Watchサービス（[network仕様](network.md)参照）。現状はCRUD+Watchの型のみで、VLAN ID/IP割当は両方モック（Create時に即Ready）。実IPAM・tap配線・agent連携は別途 |
+| `network` | Subnet・NetworkInterfaceを管理するCRUD+Watchサービス（[network仕様](network.md)参照）。VLAN ID/IPアドレスの払い出し（IPAM）は実装済み。tap配線・agent連携は別途 |
 | `compute` | VirtualMachine・Hypervisorを管理するサービス。スケジューラ、Quota強制、Image検証（identity/imageへの同期参照）、compute-agentとのNATSやり取りを持つ |
 | `compute-agent` | 各ハイパーバイザー上で動くagent。起動時にcomputeへ自己登録し、NATS経由でVM作成/削除コマンドを受けて処理する。`driver_hint=FIRECRACKER`は実際にFirecracker microVMを起動する（[Firecracker起動仕様](firecracker-boot.md)参照）。QEMUドライバは未実装のまま。tap配線が実装される際もnetwork-agentという別プロセスは作らず、ここに統合する方針（[network仕様](network.md)参照） |
 | `NATS (JetStream)` | compute ↔ compute-agent間の非同期コマンド/イベントバス |
@@ -44,8 +44,8 @@ flowchart LR
   到達可能でもクライアントが直接叩くことは想定しない構成（docker-compose上はホストにポート公開しない）
 - `compute-agent`は`compute`に**直接**gRPCで接続する（自己登録用。api-gatewayは経由しない、東西通信）
 - `compute` → `identity`（Quota参照）・`compute` → `image`（Image検証）もサービス間の直接gRPC呼び出し
-  （同じく東西通信）。`compute` → `network`の直接呼び出しはまだない（VM作成時のNetworkInterface
-  検証はモック段階では未統合。[network仕様](network.md)参照）
+  （同じく東西通信）。`compute` → `network`の直接呼び出しはまだない（VM作成時に
+  NetworkInterfaceを作る/参照する連携は未統合。[network仕様](network.md)参照）
 - 現状すべての通信は平文（mTLS未実装）
 
 ## エンドポイント一覧

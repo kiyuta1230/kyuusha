@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
+	"time"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 )
@@ -32,16 +33,31 @@ const (
 	EventBookmark = resource.EventBookmark
 )
 
+// pendingSweepInterval mirrors compute's identical constant (see
+// internal/compute/reconciler.go): a Subnet/NetworkInterface that couldn't
+// be allocated at Create time (pool exhausted) only gets retried when
+// capacity frees up elsewhere -- a Delete releasing an ID/IP doesn't touch
+// the Pending resource waiting for one, so nothing re-triggers it on its
+// own. This periodic sweep is that retry.
+const pendingSweepInterval = 10 * time.Second
+
 // Service implements the SubnetService/NetworkInterfaceService CRUD+Watch
-// surface against in-memory resource.Stores. Both resources' Create go
-// straight to Ready with mocked allocation -- see mockNextVLANID/
-// mockNextMAC below and docs/specs/network.md's "モックの範囲" section for
-// exactly what's fake and what IPAM (a follow-up) will replace.
+// surface against in-memory resource.Stores, with real (if simple) IPAM:
+// Subnet Create allocates a VLAN ID from a per-zone pool (docs/architecture.md
+// "VLAN IDの払い出し"), NetworkInterface Create allocates an IP from its
+// Subnet's own CIDR (see ipam.go). Neither involves a hypervisor agent --
+// both are synchronous, in-memory pool operations. Pool exhaustion doesn't
+// reject Create (the request itself is valid, capacity may free up later):
+// the resource is created Pending with a Condition, and Run's periodic
+// sweep retries it. No tap wiring exists yet -- see docs/specs/network.md
+// for the current boundary and why that stays out of this service.
 type Service struct {
 	subnets    *resource.Store[Subnet, *Subnet]
 	interfaces *resource.Store[NetworkInterface, *NetworkInterface]
 
-	nextVLANID int32
+	vlans *vlanPool
+	ips   *ipPool
+
 	nextMACOct uint32
 }
 
@@ -57,23 +73,62 @@ func NewService() *Service {
 			Conflict:      ErrNetworkInterfaceConflict,
 			HistoryPruned: ErrNetworkInterfaceHistoryPruned,
 		}),
-		nextVLANID: 100,
+		vlans: newVLANPool(),
+		ips:   newIPPool(),
 	}
 }
 
-// mockNextVLANID hands out a globally-incrementing placeholder VLAN ID,
-// ignoring spec.zone entirely. Real IPAM allocates from a pool scoped per
-// zone (docs/architecture.md: "VLAN IDプールはzoneごとに独立して持つ"), exclusively
-// and synchronously against a real pool -- this is not that, just enough to
-// make the API observable end to end.
-func (s *Service) mockNextVLANID() int32 {
-	return int32(atomic.AddInt32(&s.nextVLANID, 1))
+// Run retries Pending Subnets/NetworkInterfaces (pool exhaustion at Create
+// time) every pendingSweepInterval until ctx is done. Safe to call from
+// only one goroutine; cmd/network/main.go starts it once at startup.
+func (s *Service) Run(ctx context.Context) error {
+	ticker := time.NewTicker(pendingSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			s.retryPendingSubnets(ctx)
+			s.retryPendingNetworkInterfaces(ctx)
+		}
+	}
 }
 
-// mockNextMAC hands out a placeholder locally-administered MAC address.
-// Real IPAM would derive/allocate this alongside a real IP from the
-// Subnet's CIDR; this doesn't even look at the Subnet.
-func (s *Service) mockNextMAC() string {
+func (s *Service) retryPendingSubnets(ctx context.Context) {
+	subnets, err := s.subnets.List(ctx, "")
+	if err != nil {
+		return
+	}
+	for i := range subnets {
+		if subnets[i].Status.Phase == SubnetPhasePending {
+			s.tryAllocateVLAN(ctx, &subnets[i])
+		}
+	}
+}
+
+func (s *Service) retryPendingNetworkInterfaces(ctx context.Context) {
+	ifaces, err := s.interfaces.List(ctx, "")
+	if err != nil {
+		return
+	}
+	for i := range ifaces {
+		if ifaces[i].Status.Phase != NetworkInterfacePhasePending {
+			continue
+		}
+		subnet, err := s.subnets.Get(ctx, ifaces[i].Meta.TenantID, ifaces[i].Spec.SubnetID)
+		if err != nil || subnet.Status.Phase != SubnetPhaseReady {
+			continue
+		}
+		s.tryAllocateIP(ctx, &ifaces[i], subnet.Spec.CIDR, subnet.Spec.GatewayIP)
+	}
+}
+
+// allocateMAC hands out a locally-administered MAC address from a global,
+// unbounded counter -- unlike VLAN/IP, this never contends for a shared,
+// exhaustible space scoped to a zone or Subnet, so there's nothing for
+// IPAM to add here beyond this.
+func (s *Service) allocateMAC() string {
 	n := atomic.AddUint32(&s.nextMACOct, 1)
 	return fmt.Sprintf("02:00:00:00:%02x:%02x", byte(n>>8), byte(n))
 }
@@ -98,12 +153,44 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 
 	out, err := s.subnets.Create(ctx, tenantID, name, Subnet{
 		Spec:   spec,
-		Status: SubnetStatus{Phase: SubnetPhaseReady, VLANID: s.mockNextVLANID()},
+		Status: SubnetStatus{Phase: SubnetPhasePending},
 	})
 	if err != nil {
 		return nil, err
 	}
+	s.tryAllocateVLAN(ctx, &out)
 	return &out, nil
+}
+
+// tryAllocateVLAN attempts to allocate sn's VLAN ID from its zone's pool
+// and persist the result, mutating sn in place either way: Ready+VlanID on
+// success, still Pending with a VlanPoolExhausted condition on failure
+// (retried later by Run's sweep). A store Update failure after a
+// successful allocation rolls the allocation back, so it isn't leaked on a
+// resource nobody ever sees as Ready.
+func (s *Service) tryAllocateVLAN(ctx context.Context, sn *Subnet) {
+	id, ok := s.vlans.allocate(sn.Spec.Zone)
+	if !ok {
+		sn.Status.Conditions = upsertCondition(sn.Status.Conditions, resource.Condition{
+			Type: "VlanPoolExhausted", Status: resource.ConditionTrue, LastTransitionAt: time.Now(),
+		})
+		if updated, err := s.subnets.Update(ctx, *sn); err == nil {
+			*sn = updated
+		}
+		return
+	}
+
+	sn.Status.Phase = SubnetPhaseReady
+	sn.Status.VLANID = id
+	sn.Status.Conditions = upsertCondition(sn.Status.Conditions, resource.Condition{
+		Type: "VlanPoolExhausted", Status: resource.ConditionFalse, LastTransitionAt: time.Now(),
+	})
+	updated, err := s.subnets.Update(ctx, *sn)
+	if err != nil {
+		s.vlans.release(sn.Spec.Zone, id)
+		return
+	}
+	*sn = updated
 }
 
 func (s *Service) GetSubnet(ctx context.Context, tenantID, id string) (*Subnet, error) {
@@ -126,7 +213,13 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 	return &out, nil
 }
 
+// DeleteSubnet releases the Subnet's VLAN ID back to its zone's pool first
+// (if it ever held one -- a Subnet deleted while still Pending never did),
+// mirroring compute's capacity-release-before-delete pattern.
 func (s *Service) DeleteSubnet(ctx context.Context, tenantID, id string) error {
+	if sn, err := s.subnets.Get(ctx, tenantID, id); err == nil && sn.Status.Phase == SubnetPhaseReady {
+		s.vlans.release(sn.Spec.Zone, sn.Status.VLANID)
+	}
 	return s.subnets.Delete(ctx, tenantID, id)
 }
 
@@ -164,18 +257,45 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 		return nil, fmt.Errorf("%w: subnet %q is not Ready (phase=%s)", ErrValidation, spec.SubnetID, subnet.Status.Phase)
 	}
 
+	// MAC comes from its own unbounded space, so it's assigned up front
+	// regardless of whether IP allocation below succeeds immediately.
 	out, err := s.interfaces.Create(ctx, tenantID, name, NetworkInterface{
-		Spec: spec,
-		Status: NetworkInterfaceStatus{
-			Phase:      NetworkInterfacePhaseReady,
-			IPAddress:  "0.0.0.0", // mock: real IPAM allocates from subnet.Spec.CIDR (see mockNextVLANID's doc)
-			MACAddress: s.mockNextMAC(),
-		},
+		Spec:   spec,
+		Status: NetworkInterfaceStatus{Phase: NetworkInterfacePhasePending, MACAddress: s.allocateMAC()},
 	})
 	if err != nil {
 		return nil, err
 	}
+	s.tryAllocateIP(ctx, &out, subnet.Spec.CIDR, subnet.Spec.GatewayIP)
 	return &out, nil
+}
+
+// tryAllocateIP mirrors tryAllocateVLAN: mutates n in place, Ready+IPAddress
+// on success, still Pending with an IPPoolExhausted condition (retried
+// later) if the Subnet's CIDR has no free address left.
+func (s *Service) tryAllocateIP(ctx context.Context, n *NetworkInterface, cidr, gatewayIP string) {
+	ip, ok := s.ips.allocate(n.Spec.SubnetID, cidr, gatewayIP)
+	if !ok {
+		n.Status.Conditions = upsertCondition(n.Status.Conditions, resource.Condition{
+			Type: "IPPoolExhausted", Status: resource.ConditionTrue, LastTransitionAt: time.Now(),
+		})
+		if updated, err := s.interfaces.Update(ctx, *n); err == nil {
+			*n = updated
+		}
+		return
+	}
+
+	n.Status.Phase = NetworkInterfacePhaseReady
+	n.Status.IPAddress = ip
+	n.Status.Conditions = upsertCondition(n.Status.Conditions, resource.Condition{
+		Type: "IPPoolExhausted", Status: resource.ConditionFalse, LastTransitionAt: time.Now(),
+	})
+	updated, err := s.interfaces.Update(ctx, *n)
+	if err != nil {
+		s.ips.release(n.Spec.SubnetID, ip)
+		return
+	}
+	*n = updated
 }
 
 func (s *Service) GetNetworkInterface(ctx context.Context, tenantID, id string) (*NetworkInterface, error) {
@@ -198,10 +318,28 @@ func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInte
 	return &out, nil
 }
 
+// DeleteNetworkInterface releases the interface's IP back to its Subnet's
+// pool first (if it ever held one), mirroring DeleteSubnet.
 func (s *Service) DeleteNetworkInterface(ctx context.Context, tenantID, id string) error {
+	if n, err := s.interfaces.Get(ctx, tenantID, id); err == nil && n.Status.Phase == NetworkInterfacePhaseReady && n.Status.IPAddress != "" {
+		s.ips.release(n.Spec.SubnetID, n.Status.IPAddress)
+	}
 	return s.interfaces.Delete(ctx, tenantID, id)
 }
 
 func (s *Service) WatchNetworkInterfaces(ctx context.Context, tenantID string, sinceRV int64) (<-chan NetworkInterfaceEvent, error) {
 	return s.interfaces.Watch(ctx, tenantID, sinceRV)
+}
+
+// upsertCondition mirrors compute/reconciler.go's identical helper:
+// Conditions accumulate history by type rather than growing unboundedly on
+// every repeated retry.
+func upsertCondition(conditions []resource.Condition, next resource.Condition) []resource.Condition {
+	for i, c := range conditions {
+		if c.Type == next.Type {
+			conditions[i] = next
+			return conditions
+		}
+	}
+	return append(conditions, next)
 }

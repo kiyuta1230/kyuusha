@@ -1,8 +1,9 @@
 // Command network runs the network control-plane: the SubnetService and
-// NetworkInterfaceService gRPC APIs. See docs/architecture.md "networkサービス
-// のリソース: Subnet / NetworkInterface" and docs/specs/network.md. This first
-// pass is CRUD+Watch only, with Create going straight to Ready using mocked
-// allocation (no real IPAM, no tap wiring, no agent side at all yet).
+// NetworkInterfaceService gRPC APIs, plus the periodic sweep that retries
+// Subnets/NetworkInterfaces left Pending by pool exhaustion. See
+// docs/architecture.md "networkサービスのリソース: Subnet / NetworkInterface" and
+// docs/specs/network.md. VLAN ID/IP allocation (IPAM) is real; there is
+// still no tap wiring and no agent side at all.
 package main
 
 import (
@@ -67,6 +68,11 @@ func main() {
 	}()
 
 	svc := network.NewService()
+	go func() {
+		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("pending sweep stopped", "err", err)
+		}
+	}()
 
 	lis, err := net.Listen("tcp", *grpcAddr)
 	if err != nil {

@@ -1,12 +1,11 @@
 // Package network implements the "network" service from docs/architecture.md
-// "networkサービスのリソース: Subnet / NetworkInterface". This first pass is
-// CRUD+Watch only, mirroring how compute/identity/image each began: Subnet
-// and NetworkInterface Create both go straight to Ready with mocked-out
-// allocation (a fake incrementing VLAN ID, a fake IP/MAC) -- there is no
-// real per-zone VLAN pool or per-Subnet IP allocator yet (that's IPAM, a
-// deliberate follow-up), and no per-hypervisor tap wiring at all (see
-// docs/specs/network.md for exactly what's mocked and why compute-agent,
-// not a new network-agent, is expected to own tap wiring once it exists).
+// "networkサービスのリソース: Subnet / NetworkInterface": Subnet and
+// NetworkInterface CRUD+Watch, with real (if simple) IPAM -- Subnet Create
+// allocates a VLAN ID from a per-zone pool, NetworkInterface Create
+// allocates an IP from its Subnet's own CIDR (see ipam.go). There is still
+// no per-hypervisor tap wiring or agent side at all (see docs/specs/network.md
+// for exactly what's covered and why compute-agent, not a new network-agent,
+// is expected to own tap wiring once it exists).
 package network
 
 import (
