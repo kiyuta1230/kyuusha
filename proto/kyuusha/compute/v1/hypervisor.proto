@@ -11,13 +11,22 @@ import "kyuusha/resource/v1/common.proto";
 // compute-agent's self-registration/re-registration at startup, called
 // directly by compute-agent -- never through api-gateway, since this is
 // east-west traffic, not north-south (see "Hypervisor自己登録とzone割当").
-// Get/List/Watch are the only externally (api-gateway) exposed RPCs.
+// Get/List/Watch/SetSchedulable are the only externally (api-gateway)
+// exposed RPCs, and are admin-only there (see SetSchedulableRequest).
 
 message PciDevice {
   string pci_address = 1; // e.g. "0000:3b:00.0"
   string vendor_id = 2;   // e.g. "10de" (NVIDIA)
   string device_id = 3;   // e.g. "20b0" (A100)
   bool allocated = 4;
+}
+
+// HypervisorSpec is operator intent, set only via SetSchedulable -- never
+// touched by Register, so an agent restart can't silently undo an
+// operator's maintenance action. Contrast HypervisorStatus, which is
+// entirely agent/heartbeat-derived.
+message HypervisorSpec {
+  bool schedulable = 1; // false: excluded from scheduling regardless of phase (maintenance)
 }
 
 message HypervisorStatus {
@@ -34,7 +43,8 @@ message HypervisorStatus {
 
 message Hypervisor {
   kyuusha.resource.v1.ObjectMeta meta = 1;
-  HypervisorStatus status = 2;
+  HypervisorSpec spec = 2;
+  HypervisorStatus status = 3;
 }
 
 message RegisterHypervisorRequest {
@@ -59,6 +69,15 @@ message WatchHypervisorsRequest {
   int64 since_resource_version = 1;
 }
 
+// SetSchedulableRequest carries no tenant_id -- Hypervisor isn't a
+// tenant-scoped resource -- which makes it admin-only through api-gateway
+// via internal/authz's rule for requests without one (see
+// identity.CreateTenantRequest for the same reasoning).
+message SetSchedulableRequest {
+  string hypervisor = 1;
+  bool schedulable = 2;
+}
+
 message HypervisorEvent {
   enum Type {
     TYPE_UNSPECIFIED = 0;
@@ -80,4 +99,7 @@ service HypervisorService {
   rpc Get(GetHypervisorRequest) returns (Hypervisor);
   rpc List(ListHypervisorsRequest) returns (ListHypervisorsResponse);
   rpc Watch(WatchHypervisorsRequest) returns (stream HypervisorEvent);
+  // Marks a Hypervisor schedulable or not (maintenance), independent of its
+  // heartbeat-derived phase. Admin-only.
+  rpc SetSchedulable(SetSchedulableRequest) returns (Hypervisor);
 }

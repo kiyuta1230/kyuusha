@@ -60,6 +60,17 @@ func (s *HypervisorServer) List(ctx context.Context, req *computev1.ListHypervis
 	return out, nil
 }
 
+func (s *HypervisorServer) SetSchedulable(ctx context.Context, req *computev1.SetSchedulableRequest) (*computev1.Hypervisor, error) {
+	if req.GetHypervisor() == "" {
+		return nil, status.Error(codes.InvalidArgument, "hypervisor is required")
+	}
+	h, err := s.svc.SetSchedulable(ctx, req.GetHypervisor(), req.GetSchedulable())
+	if err != nil {
+		return nil, toHypervisorStatus(err)
+	}
+	return toHypervisor(*h), nil
+}
+
 func (s *HypervisorServer) Watch(req *computev1.WatchHypervisorsRequest, stream computev1.HypervisorService_WatchServer) error {
 	events, err := s.svc.WatchHypervisors(stream.Context(), req.GetSinceResourceVersion())
 	if err != nil {
@@ -123,6 +134,7 @@ func toHypervisor(h compute.Hypervisor) *computev1.Hypervisor {
 	}
 	return &computev1.Hypervisor{
 		Meta:   meta,
+		Spec:   &computev1.HypervisorSpec{Schedulable: h.Spec.Schedulable},
 		Status: toHypervisorStatusProto(h.Status),
 	}
 }

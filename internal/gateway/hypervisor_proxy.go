@@ -7,19 +7,20 @@ import (
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
-// HypervisorProxy forwards Get/List/Watch to a real compute backend,
-// unchanged. Register is deliberately not implemented here (falls through
-// to UnimplementedHypervisorServiceServer's default): compute-agent
+// HypervisorProxy forwards Get/List/Watch/SetSchedulable to a real compute
+// backend, unchanged. Register is deliberately not implemented here (falls
+// through to UnimplementedHypervisorServiceServer's default): compute-agent
 // self-registers by dialing compute directly, bypassing api-gateway
 // entirely (east-west, not north-south -- see docs/architecture.md
 // "Hypervisor自己登録とzone割当"), so this proxy is never asked to forward it
 // in practice.
 //
-// GetHypervisorRequest/ListHypervisorsRequest/WatchHypervisorsRequest carry
-// no tenant_id (Hypervisor isn't a tenant-scoped resource), which makes
-// these admin-only through api-gateway via internal/authz's rule for
-// requests without one -- regular KaaS tenants have no legitimate reason to
-// see the shared physical Hypervisor inventory.
+// None of GetHypervisorRequest/ListHypervisorsRequest/WatchHypervisorsRequest/
+// SetSchedulableRequest carry a tenant_id (Hypervisor isn't a tenant-scoped
+// resource), which makes all of them admin-only through api-gateway via
+// internal/authz's rule for requests without one -- regular KaaS tenants
+// have no legitimate reason to see or change the shared physical Hypervisor
+// inventory.
 type HypervisorProxy struct {
 	computev1.UnimplementedHypervisorServiceServer
 	backend computev1.HypervisorServiceClient
@@ -35,6 +36,10 @@ func (p *HypervisorProxy) Get(ctx context.Context, req *computev1.GetHypervisorR
 
 func (p *HypervisorProxy) List(ctx context.Context, req *computev1.ListHypervisorsRequest) (*computev1.ListHypervisorsResponse, error) {
 	return p.backend.List(ctx, req)
+}
+
+func (p *HypervisorProxy) SetSchedulable(ctx context.Context, req *computev1.SetSchedulableRequest) (*computev1.Hypervisor, error) {
+	return p.backend.SetSchedulable(ctx, req)
 }
 
 func (p *HypervisorProxy) Watch(req *computev1.WatchHypervisorsRequest, stream computev1.HypervisorService_WatchServer) error {

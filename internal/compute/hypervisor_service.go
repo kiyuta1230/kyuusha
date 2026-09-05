@@ -44,6 +44,15 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 	existing, err := s.hypervisors.Get(ctx, "", hypervisor)
 	hadExisting := err == nil
 
+	// New Hypervisors default to schedulable, like a new Kubernetes Node.
+	// Schedulable is operator intent (see HypervisorSpec's doc comment) and
+	// must never be reset by a re-register, or a restarting agent would
+	// silently undo an operator's SetSchedulable(false) maintenance action.
+	spec := HypervisorSpec{Schedulable: true}
+	if hadExisting {
+		spec.Schedulable = existing.Spec.Schedulable
+	}
+
 	status := HypervisorStatus{
 		Phase:               HypervisorPhaseReady,
 		Zone:                zone,
@@ -57,8 +66,21 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 		status.AllocatedMemoryMB = existing.Status.AllocatedMemoryMB
 	}
 
-	out := s.hypervisors.Put(ctx, hypervisor, "", hypervisor, Hypervisor{Status: status})
+	out := s.hypervisors.Put(ctx, hypervisor, "", hypervisor, Hypervisor{Spec: spec, Status: status})
 	return &out, nil
+}
+
+// SetSchedulable marks a Hypervisor schedulable or not, independent of its
+// heartbeat-derived phase -- for planned maintenance, where the operator
+// wants new VMs kept off a Hypervisor that's otherwise perfectly healthy
+// (unlike NotReady, which only ever means "missed its last heartbeat").
+func (s *Service) SetSchedulable(ctx context.Context, hypervisor string, schedulable bool) (*Hypervisor, error) {
+	if err := s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) {
+		h.Spec.Schedulable = schedulable
+	}); err != nil {
+		return nil, err
+	}
+	return s.GetHypervisor(ctx, hypervisor)
 }
 
 func (s *Service) GetHypervisor(ctx context.Context, id string) (*Hypervisor, error) {
@@ -149,6 +171,9 @@ func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, me
 	var out []Hypervisor
 	for _, h := range candidates {
 		if h.Status.Phase != HypervisorPhaseReady {
+			continue
+		}
+		if !h.Spec.Schedulable {
 			continue
 		}
 		if !hasDriver(h.Status.SupportedDrivers, driver) {

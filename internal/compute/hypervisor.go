@@ -26,6 +26,14 @@ type PciDevice struct {
 	Allocated  bool
 }
 
+// HypervisorSpec is operator intent, set only via Service.SetSchedulable --
+// never touched by RegisterHypervisor, so an agent restart can't silently
+// undo an operator's maintenance action. Contrast HypervisorStatus, which
+// is entirely agent/heartbeat-derived.
+type HypervisorSpec struct {
+	Schedulable bool
+}
+
 type HypervisorStatus struct {
 	Phase               HypervisorPhase
 	Zone                string
@@ -40,6 +48,7 @@ type HypervisorStatus struct {
 
 type Hypervisor struct {
 	Meta   resource.ObjectMeta
+	Spec   HypervisorSpec
 	Status HypervisorStatus
 }
 

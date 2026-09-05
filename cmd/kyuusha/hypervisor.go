@@ -10,10 +10,10 @@ import (
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
-// hypervisorCmd is read-only (Get/List/Watch): Hypervisor is compute's
-// internal scheduling inventory, not a KaaS-facing resource. Registration
-// happens automatically when compute-agent starts -- there is no `create`
-// here. Admin-only through api-gateway (see internal/gateway's
+// hypervisorCmd covers Get/List/Watch/SetSchedulable: Hypervisor is
+// compute's internal scheduling inventory, not a KaaS-facing resource.
+// Registration happens automatically when compute-agent starts -- there is
+// no `create` here. Admin-only through api-gateway (see internal/gateway's
 // HypervisorProxy doc comment).
 func hypervisorCmd(args []string) {
 	if len(args) < 1 {
@@ -27,6 +27,8 @@ func hypervisorCmd(args []string) {
 		hypervisorList(args[1:])
 	case "watch":
 		hypervisorWatch(args[1:])
+	case "set-schedulable":
+		hypervisorSetSchedulable(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -95,18 +97,40 @@ func hypervisorWatch(args []string) {
 			continue
 		}
 		h := ev.GetHypervisor()
-		fmt.Printf("%-10s %-16s phase=%-10s zone=%-10s allocated=%d/%dvcpu %d/%dMB rv=%d\n",
-			ev.GetType(), h.GetMeta().GetId(), h.GetStatus().GetPhase(), h.GetStatus().GetZone(),
+		fmt.Printf("%-10s %-16s phase=%-10s schedulable=%-5t zone=%-10s allocated=%d/%dvcpu %d/%dMB rv=%d\n",
+			ev.GetType(), h.GetMeta().GetId(), h.GetStatus().GetPhase(), h.GetSpec().GetSchedulable(), h.GetStatus().GetZone(),
 			h.GetStatus().GetAllocatedVcpu(), h.GetStatus().GetAllocatableVcpu(),
 			h.GetStatus().GetAllocatedMemoryMb(), h.GetStatus().GetAllocatableMemoryMb(),
 			ev.GetResourceVersion())
 	}
 }
 
+// hypervisorSetSchedulable marks a Hypervisor schedulable or not, for
+// planned maintenance -- independent of its heartbeat-derived phase.
+func hypervisorSetSchedulable(args []string) {
+	fs := flag.NewFlagSet("hypervisor set-schedulable", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN); must carry role=admin")
+	id := fs.String("id", "", "hypervisor ID (required)")
+	schedulable := fs.Bool("schedulable", true, "false excludes it from scheduling regardless of phase (maintenance)")
+	fs.Parse(args)
+
+	if *id == "" {
+		fatal("-id is required")
+	}
+	client := dialHypervisors(*addr)
+	ctx := authedContext(context.Background(), *token)
+	h, err := client.SetSchedulable(ctx, &computev1.SetSchedulableRequest{Hypervisor: *id, Schedulable: *schedulable})
+	if err != nil {
+		fatal("set-schedulable: %v", err)
+	}
+	printHypervisor(h)
+}
+
 func printHypervisor(h *computev1.Hypervisor) {
 	st := h.GetStatus()
-	fmt.Printf("id=%s phase=%s zone=%s drivers=%v allocated=%d/%dvcpu %d/%dMB rv=%d\n",
-		h.GetMeta().GetId(), st.GetPhase(), st.GetZone(), st.GetSupportedDrivers(),
+	fmt.Printf("id=%s phase=%s schedulable=%t zone=%s drivers=%v allocated=%d/%dvcpu %d/%dMB rv=%d\n",
+		h.GetMeta().GetId(), st.GetPhase(), h.GetSpec().GetSchedulable(), st.GetZone(), st.GetSupportedDrivers(),
 		st.GetAllocatedVcpu(), st.GetAllocatableVcpu(),
 		st.GetAllocatedMemoryMb(), st.GetAllocatableMemoryMb(),
 		h.GetMeta().GetResourceVersion())

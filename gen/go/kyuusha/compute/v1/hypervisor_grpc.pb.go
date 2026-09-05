@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	HypervisorService_Register_FullMethodName = "/kyuusha.compute.v1.HypervisorService/Register"
-	HypervisorService_Get_FullMethodName      = "/kyuusha.compute.v1.HypervisorService/Get"
-	HypervisorService_List_FullMethodName     = "/kyuusha.compute.v1.HypervisorService/List"
-	HypervisorService_Watch_FullMethodName    = "/kyuusha.compute.v1.HypervisorService/Watch"
+	HypervisorService_Register_FullMethodName       = "/kyuusha.compute.v1.HypervisorService/Register"
+	HypervisorService_Get_FullMethodName            = "/kyuusha.compute.v1.HypervisorService/Get"
+	HypervisorService_List_FullMethodName           = "/kyuusha.compute.v1.HypervisorService/List"
+	HypervisorService_Watch_FullMethodName          = "/kyuusha.compute.v1.HypervisorService/Watch"
+	HypervisorService_SetSchedulable_FullMethodName = "/kyuusha.compute.v1.HypervisorService/SetSchedulable"
 )
 
 // HypervisorServiceClient is the client API for HypervisorService service.
@@ -36,6 +37,9 @@ type HypervisorServiceClient interface {
 	Get(ctx context.Context, in *GetHypervisorRequest, opts ...grpc.CallOption) (*Hypervisor, error)
 	List(ctx context.Context, in *ListHypervisorsRequest, opts ...grpc.CallOption) (*ListHypervisorsResponse, error)
 	Watch(ctx context.Context, in *WatchHypervisorsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[HypervisorEvent], error)
+	// Marks a Hypervisor schedulable or not (maintenance), independent of its
+	// heartbeat-derived phase. Admin-only.
+	SetSchedulable(ctx context.Context, in *SetSchedulableRequest, opts ...grpc.CallOption) (*Hypervisor, error)
 }
 
 type hypervisorServiceClient struct {
@@ -95,6 +99,16 @@ func (c *hypervisorServiceClient) Watch(ctx context.Context, in *WatchHypervisor
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HypervisorService_WatchClient = grpc.ServerStreamingClient[HypervisorEvent]
 
+func (c *hypervisorServiceClient) SetSchedulable(ctx context.Context, in *SetSchedulableRequest, opts ...grpc.CallOption) (*Hypervisor, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Hypervisor)
+	err := c.cc.Invoke(ctx, HypervisorService_SetSchedulable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HypervisorServiceServer is the server API for HypervisorService service.
 // All implementations must embed UnimplementedHypervisorServiceServer
 // for forward compatibility.
@@ -106,6 +120,9 @@ type HypervisorServiceServer interface {
 	Get(context.Context, *GetHypervisorRequest) (*Hypervisor, error)
 	List(context.Context, *ListHypervisorsRequest) (*ListHypervisorsResponse, error)
 	Watch(*WatchHypervisorsRequest, grpc.ServerStreamingServer[HypervisorEvent]) error
+	// Marks a Hypervisor schedulable or not (maintenance), independent of its
+	// heartbeat-derived phase. Admin-only.
+	SetSchedulable(context.Context, *SetSchedulableRequest) (*Hypervisor, error)
 	mustEmbedUnimplementedHypervisorServiceServer()
 }
 
@@ -127,6 +144,9 @@ func (UnimplementedHypervisorServiceServer) List(context.Context, *ListHyperviso
 }
 func (UnimplementedHypervisorServiceServer) Watch(*WatchHypervisorsRequest, grpc.ServerStreamingServer[HypervisorEvent]) error {
 	return status.Error(codes.Unimplemented, "method Watch not implemented")
+}
+func (UnimplementedHypervisorServiceServer) SetSchedulable(context.Context, *SetSchedulableRequest) (*Hypervisor, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetSchedulable not implemented")
 }
 func (UnimplementedHypervisorServiceServer) mustEmbedUnimplementedHypervisorServiceServer() {}
 func (UnimplementedHypervisorServiceServer) testEmbeddedByValue()                           {}
@@ -214,6 +234,24 @@ func _HypervisorService_Watch_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HypervisorService_WatchServer = grpc.ServerStreamingServer[HypervisorEvent]
 
+func _HypervisorService_SetSchedulable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSchedulableRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HypervisorServiceServer).SetSchedulable(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HypervisorService_SetSchedulable_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HypervisorServiceServer).SetSchedulable(ctx, req.(*SetSchedulableRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HypervisorService_ServiceDesc is the grpc.ServiceDesc for HypervisorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -232,6 +270,10 @@ var HypervisorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "List",
 			Handler:    _HypervisorService_List_Handler,
+		},
+		{
+			MethodName: "SetSchedulable",
+			Handler:    _HypervisorService_SetSchedulable_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

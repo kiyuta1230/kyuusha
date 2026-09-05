@@ -44,7 +44,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   kyuusha vm <create|get|list|watch> [flags]
   kyuusha tenant <create|get|list|watch> [flags]
-  kyuusha hypervisor <get|list|watch> [flags]   (admin-only; read-only observability)
+  kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
   kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 

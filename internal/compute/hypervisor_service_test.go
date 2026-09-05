@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -16,6 +17,9 @@ func TestService_RegisterHypervisorUpsertsPreservingReservations(t *testing.T) {
 	}
 	if h.Status.Phase != HypervisorPhaseReady {
 		t.Fatalf("phase = %q, want Ready", h.Status.Phase)
+	}
+	if !h.Spec.Schedulable {
+		t.Fatalf("new Hypervisor Schedulable = false, want true (default)")
 	}
 
 	if err := svc.reserveHypervisorCapacity(ctx, "hypervisor-1", 2, 4096); err != nil {
@@ -36,6 +40,47 @@ func TestService_RegisterHypervisorUpsertsPreservingReservations(t *testing.T) {
 	}
 	if h2.Status.AllocatedVCPU != 2 || h2.Status.AllocatedMemoryMB != 4096 {
 		t.Fatalf("re-register lost the existing reservation: %+v", h2.Status)
+	}
+
+	// A cordon (SetSchedulable(false)) must survive a re-register: an
+	// agent restarting mid-maintenance must not silently undo it.
+	if _, err := svc.SetSchedulable(ctx, "hypervisor-1", false); err != nil {
+		t.Fatalf("SetSchedulable: %v", err)
+	}
+	h3, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-b", 16, 32768, []string{"FIRECRACKER"})
+	if err != nil {
+		t.Fatalf("re-Register after cordon: %v", err)
+	}
+	if h3.Spec.Schedulable {
+		t.Fatalf("re-register after SetSchedulable(false) reset it to schedulable")
+	}
+}
+
+func TestService_ScheduleVMExcludesUnschedulable(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := svc.SetSchedulable(ctx, "hypervisor-1", false); err != nil {
+		t.Fatalf("SetSchedulable: %v", err)
+	}
+
+	_, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024, RecoveryPolicy: RecoveryPolicyNone})
+	if !errors.Is(err, ErrUnschedulable) {
+		t.Fatalf("scheduleVM against a cordoned-only Hypervisor: got %v, want ErrUnschedulable", err)
+	}
+
+	if _, err := svc.SetSchedulable(ctx, "hypervisor-1", true); err != nil {
+		t.Fatalf("SetSchedulable(true): %v", err)
+	}
+	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024, RecoveryPolicy: RecoveryPolicyNone})
+	if err != nil {
+		t.Fatalf("scheduleVM after uncordon: %v", err)
+	}
+	if picked != "hypervisor-1" {
+		t.Fatalf("scheduleVM picked %q, want hypervisor-1", picked)
 	}
 }
 
