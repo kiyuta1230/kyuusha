@@ -43,6 +43,9 @@ JSON。protobufは使わない（gRPC APIとは異なる領域として意図的
 | 結果報告イベント | 対象リソースの決定的ID、`success bool`、`error string`（失敗時のみ、`omitempty`） | `CreateResult{vm_id, success, error}` |
 | heartbeatイベント | ハイパーバイザーID、送信時刻 | `HeartbeatMsg{hypervisor, at}` |
 
+コマンド・結果報告イベントが必ず持つ対象リソースの決定的ID（`vm_id`等）は、後述する
+トレース相関の主キーも兼ねる。
+
 ### 現在の実装（compute、`internal/compute/nats.go`）
 
 ```go
@@ -68,7 +71,17 @@ type HeartbeatMsg struct {
 
 ## トレース伝播
 
-`trace_id`はJSONペイロードには含めず、NATSメッセージの**ヘッダ**で伝播させる
-（Sagaの補償フローやcompute↔agent間の相関をログで追えるようにするため）。
+NATSを挟む区間は、publish側とconsume側が別プロセス・別タイミング（数秒〜数分後）で動くため、
+gRPCの同期呼び出しのように単純な親子spanでは繋げない（継続時間がメッセージの滞留時間まで
+含んでしまい意味を成さない）。そのため2つの相関手段を役割分担して使う。
 
-現状のコードはヘッダを設定していない（未実装）。
+1. **対象リソースの決定的ID（`vm_id`等）を、あらゆるログ出力・span属性に必ず含める。**
+   これがVirtualMachine一つの一生（Create→Reconcilerがcmd発行→agentが処理→
+   Reconcilerがresult反映）を横断して追うための主たる相関キーであり、
+   「1本のtraceで完結させる」ことを狙わない代わりに、`vm_id`でログ・trace検索を横断できることを保証する
+2. **NATSメッセージのヘッダにW3C `traceparent`（OpenTelemetryの標準コンテキスト伝播フォーマット）を載せる。**
+   consume側はこれを親spanとしてではなく**Span Link**（因果関係はあるが親子ではない関連づけ）として扱い、
+   publishした側の直近のspanと緩やかに結びつける。個々のホップ（1回のpublish→consume）内での
+   トレースUI上の追跡性を上げるための補助であり、`vm_id`相関の代わりにはしない
+
+現状のコードはどちらも未実装（ヘッダ設定なし、span属性・構造化ログへの`vm_id`付与なし）。
