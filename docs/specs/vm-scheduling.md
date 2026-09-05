@@ -1,0 +1,73 @@
+# VMスケジュール仕様
+
+## 概要
+
+`Pending`のVirtualMachineに配置先Hypervisorを決定し、`Scheduled`へ遷移させるcomputeの内部処理。
+Reconcilerが VirtualMachine の Watch イベント駆動、および定期スイープの2経路で実行する。
+
+## 全体フロー
+
+```mermaid
+sequenceDiagram
+    participant R as Reconciler
+    participant S as Service.scheduleVM
+    participant H as Hypervisor Store
+
+    Note over R: VM Watch: ADDED/MODIFIED (phase=Pending)
+    R->>S: scheduleVM(vm.Spec)
+    S->>H: List(全Hypervisor)
+    S->>S: フィルタ（ハード制約）
+    S->>S: ピック（MostAvailableFirst）
+    alt 候補なし
+        S-->>R: ErrUnschedulable
+        R->>R: Condition{Unschedulable, InsufficientCapacity}を設定してUpdate
+        Note over R: 次回はperiodic sweepで再試行（10秒間隔）
+    else 候補あり
+        S->>H: 予約 (allocated_vcpu/memory_mb加算)
+        S-->>R: hypervisor_id
+        R->>R: vm.status.phase=Scheduled, status.hypervisor=id
+        alt VM Updateが失敗
+            R->>H: 予約を解放（ロールバック）
+        end
+    end
+```
+
+## フィルタ（ハード制約）
+
+`filterSchedulable`が以下を**すべて**満たすHypervisorのみを候補として残す。
+
+1. `status.phase == Ready`
+2. `spec.schedulable == true`（[Hypervisor登録仕様](hypervisor-bootstrap.md)参照）
+3. `spec.driver_hint`（VMの要求。未指定なら`FIRECRACKER`）が`status.supported_drivers`に含まれる
+4. `status.allocatable_vcpu - status.allocated_vcpu >= 要求vcpu`
+5. `status.allocatable_memory_mb - status.allocated_memory_mb >= 要求memory_mb`
+
+zoneフィルタ・PCIデバイスフィルタは未実装（network/PCI在庫が存在しないため）。
+
+## ピック（MostAvailableFirst）
+
+フィルタを通過した候補の中から、**空きvCPU（`allocatable_vcpu - allocated_vcpu`）が最大**のHypervisorを選ぶ。
+候補が0件の場合は`ErrUnschedulable`。
+
+`SchedulingStrategy`インターフェースとして抽象化されており、`MostAvailableFirst`はその唯一の実装。
+
+## 予約（capacity reservation）
+
+- 選定したHypervisorの`allocated_vcpu`/`allocated_memory_mb`に要求量を加算する
+- Get→mutate→Updateの楽観的並行性制御（`resource_version`）で行い、衝突時は最大20回まで自動リトライする
+- 予約の後にVMの`Scheduled`遷移（Update）を行う。VM側のUpdateが失敗した場合、直前の予約を解放（ロールバック）する
+
+## 解放（capacity release）
+
+以下のいずれかのタイミングで、該当VMの`spec.vcpu`/`spec.memory_mb`分を`allocated_vcpu`/`allocated_memory_mb`から減算する。
+
+- VMが削除された時（`status.hypervisor`が設定済み、すなわち一度でもスケジュールされていた場合のみ）
+- VM作成が失敗し`Error`へ遷移する時。このとき`status.hypervisor`を空文字列にクリアし、
+  後続のVM削除で二重に解放されないようにする
+
+## スケジュール失敗時の挙動
+
+- VMは`Pending`のまま留まり、`Condition{type: Unschedulable, status: True, reason: InsufficientCapacity}`が設定される
+- スケジューリングは通常VM側のWatchイベントでのみ起動されるが、容量が空くのはHypervisor側の変化であり
+  VMイベントを発生させない。このため10秒間隔の定期スイープが全`Pending`のVMに対して再度スケジュールを試みる
+- スケジュールに成功すると同じConditionが`status: False, reason: Scheduled`に更新される（削除はされない）

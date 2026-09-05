@@ -1,0 +1,10 @@
+# 仕様書
+
+完成した機能単位の現状の仕様のみを記す。docs/architecture.md（設計の経緯・議論・訂正を含む）とは異なり、
+ここには過去の経緯や理由は書かない。実装が変わったら都度この仕様書も追従して更新する。
+
+## 一覧
+
+- [認証・認可](authn-authz.md)
+- [Hypervisor登録・死活監視](hypervisor-bootstrap.md)
+- [VMスケジュール](vm-scheduling.md)
