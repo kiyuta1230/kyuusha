@@ -32,6 +32,8 @@ func main() {
 		tenantCmd(os.Args[2:])
 	case "hypervisor":
 		hypervisorCmd(os.Args[2:])
+	case "image":
+		imageCmd(os.Args[2:])
 	case "token":
 		tokenCmd(os.Args[2:])
 	default:
@@ -45,6 +47,7 @@ func usage() {
   kyuusha vm <create|get|list|watch> [flags]
   kyuusha tenant <create|get|list|watch> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
+  kyuusha image <create|get|list|watch> [flags]
   kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 

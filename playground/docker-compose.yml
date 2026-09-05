@@ -1,12 +1,14 @@
 # Multi-hypervisor playground: one NATS/JetStream broker, api-gateway (the
-# only client-facing, JWT/OPA-checked entrypoint), one compute control-plane
-# and one identity control-plane (neither exposed to the host -- only
-# api-gateway may reach them), and three compute-agent "hypervisors" that
-# self-register with compute at startup, so the real scheduler (Ready phase +
-# driver + capacity filters, most-available-first pick) has real inventory to
-# spread VMs across. Bring it up with `docker compose up --build` and drive
-# it with playground/scenario.sh or `go run ./cmd/kyuusha vm|tenant|hypervisor
-# ... -addr=localhost:8080 -token=...` (`kyuusha token mint` for a dev token).
+# only client-facing, JWT/OPA-checked entrypoint), one compute control-plane,
+# one identity control-plane, and one image control-plane (none exposed to
+# the host -- only api-gateway may reach them), and three compute-agent
+# "hypervisors" that self-register with compute at startup, so the real
+# scheduler (Ready phase + driver + capacity filters, most-available-first
+# pick) has real inventory to spread VMs across. Bring it up with
+# `docker compose -f playground/docker-compose.yml up -d --build` (from the
+# repo root) and drive it with playground/scenario.sh or
+# `go run ./cmd/kyuusha vm|tenant|hypervisor|image ... -addr=localhost:8080
+# -token=...` (`kyuusha token mint` for a dev token).
 #
 # Also brings up Jaeger (traces), Prometheus (metrics), Loki+Promtail (logs,
 # including the audit trail -- see internal/audit and
@@ -37,7 +39,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.55.1
     volumes:
-      - ./playground/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
 
@@ -49,7 +51,7 @@ services:
     image: grafana/promtail:3.3.2
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./playground/promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
     command: -config.file=/etc/promtail/config.yml
     depends_on:
       - loki
@@ -60,7 +62,7 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
     volumes:
-      - ./playground/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
       - "3000:3000"
     depends_on:
@@ -70,19 +72,22 @@ services:
 
   compute:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
       target: compute
     command:
       - "-nats-url=nats://nats:4222"
       - "-grpc-addr=:8081"
       - "-identity-addr=identity:8082"
+      - "-image-addr=image:8083"
       - "-metrics-addr=:9092"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
       nats:
         condition: service_healthy
       identity:
+        condition: service_started
+      image:
         condition: service_started
       jaeger:
         condition: service_started
@@ -93,7 +98,7 @@ services:
 
   identity:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
       target: identity
     command:
@@ -105,27 +110,43 @@ services:
         condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
 
+  image:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: image
+    command:
+      - "-grpc-addr=:8083"
+      - "-metrics-addr=:9095"
+      - "-otlp-endpoint=jaeger:4317"
+    depends_on:
+      jaeger:
+        condition: service_started
+    # No ports exposed to the host: same reasoning as compute above.
+
   api-gateway:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
       target: api-gateway
     command:
       - "-listen-addr=:8080"
       - "-compute-addr=compute:8081"
       - "-identity-addr=identity:8082"
+      - "-image-addr=image:8083"
       - "-metrics-addr=:9093"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
       - compute
       - identity
+      - image
       - jaeger
     ports:
       - "8080:8080"
 
   compute-agent-1:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
       target: compute-agent
     command:
@@ -143,7 +164,7 @@ services:
 
   compute-agent-2:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
       target: compute-agent
     command:
@@ -161,7 +182,7 @@ services:
 
   compute-agent-3:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile
       target: compute-agent
     command:

@@ -8,7 +8,7 @@ import (
 
 func newTestService(t *testing.T, ctx context.Context) *Service {
 	t.Helper()
-	svc, err := NewService(ctx, &FakeTenantClient{})
+	svc, err := NewService(ctx, &FakeTenantClient{}, &FakeImageClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 	}
 
 	// Idempotent re-Create with the same name must not mint a new ID.
-	again, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{RecoveryPolicy: RecoveryPolicyNone})
+	again, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{ImageID: "img-abc", RecoveryPolicy: RecoveryPolicyNone})
 	if err != nil {
 		t.Fatalf("idempotent Create: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestService_GetIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	m, err := svc.Create(ctx, "tenant-a", "", VirtualMachineSpec{RecoveryPolicy: RecoveryPolicyNone})
+	m, err := svc.Create(ctx, "tenant-a", "", VirtualMachineSpec{ImageID: "img-abc", RecoveryPolicy: RecoveryPolicyNone})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

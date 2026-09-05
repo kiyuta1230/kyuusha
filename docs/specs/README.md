@@ -10,6 +10,8 @@
 - [Hypervisor登録・死活監視](hypervisor-bootstrap.md)
 - [VMスケジュール](vm-scheduling.md)
 - [Quota](quota.md)
+- [Image](image.md)
+- [CLI](cli.md)
 - [NATSメッセージ](nats-messaging.md)
 - [トレーシング](observability-tracing.md)
 - [メトリクス](observability-metrics.md)

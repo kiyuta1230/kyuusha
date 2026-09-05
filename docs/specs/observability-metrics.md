@@ -2,23 +2,13 @@
 
 ## 概要
 
-各サービスがOpenTelemetry MeterProvider（Prometheusエクスポータ）経由で`/metrics`を公開し、
-Prometheusがpull型でscrapeする。gRPC呼び出しのメトリクスはトレーシングと同じ
-`otelgrpc`計装から自動的に得られる（[トレーシング仕様](observability-tracing.md)参照）。
+各サービスがOpenTelemetry MeterProvider（Prometheusエクスポータ）経由で、Prometheus
+exposition形式の`/metrics`をpull型で公開する。バックエンド非依存で、この形式をscrapeできる
+ツールなら何でもよい（playgroundでは実際にPrometheus+Grafanaを使っている——具体的な配線は
+[playground/README.md](../../playground/README.md)参照）。gRPC呼び出しのメトリクスは
+トレーシングと同じ`otelgrpc`計装から自動的に得られる（[トレーシング仕様](observability-tracing.md)参照）。
 
 ## 構成
-
-```mermaid
-flowchart LR
-    P["Prometheus :9090"] -->|scrape /metrics| GW["api-gateway :9093"]
-    P -->|scrape /metrics| CO["compute :9092"]
-    P -->|scrape /metrics| ID["identity :9091"]
-    P -->|scrape /metrics| CA1["compute-agent-1 :9094"]
-    P -->|scrape /metrics| CA2["compute-agent-2 :9094"]
-    P -->|scrape /metrics| CA3["compute-agent-3 :9094"]
-    G["Grafana :3000"] --> P
-    G --> J["Jaeger"]
-```
 
 - `internal/telemetry.SetupMetrics(serviceName)`が各バイナリの起動時に呼ばれ、グローバルな
   `MeterProvider`（Prometheusエクスポータ）を設定し、`/metrics`用の`http.Handler`を返す
@@ -35,6 +25,7 @@ flowchart LR
 | compute | `:9092` |
 | api-gateway | `:9093` |
 | compute-agent | `:9094` |
+| image | `:9095` |
 
 ## 主要メトリクス（実測値）
 
@@ -49,17 +40,14 @@ flowchart LR
 [認証・認可仕様](authn-authz.md)や[Quota仕様](quota.md)がリクエストを拒否するコードも含む）が
 そのまま入るため、エラー率はこのラベルで直接集計できる。
 
-## Grafanaダッシュボード
+## playgroundでの可視化
 
-`playground/grafana/provisioning/dashboards/json/kyuusha-overview.json`として
-自動プロビジョニングされる`kyuusha overview`ダッシュボードに、以下のパネルがある。
+playgroundでは`playground/grafana/provisioning/dashboards/json/kyuusha-overview.json`として
+`kyuusha overview`ダッシュボードを自動プロビジョニングしており、以下のパネルがある
+（構成の詳細は[playground/README.md](../../playground/README.md)参照）。
 
 - gRPCリクエストレート（service/method別）
 - gRPCエラーレート（`rpc_response_status_code != OK`）
 - gRPCサーバーp95レイテンシ（service別）
 - goroutine数（service別）
 - 常駐メモリ（service別）
-
-Prometheus/Jaegerのデータソースは`playground/grafana/provisioning/datasources/datasources.yml`で
-`uid: prometheus`/`uid: jaeger`として固定プロビジョニングされており、ダッシュボードJSONは
-このUIDを直接参照する。

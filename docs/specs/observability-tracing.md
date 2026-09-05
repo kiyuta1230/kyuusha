@@ -2,25 +2,20 @@
 
 ## 概要
 
-OpenTelemetry（OTel）でトレースを収集し、OTLP/gRPCでJaegerへ送る。gRPC呼び出しは自動計装、
-NATSを挟む区間はSpan Linkと`vm_id`相関で繋ぐ（詳細は[NATSメッセージ仕様](nats-messaging.md)）。
+OpenTelemetry（OTel）でトレースを収集し、OTLP/gRPCでエクスポートする。送信先は
+`-otlp-endpoint`で指定するバックエンド非依存の設計（OTel Collector、Jaeger、Tempo等
+OTLPを受け付けるものなら何でもよい。playgroundではJaegerを直接使っている——具体的な配線は
+[playground/README.md](../../playground/README.md)参照）。gRPC呼び出しは自動計装、NATSを
+挟む区間はSpan Linkと`vm_id`相関で繋ぐ（詳細は[NATSメッセージ仕様](nats-messaging.md)）。
 
 ## 構成
 
-```mermaid
-flowchart LR
-    GW["api-gateway"] -->|OTLP/gRPC| J["Jaeger :4317(収集) :16686(UI)"]
-    CO["compute"] -->|OTLP/gRPC| J
-    ID["identity"] -->|OTLP/gRPC| J
-    CA["compute-agent"] -->|OTLP/gRPC| J
-```
-
-- 各サービスが直接Jaegerへexportする（OTel Collectorは挟まない）
 - `internal/telemetry.Setup(ctx, serviceName, otlpEndpoint)`が各バイナリの起動時に呼ばれ、
   グローバルな`TracerProvider`と`propagation.TraceContext{}`（W3C traceparent）を設定する
 - `-otlp-endpoint`フラグが空文字列の場合、トレーシングは無効（no-op）になる。ローカルの
-  `go run`/テストがJaeger起動を前提にしなくて済むようにするため
+  `go run`/テストがOTLPバックエンド起動を前提にしなくて済むようにするため
 - サンプリングは`AlwaysSample`（全件収集）。このシステムの規模では間引く理由がない
+- 対象バイナリ: api-gateway、compute、identity、image、compute-agent
 
 ## gRPC呼び出しの計装
 
@@ -64,6 +59,6 @@ heartbeatメッセージはトレーシング対象外（fire-and-forgetで個�
 
 ## 動作確認
 
-playgroundでVMを1台作成し、JaegerのUI（http://localhost:16686）で`service=compute-agent`を
-検索すると、`compute-agent.handle_create`スパンが`compute.publish_create_command`への
+playgroundでVMを1台作成し、Jaegerの UI（[playground/README.md](../../playground/README.md)参照）で
+`service=compute-agent`を検索すると、`compute-agent.handle_create`スパンが`compute.publish_create_command`への
 `FOLLOWS_FROM`参照（Span Link）を持ち、`vm_id`タグが両端で一致していることを確認できる。

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
 	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
@@ -69,4 +70,55 @@ func (f *FakeTenantClient) Delete(context.Context, *identityv1.DeleteTenantReque
 
 func (f *FakeTenantClient) Watch(context.Context, *identityv1.WatchTenantsRequest, ...grpc.CallOption) (identityv1.TenantService_WatchClient, error) {
 	panic("FakeTenantClient: Watch not implemented; compute.Service never calls it")
+}
+
+// FakeImageClient is a minimal imagev1.ImageServiceClient for tests that
+// don't want to run a real image server: Get always returns a Ready Image
+// in the given Format (default KERNEL_ROOTFS, matching the default
+// driver_hint FIRECRACKER) regardless of the requested id, unless the id is
+// empty; every other method panics since compute.Service never calls them.
+type FakeImageClient struct {
+	Format imagev1.ImageFormat // default: KERNEL_ROOTFS
+	Phase  string              // default: "Ready"
+}
+
+func (f *FakeImageClient) format() imagev1.ImageFormat {
+	if f.Format != imagev1.ImageFormat_IMAGE_FORMAT_UNSPECIFIED {
+		return f.Format
+	}
+	return imagev1.ImageFormat_KERNEL_ROOTFS
+}
+
+func (f *FakeImageClient) phase() string {
+	if f.Phase != "" {
+		return f.Phase
+	}
+	return "Ready"
+}
+
+func (f *FakeImageClient) Get(ctx context.Context, req *imagev1.GetImageRequest, opts ...grpc.CallOption) (*imagev1.Image, error) {
+	if req.GetId() == "" {
+		return nil, status.Error(codes.NotFound, "image: not found")
+	}
+	return &imagev1.Image{
+		Meta:   &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
+		Spec:   &imagev1.ImageSpec{Format: f.format()},
+		Status: &imagev1.ImageStatus{Phase: f.phase()},
+	}, nil
+}
+
+func (f *FakeImageClient) Create(context.Context, *imagev1.CreateImageRequest, ...grpc.CallOption) (*imagev1.Image, error) {
+	panic("FakeImageClient: Create not implemented; compute.Service never calls it")
+}
+
+func (f *FakeImageClient) List(context.Context, *imagev1.ListImagesRequest, ...grpc.CallOption) (*imagev1.ListImagesResponse, error) {
+	panic("FakeImageClient: List not implemented; compute.Service never calls it")
+}
+
+func (f *FakeImageClient) Delete(context.Context, *imagev1.DeleteImageRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
+	panic("FakeImageClient: Delete not implemented; compute.Service never calls it")
+}
+
+func (f *FakeImageClient) Watch(context.Context, *imagev1.WatchImagesRequest, ...grpc.CallOption) (imagev1.ImageService_WatchClient, error) {
+	panic("FakeImageClient: Watch not implemented; compute.Service never calls it")
 }

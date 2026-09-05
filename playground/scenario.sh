@@ -2,17 +2,18 @@
 # Brings up the multi-hypervisor docker-compose playground and drives it
 # through api-gateway with the real CLI: waits for all 3 compute-agents to
 # self-register as real Hypervisors, mints an admin token, creates a real
-# Tenant via identity, mints a token for that tenant, creates several VMs
-# under it, and confirms the real scheduler spreads them across
+# Tenant via identity, mints a token for that tenant, creates a real Image
+# via the image service and waits for it to reach Ready, creates several VMs
+# referencing it, and confirms the real scheduler spreads them across
 # hypervisor-1/2/3. Also checks that Tenant creation and Hypervisor listing
 # are admin-only, and that a token for a different tenant is denied VM
-# access. Leaves the stack running afterwards; `docker compose down` when
-# done.
+# access. Leaves the stack running afterwards;
+# `docker compose -f playground/docker-compose.yml down` when done.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "==> starting docker compose stack"
-docker compose up -d --build
+docker compose -f playground/docker-compose.yml up -d --build
 
 echo "==> waiting for api-gateway's gRPC port to accept connections"
 for _ in $(seq 1 30); do
@@ -69,10 +70,36 @@ fi
 export KYUUSHA_TOKEN
 KYUUSHA_TOKEN="$(go run ./cmd/kyuusha token mint -tenant="$tenant")"
 
+echo "==> creating Image for tenant $tenant (kernel_rootfs; reachability probed against nats's own healthz -- content doesn't matter, only that the URL resolves)"
+image_line="$(go run ./cmd/kyuusha image create -addr=localhost:8080 -tenant="$tenant" -name=scenario-image \
+  -format=kernel_rootfs -kernel-url=http://nats:8222/healthz -rootfs-url=http://nats:8222/healthz)"
+echo "$image_line"
+image="$(echo "$image_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if [ -z "$image" ]; then
+  echo "!! could not parse image id from: $image_line" >&2
+  exit 1
+fi
+
+echo "==> waiting for Image to reach Ready"
+for _ in $(seq 1 30); do
+  phase="$(go run ./cmd/kyuusha image get -addr=localhost:8080 -tenant="$tenant" -id="$image" | grep -o 'phase=[^ ]*' | cut -d= -f2)"
+  [ "$phase" = "Ready" ] && break
+  if [ "$phase" = "Error" ]; then
+    echo "!! image went to Error" >&2
+    go run ./cmd/kyuusha image get -addr=localhost:8080 -tenant="$tenant" -id="$image" >&2
+    exit 1
+  fi
+  sleep 1
+done
+if [ "$phase" != "Ready" ]; then
+  echo "!! image never reached Ready, last phase=$phase" >&2
+  exit 1
+fi
+
 echo "==> creating $count VMs for tenant $tenant"
 for i in $(seq 1 "$count"); do
   go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name="vm-$i" \
-    -image=img-scenario -vcpu=1 -memory-mb=512 -wait
+    -image="$image" -vcpu=1 -memory-mb=512 -wait
 done
 
 echo "==> final state"
@@ -87,7 +114,7 @@ KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha hypervisor list -addr=localhos
 
 echo "==> confirming quota is enforced (max-vms=$count already reached)"
 if go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name="vm-over-quota" \
-  -image=img-scenario -vcpu=1 -memory-mb=512 2>/tmp/kyuusha-quota-check.log; then
+  -image="$image" -vcpu=1 -memory-mb=512 2>/tmp/kyuusha-quota-check.log; then
   echo "!! expected ResourceExhausted but VM creation over quota succeeded" >&2
   exit 1
 fi

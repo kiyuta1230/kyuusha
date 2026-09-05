@@ -9,6 +9,7 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
 var (
@@ -47,13 +48,14 @@ type Service struct {
 	hypervisors    *resource.Store[Hypervisor, *Hypervisor]
 	scheduler      SchedulingStrategy
 	identityClient identityv1.TenantServiceClient
+	imageClient    imagev1.ImageServiceClient
 	quota          *quotaChecker
 
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
 }
 
-func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient) (*Service, error) {
+func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient, imageClient imagev1.ImageServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
@@ -71,6 +73,7 @@ func NewService(ctx context.Context, identityClient identityv1.TenantServiceClie
 		}),
 		scheduler:      MostAvailableFirst{},
 		identityClient: identityClient,
+		imageClient:    imageClient,
 		quota:          quota,
 		usage:          make(map[string]tenantUsage),
 	}, nil
@@ -87,6 +90,9 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	if tenantID == "" {
 		return nil, fmt.Errorf("%w: tenant_id is required", ErrValidation)
 	}
+	if spec.ImageID == "" {
+		return nil, fmt.Errorf("%w: spec.image_id is required", ErrValidation)
+	}
 	if spec.RecoveryPolicy == RecoveryPolicyUnspecified {
 		return nil, fmt.Errorf("%w: spec.recovery_policy must be set", ErrValidation)
 	}
@@ -99,6 +105,10 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 
 	if existing, ok := s.store.LookupByName(tenantID, name); ok {
 		return &existing, nil
+	}
+
+	if err := validateImage(ctx, s.imageClient, tenantID, spec.ImageID, spec.DriverHint); err != nil {
+		return nil, err
 	}
 
 	limit, err := lookupQuota(ctx, s.identityClient, tenantID)

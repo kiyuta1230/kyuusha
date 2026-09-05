@@ -26,12 +26,14 @@ import (
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
 func main() {
 	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL")
 	grpcAddr := flag.String("grpc-addr", ":8081", "address to serve VirtualMachineService/HypervisorService on")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
+	imageAddr := flag.String("image-addr", "localhost:8083", "image service address, for Create-time Image validation")
 	metricsAddr := flag.String("metrics-addr", ":9092", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
@@ -95,7 +97,18 @@ func main() {
 	}
 	defer identityConn.Close()
 
-	svc, err := compute.NewService(ctx, identityv1.NewTenantServiceClient(identityConn))
+	// compute -> image is plaintext for now; see the identical note above.
+	imageConn, err := grpc.NewClient(*imageAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial image", "addr", *imageAddr, "err", err)
+		os.Exit(1)
+	}
+	defer imageConn.Close()
+
+	svc, err := compute.NewService(ctx, identityv1.NewTenantServiceClient(identityConn), imagev1.NewImageServiceClient(imageConn))
 	if err != nil {
 		slog.Error("new compute service", "err", err)
 		os.Exit(1)

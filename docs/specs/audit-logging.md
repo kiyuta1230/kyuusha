@@ -50,8 +50,6 @@ api-gatewayを通過する全リクエストについて、「誰が・何を・
 ## 保存・検索
 
 kyuusha自身は何も永続化しない。標準出力へのJSONログとして吐くだけで、収集・保持・検索は
-外部のログ基盤に委ねる。playgroundではPromtail（Dockerソケット経由でコンテナログを収集）→Loki→
-Grafanaの構成にしている（`docker-compose.yml`、`playground/promtail-config.yml`）。
-
-Grafanaの`Loki`データソースには`trace_id`フィールドを検出して[トレーシング仕様](observability-tracing.md)の
-Jaegerへ直接ジャンプできるderived fieldを設定済み。
+外部のログ基盤に委ねる（バックエンド非依存）。playgroundでの具体的な配線（Promtail→Loki→Grafana、
+`trace_id`から[トレーシング仕様](observability-tracing.md)のJaegerへ直接ジャンプできるderived field等）は
+[playground/README.md](../../playground/README.md)を参照。

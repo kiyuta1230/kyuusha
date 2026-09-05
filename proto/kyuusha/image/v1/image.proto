@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package kyuusha.image.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1;imagev1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// See docs/architecture.md "imageサービスのリソース: Image". kyuusha never
+// copies or stores image bytes itself -- Image is metadata (an external URL
+// + digest) plus light Create-time validation (URL reachability, and that
+// spec.format matches the artifacts actually provided). Digest verification
+// of the fetched bytes happens wherever a hypervisor actually fetches the
+// artifact, not here.
+
+enum ImageFormat {
+  IMAGE_FORMAT_UNSPECIFIED = 0;
+  KERNEL_ROOTFS = 1; // kernel+rootfs pair, for VMMs that boot the kernel directly (not Firecracker-specific)
+  QCOW2 = 2;         // self-contained disk image, for QEMU/libvirt
+}
+
+message ImageArtifact {
+  string url = 1;    // external distribution URL; kyuusha never copies this
+  string digest = 2; // sha256:...; verified by whoever fetches the bytes
+}
+
+message ImageSpec {
+  ImageFormat format = 1;
+  ImageArtifact kernel = 2; // KERNEL_ROOTFS only
+  ImageArtifact rootfs = 3; // KERNEL_ROOTFS only
+  ImageArtifact disk = 4;   // QCOW2 only
+  string boot_args = 5;     // direct kernel boot args, e.g. "console=ttyS0 reboot=k panic=1 root=/dev/vda rw"
+}
+
+message ImageStatus {
+  string phase = 1; // Pending(reachability check in flight) / Ready / Deleting / Error
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+  int64 size_bytes = 3; // if known
+}
+
+message Image {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  ImageSpec spec = 2;
+  ImageStatus status = 3;
+}
+
+message CreateImageRequest {
+  string tenant_id = 1;
+  string name = 2; // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing Image
+  ImageSpec spec = 3;
+  bool dry_run = 4;
+}
+
+message GetImageRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
+message ListImagesRequest {
+  string tenant_id = 1;
+}
+
+message ListImagesResponse {
+  repeated Image items = 1;
+}
+
+message DeleteImageRequest {
+  string tenant_id = 1;
+  string id = 2;
+  bool dry_run = 3;
+}
+
+message WatchImagesRequest {
+  string tenant_id = 1;
+  int64 since_resource_version = 2;
+}
+
+message ImageEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  Image image = 2;
+  int64 resource_version = 3;
+}
+
+service ImageService {
+  rpc Create(CreateImageRequest) returns (Image);
+  rpc Get(GetImageRequest) returns (Image);
+  rpc List(ListImagesRequest) returns (ListImagesResponse);
+  rpc Delete(DeleteImageRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchImagesRequest) returns (stream ImageEvent);
+}

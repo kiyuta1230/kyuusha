@@ -1,5 +1,6 @@
-# Multi-stage build for the kyuusha binaries used by docker-compose.yml's
-# multi-hypervisor playground. Build a target with e.g.
+# Multi-stage build for the kyuusha binaries used by
+# playground/docker-compose.yml's multi-hypervisor playground. Build a
+# target with e.g.
 #   docker build -f docker/Dockerfile --target compute-agent .
 
 FROM golang:1-bookworm AS builder
@@ -12,6 +13,7 @@ RUN CGO_ENABLED=0 go build -o /out/compute-agent ./cmd/compute-agent
 RUN CGO_ENABLED=0 go build -o /out/kyuusha ./cmd/kyuusha
 RUN CGO_ENABLED=0 go build -o /out/api-gateway ./cmd/api-gateway
 RUN CGO_ENABLED=0 go build -o /out/identity ./cmd/identity
+RUN CGO_ENABLED=0 go build -o /out/image ./cmd/image
 
 FROM alpine:3 AS compute
 COPY --from=builder /out/compute /usr/local/bin/compute
@@ -33,3 +35,7 @@ ENTRYPOINT ["/usr/local/bin/kyuusha"]
 FROM alpine:3 AS identity
 COPY --from=builder /out/identity /usr/local/bin/identity
 ENTRYPOINT ["/usr/local/bin/identity"]
+
+FROM alpine:3 AS image
+COPY --from=builder /out/image /usr/local/bin/image
+ENTRYPOINT ["/usr/local/bin/image"]

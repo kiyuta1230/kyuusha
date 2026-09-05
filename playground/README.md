@@ -1,11 +1,12 @@
 # Playground
 
-`docker-compose.yml`（リポジトリルート）が起動する、ローカルの多ハイパーバイザー環境。
+`docker-compose.yml`（このディレクトリ）が起動する、ローカルの多ハイパーバイザー環境。
+リポジトリルートから実行する。
 
 ## 起動
 
 ```sh
-docker compose up -d --build
+docker compose -f playground/docker-compose.yml up -d --build
 ```
 
 ## 動作確認
@@ -14,9 +15,24 @@ docker compose up -d --build
 ./playground/scenario.sh
 ```
 
-Tenant作成→VM作成→スケジュール→Quota強制→認可拒否まで一通り確認する（詳細は各仕様書参照）。
-CLIを直接使う場合は `go run ./cmd/kyuusha ... -addr=localhost:8080 -token=$KYUUSHA_TOKEN`
+Tenant作成→Image作成→Ready待ち→VM作成→スケジュール→Quota強制→認可拒否まで一通り確認する
+（詳細は各仕様書参照）。CLIを直接使う場合は
+`go run ./cmd/kyuusha ... -addr=localhost:8080 -token=$KYUUSHA_TOKEN`
 （`kyuusha token mint`で開発用トークンを発行）。
+
+## 構成
+
+kyuusha自身のサービス（api-gateway/compute/identity/image/compute-agent/NATS）は
+[システム構成仕様](../docs/specs/system-overview.md)を参照。ここではplayground固有の
+observabilityコンポーネントのみ挙げる。
+
+| compose service | 実行イメージ | 備考 |
+|---|---|---|
+| `jaeger` | 公式`jaegertracing/all-in-one` | トレース収集・UI。`16686`をホストへ公開 |
+| `prometheus` | 公式`prom/prometheus` | `playground/prometheus.yml`をマウント。`9090`をホストへ公開 |
+| `grafana` | 公式`grafana/grafana` | `playground/grafana/provisioning`をマウント。`3000`をホストへ公開、匿名admin有効 |
+| `loki` | 公式`grafana/loki` | ログ集約。ホストにポート非公開 |
+| `promtail` | 公式`grafana/promtail` | Dockerソケットをマウントし全コンテナのログを収集、Lokiへpush |
 
 ## Observability
 
@@ -44,5 +60,5 @@ GrafanaのExplore（データソース: Loki）で以下のようなLogQLクエ�
 ## 後片付け
 
 ```sh
-docker compose down
+docker compose -f playground/docker-compose.yml down
 ```

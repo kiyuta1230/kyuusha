@@ -1,21 +1,23 @@
 # システム構成仕様
 
+playgroundで使っている具体的なオブザーバビリティ基盤（Jaeger/Prometheus/Loki/Grafana等）は
+kyuusha自体の構成要素ではない。それらのエンドポイント・docker-composeでの配線は
+[playground/README.md](../../playground/README.md)を参照。ここに書くのはkyuusha自身が
+持つサービスのみ。
+
 ## コンポーネント一覧
 
 | コンポーネント | 役割 |
 |---|---|
-| `kyuusha`（CLI） | api-gateway経由でVM/Tenant/Hypervisorを操作するクライアント。開発用トークン発行(`token mint`)も持つ |
+| `kyuusha`（CLI） | api-gateway経由でVM/Tenant/Hypervisor/Imageを操作するクライアント。開発用トークン発行(`token mint`)も持つ |
 | `api-gateway` | client向けの唯一の公開エンドポイント。JWT検証＋OPA認可を行い、backendへフォワードする |
 | `identity` | Tenant（テナント・Quota上限値）を管理するCRUD+Watchサービス |
-| `compute` | VirtualMachine・Hypervisorを管理するサービス。スケジューラ、Quota強制、compute-agentとのNATSやり取りを持つ |
+| `image` | Image（外部URL参照+digestのメタデータ）を管理するCRUD+Watchサービス。Create時にURL到達性・format整合性を検証し、Pending→Ready/Errorへ非同期遷移させる |
+| `compute` | VirtualMachine・Hypervisorを管理するサービス。スケジューラ、Quota強制、Image検証（identity/imageへの同期参照）、compute-agentとのNATSやり取りを持つ |
 | `compute-agent` | 各ハイパーバイザー上で動くagent。起動時にcomputeへ自己登録し、NATS経由でVM作成コマンドを受けて処理する（現状VMM呼び出しはstub） |
 | `NATS (JetStream)` | compute ↔ compute-agent間の非同期コマンド/イベントバス |
-| `Jaeger` | トレースの収集・表示（[トレーシング仕様](observability-tracing.md)） |
-| `Prometheus` | メトリクスのscrape（[メトリクス仕様](observability-metrics.md)） |
-| `Loki` / `Promtail` | ログ（監査ログ含む）の収集・保存（[監査ログ仕様](audit-logging.md)） |
-| `Grafana` | Prometheus/Jaeger/Lokiを可視化するダッシュボード |
 
-未実装のコンポーネント（設計のみ）: network, block-storage, image, Dragonfly。
+未実装のコンポーネント（設計のみ）: network, block-storage, Dragonfly。
 
 ## 通信経路
 
@@ -24,7 +26,9 @@ flowchart LR
     CLI["kyuusha CLI"] -->|gRPC + JWT| GW["api-gateway :8080"]
     GW -->|gRPC 平文| ID["identity :8082"]
     GW -->|gRPC 平文| CO["compute :8081"]
+    GW -->|gRPC 平文| IMG["image :8083"]
     CO -->|gRPC 平文\nQuota参照| ID
+    CO -->|gRPC 平文\nImage検証| IMG
     CA1["compute-agent (hypervisor-1)"] -->|gRPC 平文\n自己登録| CO
     CA2["compute-agent (hypervisor-2)"] -->|gRPC 平文\n自己登録| CO
     CA3["compute-agent (hypervisor-3)"] -->|gRPC 平文\n自己登録| CO
@@ -32,61 +36,30 @@ flowchart LR
     CA1 <--> NATS
     CA2 <--> NATS
     CA3 <--> NATS
-
-    GW -.->|OTLP trace| J["Jaeger"]
-    CO -.->|OTLP trace| J
-    ID -.->|OTLP trace| J
-    CA1 -.->|OTLP trace| J
-    P["Prometheus"] -.->|scrape /metrics| GW
-    P -.->|scrape /metrics| CO
-    P -.->|scrape /metrics| ID
-    PT["Promtail"] -.->|read via docker socket| GW
-    PT -.->|read via docker socket| CO
-    PT -.->|read via docker socket| ID
-    PT -->|push| L["Loki"]
-    Gr["Grafana"] --> P
-    Gr --> J
-    Gr --> L
 ```
 
-- clientが到達できるのは`api-gateway`のみ。`compute`/`identity`はネットワーク的に到達可能でも
+- clientが到達できるのは`api-gateway`のみ。`compute`/`identity`/`image`はネットワーク的に到達可能でも
   クライアントが直接叩くことは想定しない構成（docker-compose上はホストにポート公開しない）
 - `compute-agent`は`compute`に**直接**gRPCで接続する（自己登録用。api-gatewayは経由しない、東西通信）
-- `compute` → `identity`もサービス間の直接gRPC呼び出し（Quota参照。同じく東西通信）
+- `compute` → `identity`（Quota参照）・`compute` → `image`（Image検証）もサービス間の直接gRPC呼び出し
+  （同じく東西通信）
 - 現状すべての通信は平文（mTLS未実装）
 
 ## エンドポイント一覧
 
 | サービス | デフォルトアドレス | 提供API |
 |---|---|---|
-| `api-gateway` | `:8080` | `VirtualMachineService`, `HypervisorService`（Get/List/Watch/SetSchedulableのみ）, `TenantService` |
+| `api-gateway` | `:8080` | `VirtualMachineService`, `HypervisorService`（Get/List/Watch/SetSchedulableのみ）, `TenantService`, `ImageService` |
 | `compute` | `:8081` | `VirtualMachineService`, `HypervisorService`（Registerを含む全RPC） |
 | `identity` | `:8082` | `TenantService` |
+| `image` | `:8083` | `ImageService` |
 | `NATS` | `:4222`（client）, `:8222`（監視用HTTP、compose環境のみ） | JetStream |
-| `Jaeger` | `:4317`（OTLP/gRPC受信）, `:16686`（UI） | - |
-| `Prometheus` | `:9090` | - |
-| `Loki` | `:3100`（社内ネットワークのみ、ホスト非公開） | - |
-| `Grafana` | `:3000` | - |
 
-各サービス自身の`/metrics`（`-metrics-addr`）: identity `:9091`, compute `:9092`,
-api-gateway `:9093`, compute-agent `:9094`。詳細は[メトリクス仕様](observability-metrics.md)。
-
-## docker-composeサービス構成
-
-`docker-compose.yml`（playground用）:
-
-| compose service | 実行バイナリ | 備考 |
-|---|---|---|
-| `nats` | 公式`nats:2-alpine`イメージ | `-js`でJetStream有効化 |
-| `identity` | `cmd/identity` | ホストにポート非公開 |
-| `compute` | `cmd/compute` | ホストにポート非公開 |
-| `api-gateway` | `cmd/api-gateway` | `8080:8080`のみホストへ公開 |
-| `compute-agent-1/2/3` | `cmd/compute-agent` | それぞれ`-hypervisor=hypervisor-N`で起動、compute/NATSへ接続 |
-| `jaeger` | 公式`jaegertracing/all-in-one`イメージ | `16686`をホストへ公開 |
-| `prometheus` | 公式`prom/prometheus`イメージ | `playground/prometheus.yml`をマウント。`9090`をホストへ公開 |
-| `grafana` | 公式`grafana/grafana`イメージ | `playground/grafana/provisioning`をマウント。`3000`をホストへ公開、匿名admin有効 |
-| `loki` | 公式`grafana/loki`イメージ | ホストにポート非公開 |
-| `promtail` | 公式`grafana/promtail`イメージ | Dockerソケットをマウントし全コンテナのログを収集、Lokiへpush |
+各サービス自身が公開する`/metrics`（Prometheus形式、`-metrics-addr`で指定）と、`-otlp-endpoint`
+で有効化されるトレースエクスポート、JSON構造化ログ（標準出力）は、kyuusha自身の設計として
+バックエンド非依存（どのProm互換ツールでscrapeするか、どのOTLPコレクタへ送るかは運用者側の
+自由）。詳細・既定ポート番号は[メトリクス仕様](observability-metrics.md)・
+[トレーシング仕様](observability-tracing.md)・[監査ログ仕様](audit-logging.md)を参照。
 
 ## 認証・認可
 
