@@ -631,6 +631,19 @@ Imageを作る機能はサポートしない**（既述の通り）。Firecracke
 
 ### UserData注入: NoCloud seed disk
 
+**実装済み**（`internal/compute-agent/fcvmm/seed.go`、`docs/specs/firecracker-boot.md`
+「UserData注入」節参照）。当初iso9660（`genisoimage`）、次にvfat（`mtools`）で作って
+みたが、playgroundが使うFirecracker CI配布カーネルの`vmlinux`には
+`CONFIG_ISO9660_FS`も`CONFIG_VFAT_FS`も入っておらずゲスト側でどちらもマウントできない
+ことがライブ検証（2回とも）で発覚した。最終的に**ext4**（`mkfs.ext4 -d`——
+`docker/Dockerfile`の`image-assets`ステージがrootfs自体を作るのに既に使っている手法の
+再利用）に切り替えた。ext4はこのカーネルで確実に使えるうえ、cloud-initのNoCloud
+データソースは`blkid`でラベルを見つけたあとファイルシステム型を指定せず汎用マウントする
+ため、実運用のcloud-initからも問題なく読める（vfat/iso9660限定ではない）。playgroundの
+最小自作Alpineゲストには実際のcloud-initが入っていないため、ライブ検証はseed diskが
+正しく届いて読めることの確認に留まる（本物のcloud-initを動かすには重量なゲスト
+イメージが要る。「この実装がカバーしないもの」参照）。
+
 KaaSがVirtualMachineに初期設定（kubeadm joinスクリプト、SSH公開鍵等）を渡す手段として、
 **cloud-initのNoCloud seed disk方式**を採用する。AWS/OpenStack Nova流の
 HTTPメタデータサービス（`169.254.169.254`への特別ルーティング）は採用しない。

@@ -19,6 +19,33 @@ mount -t sysfs sysfs /sys
 
 echo "kyuusha: firecracker guest booted OK, uptime=$(cut -d' ' -f1 /proc/uptime)s"
 
+# If compute-agent built a cloud-init NoCloud seed disk (spec.user_data was
+# set -- see internal/compute-agent/fcvmm/seed.go and docs/architecture.md
+# "UserData注入: NoCloud seed disk"), it's the second virtio-block device,
+# /dev/vdb, formatted ext4 (not vfat/ISO9660 -- this kernel has neither
+# CONFIG_VFAT_FS nor CONFIG_ISO9660_FS, only ext4). This guest has no real
+# cloud-init installed (it's a bare from-scratch Alpine rootfs, not a full
+# distro image), so this isn't actually running user-data -- it's a
+# minimal, honest stand-in that just proves the seed disk arrived and is
+# readable, the same way the tap-wiring gateway ping proves that pipe
+# end-to-end without needing a second VM.
+if [ -b /dev/vdb ]; then
+  mkdir -p /mnt/seed
+  if mount -t ext4 -o ro /dev/vdb /mnt/seed 2>/dev/null; then
+    echo "kyuusha: seed disk mounted (not real cloud-init -- proving delivery only)"
+    if [ -f /mnt/seed/user-data ]; then
+      while IFS= read -r line; do
+        echo "kyuusha: user-data: $line"
+      done < /mnt/seed/user-data
+    fi
+    if [ -f /mnt/seed/network-config ]; then
+      echo "kyuusha: seed disk also carries network-config"
+    fi
+  else
+    echo "kyuusha: seed disk present at /dev/vdb but could not be mounted"
+  fi
+fi
+
 i=0
 while [ $i -lt 8 ]; do
   ip_val=""

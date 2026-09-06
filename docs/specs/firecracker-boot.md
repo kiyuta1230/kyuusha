@@ -23,6 +23,7 @@ Imageを解決し、起動に必要な情報をすべて`CreateCommand`（NATS�
 | `kernel_url` / `rootfs_url` | 解決したImageの`spec.kernel.url` / `spec.rootfs.url`（`QCOW2`の場合は空） |
 | `boot_args` | Imageの`spec.boot_args`（空ならcompute-agent側のデフォルトを使う） |
 | `interfaces` | `network_interfaces`から作られたNetworkInterface+そのSubnetの情報（[network.md](network.md)参照）。空配列ならネットワークなしで起動する |
+| `user_data` | `VirtualMachineSpec.user_data`そのまま。空なら何も注入しない（下記「UserData注入」参照） |
 
 `kernel_url`/`rootfs_url`が空、または`driver_hint`が`FIRECRACKER`以外の場合、compute-agentは
 即座に成功を返す旧来のstub動作にフォールバックする。
@@ -47,6 +48,37 @@ Imageを解決し、起動に必要な情報をすべて`CreateCommand`（NATS�
    ことの確認ではない**（シリアルコンソールの出力内容は見ない）。実際にブートしたかどうかは
    `console.log`を人手で確認する運用（playgroundでは`scenario.sh`が起動メッセージの有無を
    確認する）
+
+## UserData注入（cloud-init NoCloud seed disk）
+
+`spec.user_data`が空でないVMには、`internal/compute-agent/fcvmm/seed.go`が
+cloud-initのNoCloud方式のseed diskを作り、root diskと並ぶ2番目の（読み取り専用の）
+virtio-blockドライブとしてFirecrackerへ渡す（ゲストからは通常`/dev/vdb`に見える）。
+`docs/architecture.md`「UserData注入: NoCloud seed disk」参照。
+
+- **中身**: `user-data`（`spec.user_data`そのまま、kyuushaは中身を検証・変換しない）、
+  `meta-data`（`instance-id`/`local-hostname`に`vm_id`を使う——VMの`name`は冪等キーで
+  空でありうるため）、そして`interfaces`の中にIP割当済みのものが1つでもあれば
+  `network-config`（cloud-initのnetwork-config v2形式。IP/prefixとprimaryインタフェースの
+  `gateway4`のみ、DNSサーバーは今のところ含めない）
+- **生成方法**: `mkfs.ext4 -L cidata -d <ディレクトリ>`（Alpineの`e2fsprogs`パッケージ、
+  compute-agentイメージにインストール済み）。フォーマットとファイル投入を1コマンドで
+  やる、`docker/Dockerfile`の`image-assets`ステージがrootfs自体を作るのに使っているのと
+  同じ手法。**当初iso9660（`genisoimage`）、次にvfat（`mtools`）で実装したが、
+  playgroundが使うFirecracker CI配布カーネルにはそのどちらのファイルシステムも
+  （`CONFIG_ISO9660_FS`も`CONFIG_VFAT_FS`も）入っておらずゲスト側でマウントできない
+  ことがライブ検証で2回とも判明し、確実に動くext4に切り替えた**。cloud-initの
+  NoCloudデータソースは`blkid`でラベルを見つけたあとファイルシステム型を指定せず
+  汎用マウントするため、ext4でも（vfat/iso9660限定ではなく）実運用のcloud-initから
+  問題なく読める
+- **前提**: ゲスト側`Image`のrootfsに実際のcloud-initが入っていること
+  （イメージビルド側の責務、kyuushaは強制しない）
+- **playgroundでの検証**: playgroundの最小自作Alpineゲストには実際のcloud-initが
+  入っていない。そのため`docker/fc-guest-init.sh`（PID 1のスタンドイン）が、
+  `/dev/vdb`が存在すればext4としてマウントし、`user-data`の中身をそのまま
+  シリアルコンソールへ書き出す——**本物のcloud-initを動かしているわけではなく**、
+  seed diskが正しく生成・接続され読めることだけを確認する自己診断（tap配線の
+  gateway ping自己診断と同じ考え方）
 
 ## 削除
 
@@ -104,3 +136,7 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
 - jailer（chroot/cgroup/namespace分離。本番運用前に必須、docs/architecture.md参照）
 - ダウンロードした`kernel_url`/`rootfs_url`の内容のdigest検証
 - Stop（一時停止）/Restart。今あるのは起動（Boot）と削除に伴う強制終了（Stop=プロセス終了）のみ
+- `user_data`の機密情報対応（保存時暗号化、監査ログからの除外。
+  `docs/architecture.md`「UserData注入」の「機密情報の扱いに関する注記」参照）
+- 本物のcloud-initを動かすゲストでの動作確認（playgroundの最小Alpineゲストには
+  cloud-init自体が入っていないため、seed diskが正しく届くことまでしか確認していない）

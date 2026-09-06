@@ -43,6 +43,12 @@ RUN apk add --no-cache --virtual .fc-fetch curl \
     && chmod +x /usr/local/bin/firecracker \
     && rm -rf "release-${FC_VERSION}-${ARCH}" \
     && apk del .fc-fetch
+# e2fsprogs: builds the cloud-init NoCloud seed disk as an ext4 image via
+# `mkfs.ext4 -d` (see internal/compute-agent/fcvmm/seed.go and
+# docs/architecture.md "UserData注入: NoCloud seed disk") -- kept
+# installed, not a build-only --virtual package, since it runs at VM Boot
+# time, not image build time.
+RUN apk add --no-cache e2fsprogs
 COPY --from=builder /out/compute-agent /usr/local/bin/compute-agent
 ENTRYPOINT ["/usr/local/bin/compute-agent"]
 

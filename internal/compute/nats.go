@@ -72,6 +72,12 @@ type CreateCommand struct {
 	// client of its own, so everything it needs to wire a real tap device
 	// per interface (internal/compute-agent/netsetup) travels here.
 	Interfaces []NetworkInterfaceInfo `json:"interfaces,omitempty"`
+	// UserData is VirtualMachineSpec.user_data verbatim (see
+	// docs/architecture.md "UserData注入: NoCloud seed disk"); empty means
+	// don't inject anything. compute-agent builds a cloud-init NoCloud
+	// seed disk from this plus Interfaces (for network-config) --
+	// see internal/compute-agent/fcvmm/seed.go.
+	UserData string `json:"user_data,omitempty"`
 }
 
 // NetworkInterfaceInfo is one VM network attachment, already resolved to

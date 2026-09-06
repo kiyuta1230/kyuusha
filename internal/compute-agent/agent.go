@@ -184,6 +184,7 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 			RootfsURL:         cmd.RootfsURL,
 			BootArgs:          cmd.BootArgs,
 			NetworkInterfaces: buildNetIfaces(cmd.VMID, cmd.Interfaces),
+			UserData:          cmd.UserData,
 		}); err != nil {
 			span.RecordError(err)
 			slog.Error("compute-agent: boot failed", "vm_id", cmd.VMID, "err", err)

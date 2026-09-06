@@ -363,4 +363,35 @@ if go run ./cmd/kyuusha vm get -addr=localhost:8080 -tenant="$tenant" -id="$vm6_
 fi
 grep -q NotFound /tmp/kyuusha-finalizer-gone-check.log && echo "    confirmed: removing the last finalizer let the real deletion (and the still-running Firecracker process's teardown) proceed"
 
+echo "==> creating a VM with -user-data-file (cloud-init NoCloud seed disk; no real cloud-init in this guest, so this only proves delivery -- see docs/specs/firecracker-boot.md 'UserData注入')"
+# vm-6 was just fully deleted above, freeing the quota slot this reuses.
+user_data_file="$(mktemp)"
+cat > "$user_data_file" <<'EOF'
+#cloud-config
+hostname: scenario-cloudinit-vm
+EOF
+cloudinit_vm_line="$(go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-cloudinit \
+  -image="$image" -vcpu=1 -memory-mb=128 -user-data-file="$user_data_file" -wait)"
+echo "$cloudinit_vm_line"
+if ! echo "$cloudinit_vm_line" | grep -q 'phase=Running'; then
+  echo "!! VM with -user-data-file did not reach Running: $cloudinit_vm_line" >&2
+  exit 1
+fi
+cloudinit_vm_id="$(echo "$cloudinit_vm_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+cloudinit_console=""
+for _ in $(seq 1 10); do
+  cloudinit_console="$(go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$cloudinit_vm_id" 2>/dev/null)"
+  echo "$cloudinit_console" | grep -q 'kyuusha: seed disk' && break
+  sleep 1
+done
+if ! echo "$cloudinit_console" | grep -q 'kyuusha: seed disk mounted'; then
+  echo "!! could not confirm the seed disk was mounted (no /dev/kvm on this host? try: kyuusha vm console -tenant=$tenant -id=$cloudinit_vm_id): $cloudinit_console" >&2
+else
+  if ! echo "$cloudinit_console" | grep -q 'kyuusha: user-data: hostname: scenario-cloudinit-vm'; then
+    echo "!! seed disk mounted but user-data content did not round-trip: $cloudinit_console" >&2
+    exit 1
+  fi
+  echo "    confirmed: the cloud-init NoCloud seed disk was built, attached, and its user-data read back correctly by the guest"
+fi
+
 echo "==> stack left running; run 'docker compose down' when done"

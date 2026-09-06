@@ -13,7 +13,7 @@
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-recovery-policy`(`none`\|`self-heal`、既定`none`) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-wait`(Running/Errorまでブロック) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-recovery-policy`(`none`\|`self-heal`、既定`none`) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[Firecracker起動仕様](firecracker-boot.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |

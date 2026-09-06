@@ -191,6 +191,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			MemoryMB:   vm.Spec.MemoryMB,
 			DriverHint: string(vm.Spec.DriverHint),
 			Interfaces: netifs,
+			UserData:   vm.Spec.UserData,
 		}
 		// Resolve the Image to concrete boot inputs now (not at Create time:
 		// the Image could have changed, and compute-agent has no image

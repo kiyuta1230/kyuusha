@@ -146,6 +146,7 @@ func vmCreate(args []string) {
 	memoryMB := fs.Int64("memory-mb", 1024, "memory in MB")
 	recovery := fs.String("recovery-policy", "none", "none|self-heal")
 	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
+	userDataFile := fs.String("user-data-file", "", "path to a cloud-init user-data file (NoCloud seed disk; see docs/architecture.md \"UserData注入\"); empty means don't inject anything")
 	wait := fs.Bool("wait", false, "block until the VM reaches Running or Error")
 	fs.Parse(args)
 
@@ -161,6 +162,15 @@ func vmCreate(args []string) {
 		netifs = append(netifs, &computev1.NetworkAttachment{SubnetId: subnetID, Primary: i == 0})
 	}
 
+	var userData string
+	if *userDataFile != "" {
+		b, err := os.ReadFile(*userDataFile)
+		if err != nil {
+			fatal("-user-data-file: %v", err)
+		}
+		userData = string(b)
+	}
+
 	client := dial(*addr)
 	ctx := authedContext(context.Background(), *token)
 
@@ -173,6 +183,7 @@ func vmCreate(args []string) {
 			MemoryMb:          *memoryMB,
 			RecoveryPolicy:    parseRecoveryPolicy(*recovery),
 			NetworkInterfaces: netifs,
+			UserData:          userData,
 		},
 	})
 	if err != nil {

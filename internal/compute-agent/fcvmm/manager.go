@@ -4,7 +4,9 @@
 // for the scope this covers and what it doesn't. Real network interfaces
 // (tap devices, per-VLAN bridges -- see internal/compute-agent/netsetup)
 // are wired for VMs whose spec carries them; a VM with none boots exactly
-// as before (network-less, serial-only). Only driver_hint=FIRECRACKER
+// as before (network-less, serial-only). A VM with spec.user_data set gets
+// a cloud-init NoCloud seed disk (see seed.go and docs/architecture.md
+// "UserData注入: NoCloud seed disk"). Only driver_hint=FIRECRACKER
 // (KERNEL_ROOTFS images) is handled here; QEMU remains an unimplemented
 // stub, same as before this package existed.
 package fcvmm
@@ -57,6 +59,13 @@ type BootSpec struct {
 	RootfsURL         string
 	BootArgs          string
 	NetworkInterfaces []NetIface
+	// UserData is spec.user_data verbatim (see docs/architecture.md
+	// "UserData注入: NoCloud seed disk"); empty means don't inject
+	// anything, matching that field's own doc comment. Non-empty triggers
+	// building a cidata-labeled seed disk (see seed.go) carrying it plus
+	// meta-data and, if any NetworkInterfaces have an allocated IP,
+	// network-config.
+	UserData string
 }
 
 // NetIface is one already-resolved network attachment Boot should wire for
@@ -215,14 +224,35 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	if len(netArgs) > 0 {
 		bootArgs = bootArgs + " " + strings.Join(netArgs, " ")
 	}
+
+	drives := []fcDrive{{
+		DriveID:      "rootfs",
+		PathOnHost:   rootfsCopy,
+		IsRootDevice: true,
+		IsReadOnly:   false,
+	}}
+	if spec.UserData != "" {
+		seedISO, err := buildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
+		if err != nil {
+			for _, t := range taps {
+				_ = netsetup.DeleteTap(t)
+			}
+			return fmt.Errorf("fcvmm: build seed disk: %w", err)
+		}
+		// Read-only, non-root: the guest sees this as a second
+		// virtio-block device (typically /dev/vdb) alongside its root
+		// disk, exactly what cloud-init's NoCloud datasource expects.
+		drives = append(drives, fcDrive{
+			DriveID:      "seed",
+			PathOnHost:   seedISO,
+			IsRootDevice: false,
+			IsReadOnly:   true,
+		})
+	}
+
 	cfg := fcConfig{
-		BootSource: fcBootSource{KernelImagePath: kernelPath, BootArgs: bootArgs},
-		Drives: []fcDrive{{
-			DriveID:      "rootfs",
-			PathOnHost:   rootfsCopy,
-			IsRootDevice: true,
-			IsReadOnly:   false,
-		}},
+		BootSource:        fcBootSource{KernelImagePath: kernelPath, BootArgs: bootArgs},
+		Drives:            drives,
 		MachineConfig:     fcMachineConfig{VcpuCount: spec.VCPU, MemSizeMib: spec.MemoryMB},
 		NetworkInterfaces: fcNetIfaces,
 	}
