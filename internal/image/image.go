@@ -87,3 +87,7 @@ func (i *Image) GetResourceVersion() int64   { return i.Meta.ResourceVersion }
 func (i *Image) SetResourceVersion(rv int64) { i.Meta.ResourceVersion = rv }
 func (i *Image) GetCreatedAt() time.Time     { return i.Meta.CreatedAt }
 func (i *Image) SetCreatedAt(t time.Time)    { i.Meta.CreatedAt = t }
+func (i *Image) GetDeletedAt() *time.Time    { return i.Meta.DeletedAt }
+func (i *Image) SetDeletedAt(t *time.Time)   { i.Meta.DeletedAt = t }
+func (i *Image) GetFinalizers() []string     { return i.Meta.Finalizers }
+func (i *Image) SetFinalizers(f []string)    { i.Meta.Finalizers = f }

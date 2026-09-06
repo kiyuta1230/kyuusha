@@ -95,3 +95,7 @@ func (v *VirtualMachine) SetTenantID(id string)       { v.Meta.TenantID = id }
 func (v *VirtualMachine) GetResourceVersion() int64   { return v.Meta.ResourceVersion }
 func (v *VirtualMachine) SetResourceVersion(rv int64) { v.Meta.ResourceVersion = rv }
 func (v *VirtualMachine) SetCreatedAt(t time.Time)    { v.Meta.CreatedAt = t }
+func (v *VirtualMachine) GetDeletedAt() *time.Time    { return v.Meta.DeletedAt }
+func (v *VirtualMachine) SetDeletedAt(t *time.Time)   { v.Meta.DeletedAt = t }
+func (v *VirtualMachine) GetFinalizers() []string     { return v.Meta.Finalizers }
+func (v *VirtualMachine) SetFinalizers(f []string)    { v.Meta.Finalizers = f }

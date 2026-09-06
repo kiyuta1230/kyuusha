@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func newTestService(t *testing.T, ctx context.Context) *Service {
@@ -116,5 +118,75 @@ func TestService_GetIsTenantScoped(t *testing.T) {
 	}
 	if _, err := svc.Get(ctx, "tenant-b", m.Meta.ID); err != ErrNotFound {
 		t.Fatalf("cross-tenant Get: got %v, want ErrNotFound", err)
+	}
+}
+
+// TestService_DeleteWithFinalizerBlocksUntilCleared exercises
+// docs/architecture.md "Finalizer": an external controller (e.g. one
+// checking an external network ACL before letting a VM's IP be reused, see
+// the discussion that motivated this) can hold a VM open past Delete by
+// adding its own name to Meta.Finalizers, and the VM only actually
+// disappears once that's removed via Update.
+func TestService_DeleteWithFinalizerBlocksUntilCleared(t *testing.T) {
+	ctx := context.Background()
+	// A tight max_vms=1 quota (rather than newTestService's unlimited one)
+	// is what makes the "tenant_usage was already decremented at Delete-
+	// call time" assertion below meaningful.
+	svc, err := NewService(ctx, &FakeTenantClient{Quota: &identityv1.QuotaSpec{
+		MaxVcpu: 8, MaxMemoryMb: 8192, MaxVms: 1, MaxVcpuPerVm: 8, MaxMemoryMbPerVm: 8192,
+	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	const tenant = "tenant-a"
+
+	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	vm.Meta.Finalizers = []string{"acme.corp/network-acl-cleanup"}
+	updated, err := svc.Update(ctx, vm)
+	if err != nil {
+		t.Fatalf("Update to add finalizer: %v", err)
+	}
+
+	if err := svc.Delete(ctx, tenant, updated.Meta.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	pending, err := svc.Get(ctx, tenant, updated.Meta.ID)
+	if err != nil {
+		t.Fatalf("Get after Delete (finalizer pending): %v", err)
+	}
+	if pending.Meta.DeletedAt == nil {
+		t.Fatal("DeletedAt was not set")
+	}
+	if pending.Status.Phase != PhaseDeleting {
+		t.Fatalf("Phase = %q, want Deleting", pending.Status.Phase)
+	}
+
+	// tenant_usage was already decremented at Delete-call time (see
+	// Service.Delete's doc comment): a second VM the same size fits even
+	// though the first, finalizer-blocked one still physically exists.
+	if _, err := svc.Create(ctx, tenant, "web-2", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+	}); err != nil {
+		t.Fatalf("Create after Delete-with-finalizer freed quota: %v", err)
+	}
+
+	// A repeated Delete call must not double-decrement tenant_usage or
+	// error out.
+	if err := svc.Delete(ctx, tenant, updated.Meta.ID); err != nil {
+		t.Fatalf("second Delete while finalizer still pending: %v", err)
+	}
+
+	pending.Meta.Finalizers = nil
+	if _, err := svc.Update(ctx, pending); err != nil {
+		t.Fatalf("Update clearing the last finalizer: %v", err)
+	}
+	if _, err := svc.Get(ctx, tenant, updated.Meta.ID); err != ErrNotFound {
+		t.Fatalf("Get after clearing the last finalizer: got %v, want ErrNotFound", err)
 	}
 }

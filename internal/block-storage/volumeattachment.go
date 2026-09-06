@@ -52,3 +52,7 @@ func (a *VolumeAttachment) GetResourceVersion() int64   { return a.Meta.Resource
 func (a *VolumeAttachment) SetResourceVersion(rv int64) { a.Meta.ResourceVersion = rv }
 func (a *VolumeAttachment) GetCreatedAt() time.Time     { return a.Meta.CreatedAt }
 func (a *VolumeAttachment) SetCreatedAt(t time.Time)    { a.Meta.CreatedAt = t }
+func (a *VolumeAttachment) GetDeletedAt() *time.Time    { return a.Meta.DeletedAt }
+func (a *VolumeAttachment) SetDeletedAt(t *time.Time)   { a.Meta.DeletedAt = t }
+func (a *VolumeAttachment) GetFinalizers() []string     { return a.Meta.Finalizers }
+func (a *VolumeAttachment) SetFinalizers(f []string)    { a.Meta.Finalizers = f }

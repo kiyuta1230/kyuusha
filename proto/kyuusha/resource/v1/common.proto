@@ -7,14 +7,24 @@ option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1;r
 import "google/protobuf/timestamp.proto";
 
 // ObjectMeta is embedded in every top-level kyuusha resource.
-// See docs/architecture.md "リソース共通の型".
+// See docs/architecture.md "リソース共通の型" and "Finalizer".
 message ObjectMeta {
   string id = 1;
   string name = 2;
   string tenant_id = 3;
   int64 resource_version = 4;
   google.protobuf.Timestamp created_at = 5;
+  // Set (once, permanently -- never cleared) the moment Delete is first
+  // called. If finalizers is empty at that moment, the object is removed
+  // immediately and this is never observed by anyone. If finalizers is
+  // non-empty, the object lingers with this set until every entry is
+  // removed via Update, at which point it's actually removed.
   google.protobuf.Timestamp deleted_at = 6;
+  // Opaque strings naming holders that must each remove their own entry
+  // (via Update) before a Delete that set deleted_at can actually take
+  // effect. Empty for almost every resource in practice today; see
+  // docs/architecture.md "Finalizer".
+  repeated string finalizers = 7;
 }
 
 message Condition {

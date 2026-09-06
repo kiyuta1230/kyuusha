@@ -9,7 +9,7 @@
 - `-token`: bearerトークン（省略時は環境変数`$KYUUSHA_TOKEN`）。両方空なら実行時エラー
 - 認証・認可の詳細は[認証・認可仕様](authn-authz.md)を参照
 
-## `kyuusha vm <create|get|list|watch|console>`
+## `kyuusha vm <create|get|list|watch|console|delete|add-finalizer|remove-finalizer>`
 
 | サブコマンド | フラグ |
 |---|---|
@@ -18,12 +18,20 @@
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
 | `console` | `-tenant`(必須) `-id`(必須) `-tail-bytes`(既定0=サーバ既定値~64KiB、負値で全量) `-follow`(`tail -f`同様に新規出力を流し続ける) |
+| `delete` | `-tenant`(必須) `-id`(必須)。`meta.finalizers`が残っていれば実削除されず`deleted_at`がセットされるだけになる（[外部システム連携仕様](external-integration.md)参照） |
+| `add-finalizer` | `-tenant`(必須) `-id`(必須) `-finalizer`(必須、例`acme.corp/network-acl-cleanup`) |
+| `remove-finalizer` | `-tenant`(必須) `-id`(必須) `-finalizer`(必須) |
 
 `console`はVMのシリアルコンソール（[Firecracker起動仕様](firecracker-boot.md)参照）を
 標準出力へそのまま垂れ流す（フレーミングなし、パイプ/ページャに渡せる）。スケジュール
 されたことがない、または実VMMを一度も起動していないVMに対してはエラーになる。
 
-`update`/`delete`はgRPC APIとしては存在するがCLIには未実装。
+`add-finalizer`/`remove-finalizer`はGet→ローカルで`meta.finalizers`を変更→Updateという
+素朴なクライアント側実装（専用RPCは無い）。詳細は[外部システム連携仕様](external-integration.md)
+参照。
+
+`update`はgRPC APIとして存在し、上記2つのCLIコマンドが内部で使っている。汎用の
+`kyuusha vm update`コマンド自体は無い。
 
 ## `kyuusha tenant <create|get|list|watch>`
 

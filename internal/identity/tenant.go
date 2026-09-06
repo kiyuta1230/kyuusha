@@ -60,3 +60,7 @@ func (t *Tenant) GetResourceVersion() int64   { return t.Meta.ResourceVersion }
 func (t *Tenant) SetResourceVersion(rv int64) { t.Meta.ResourceVersion = rv }
 func (t *Tenant) GetCreatedAt() time.Time     { return t.Meta.CreatedAt }
 func (t *Tenant) SetCreatedAt(tm time.Time)   { t.Meta.CreatedAt = tm }
+func (t *Tenant) GetDeletedAt() *time.Time    { return t.Meta.DeletedAt }
+func (t *Tenant) SetDeletedAt(tm *time.Time)  { t.Meta.DeletedAt = tm }
+func (t *Tenant) GetFinalizers() []string     { return t.Meta.Finalizers }
+func (t *Tenant) SetFinalizers(f []string)    { t.Meta.Finalizers = f }

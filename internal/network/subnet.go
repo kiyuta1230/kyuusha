@@ -66,3 +66,7 @@ func (s *Subnet) GetResourceVersion() int64   { return s.Meta.ResourceVersion }
 func (s *Subnet) SetResourceVersion(rv int64) { s.Meta.ResourceVersion = rv }
 func (s *Subnet) GetCreatedAt() time.Time     { return s.Meta.CreatedAt }
 func (s *Subnet) SetCreatedAt(t time.Time)    { s.Meta.CreatedAt = t }
+func (s *Subnet) GetDeletedAt() *time.Time    { return s.Meta.DeletedAt }
+func (s *Subnet) SetDeletedAt(t *time.Time)   { s.Meta.DeletedAt = t }
+func (s *Subnet) GetFinalizers() []string     { return s.Meta.Finalizers }
+func (s *Subnet) SetFinalizers(f []string)    { s.Meta.Finalizers = f }

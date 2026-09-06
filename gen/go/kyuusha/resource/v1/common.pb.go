@@ -23,7 +23,7 @@ const (
 )
 
 // ObjectMeta is embedded in every top-level kyuusha resource.
-// See docs/architecture.md "リソース共通の型".
+// See docs/architecture.md "リソース共通の型" and "Finalizer".
 type ObjectMeta struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -31,9 +31,19 @@ type ObjectMeta struct {
 	TenantId        string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	ResourceVersion int64                  `protobuf:"varint,4,opt,name=resource_version,json=resourceVersion,proto3" json:"resource_version,omitempty"`
 	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	DeletedAt       *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Set (once, permanently -- never cleared) the moment Delete is first
+	// called. If finalizers is empty at that moment, the object is removed
+	// immediately and this is never observed by anyone. If finalizers is
+	// non-empty, the object lingers with this set until every entry is
+	// removed via Update, at which point it's actually removed.
+	DeletedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
+	// Opaque strings naming holders that must each remove their own entry
+	// (via Update) before a Delete that set deleted_at can actually take
+	// effect. Empty for almost every resource in practice today; see
+	// docs/architecture.md "Finalizer".
+	Finalizers    []string `protobuf:"bytes,7,rep,name=finalizers,proto3" json:"finalizers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ObjectMeta) Reset() {
@@ -104,6 +114,13 @@ func (x *ObjectMeta) GetCreatedAt() *timestamppb.Timestamp {
 func (x *ObjectMeta) GetDeletedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.DeletedAt
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetFinalizers() []string {
+	if x != nil {
+		return x.Finalizers
 	}
 	return nil
 }
@@ -188,7 +205,7 @@ var File_kyuusha_resource_v1_common_proto protoreflect.FileDescriptor
 
 const file_kyuusha_resource_v1_common_proto_rawDesc = "" +
 	"\n" +
-	" kyuusha/resource/v1/common.proto\x12\x13kyuusha.resource.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xee\x01\n" +
+	" kyuusha/resource/v1/common.proto\x12\x13kyuusha.resource.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8e\x02\n" +
 	"\n" +
 	"ObjectMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -198,7 +215,10 @@ const file_kyuusha_resource_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"deleted_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tdeletedAt\"\xb3\x01\n" +
+	"deleted_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tdeletedAt\x12\x1e\n" +
+	"\n" +
+	"finalizers\x18\a \x03(\tR\n" +
+	"finalizers\"\xb3\x01\n" +
 	"\tCondition\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +

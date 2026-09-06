@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
@@ -53,7 +54,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  kyuusha vm <create|get|list|watch|console> [flags]
+  kyuusha vm <create|get|list|watch|console|delete|add-finalizer|remove-finalizer> [flags]
   kyuusha tenant <create|get|list|watch> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
   kyuusha image <create|get|list|watch> [flags]
@@ -80,6 +81,12 @@ func vmCmd(args []string) {
 		vmWatch(args[1:])
 	case "console":
 		vmConsole(args[1:])
+	case "delete":
+		vmDelete(args[1:])
+	case "add-finalizer":
+		vmAddFinalizer(args[1:])
+	case "remove-finalizer":
+		vmRemoveFinalizer(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -233,6 +240,24 @@ func vmGet(args []string) {
 	printVM(vm)
 }
 
+func vmDelete(args []string) {
+	fs := flag.NewFlagSet("vm delete", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+	if _, err := client.Delete(ctx, &computev1.DeleteVirtualMachineRequest{TenantId: *tenant, Id: *id}); err != nil {
+		fatal("delete: %v", err)
+	}
+}
+
 func vmList(args []string) {
 	fs := flag.NewFlagSet("vm list", flag.ExitOnError)
 	addr := fs.String("addr", "localhost:8080", "api-gateway address")
@@ -333,10 +358,93 @@ func vmConsole(args []string) {
 }
 
 func printVM(vm *computev1.VirtualMachine) {
-	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s finalizers=%s deleted_at=%s rv=%d\n",
 		vm.GetMeta().GetId(), vm.GetMeta().GetName(), vm.GetMeta().GetTenantId(),
 		vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(),
-		strings.Join(vm.GetStatus().GetInterfaceRefs(), ","), vm.GetMeta().GetResourceVersion())
+		strings.Join(vm.GetStatus().GetInterfaceRefs(), ","),
+		strings.Join(vm.GetMeta().GetFinalizers(), ","), deletedAtString(vm.GetMeta().GetDeletedAt()),
+		vm.GetMeta().GetResourceVersion())
+}
+
+func deletedAtString(t *timestamppb.Timestamp) string {
+	if t == nil {
+		return ""
+	}
+	return t.AsTime().Format(time.RFC3339)
+}
+
+// vmAddFinalizer/vmRemoveFinalizer implement docs/architecture.md
+// "Finalizer": an external controller registers or clears its own holder
+// name in meta.finalizers via a plain Get-then-Update, exactly like any
+// other VM field mutation -- there's no dedicated RPC for this, Finalizers
+// is just another part of ObjectMeta. No retry-on-conflict here (unlike
+// e.g. compute's internal updateHypervisor): this is a one-shot CLI tool,
+// not a controller loop, so a resource_version conflict is simply reported
+// to the caller to retry themselves.
+func vmAddFinalizer(args []string) {
+	fs := flag.NewFlagSet("vm add-finalizer", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	finalizer := fs.String("finalizer", "", "holder name to add, e.g. \"acme.corp/network-acl-cleanup\" (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" || *finalizer == "" {
+		fatal("-tenant, -id, and -finalizer are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+
+	vm, err := client.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: *tenant, Id: *id})
+	if err != nil {
+		fatal("get: %v", err)
+	}
+	for _, f := range vm.GetMeta().GetFinalizers() {
+		if f == *finalizer {
+			printVM(vm) // already present: idempotent no-op
+			return
+		}
+	}
+	vm.Meta.Finalizers = append(vm.Meta.Finalizers, *finalizer)
+	updated, err := client.Update(ctx, &computev1.UpdateVirtualMachineRequest{TenantId: *tenant, Vm: vm})
+	if err != nil {
+		fatal("update: %v", err)
+	}
+	printVM(updated)
+}
+
+func vmRemoveFinalizer(args []string) {
+	fs := flag.NewFlagSet("vm remove-finalizer", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	finalizer := fs.String("finalizer", "", "holder name to remove (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" || *finalizer == "" {
+		fatal("-tenant, -id, and -finalizer are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+
+	vm, err := client.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: *tenant, Id: *id})
+	if err != nil {
+		fatal("get: %v", err)
+	}
+	kept := vm.Meta.Finalizers[:0]
+	for _, f := range vm.GetMeta().GetFinalizers() {
+		if f != *finalizer {
+			kept = append(kept, f)
+		}
+	}
+	vm.Meta.Finalizers = kept
+	updated, err := client.Update(ctx, &computev1.UpdateVirtualMachineRequest{TenantId: *tenant, Vm: vm})
+	if err != nil {
+		fatal("update: %v", err)
+	}
+	printVM(updated)
 }
 
 func parseRecoveryPolicy(s string) computev1.RecoveryPolicy {

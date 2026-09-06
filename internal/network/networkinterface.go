@@ -56,3 +56,7 @@ func (n *NetworkInterface) GetResourceVersion() int64   { return n.Meta.Resource
 func (n *NetworkInterface) SetResourceVersion(rv int64) { n.Meta.ResourceVersion = rv }
 func (n *NetworkInterface) GetCreatedAt() time.Time     { return n.Meta.CreatedAt }
 func (n *NetworkInterface) SetCreatedAt(t time.Time)    { n.Meta.CreatedAt = t }
+func (n *NetworkInterface) GetDeletedAt() *time.Time    { return n.Meta.DeletedAt }
+func (n *NetworkInterface) SetDeletedAt(t *time.Time)   { n.Meta.DeletedAt = t }
+func (n *NetworkInterface) GetFinalizers() []string     { return n.Meta.Finalizers }
+func (n *NetworkInterface) SetFinalizers(f []string)    { n.Meta.Finalizers = f }

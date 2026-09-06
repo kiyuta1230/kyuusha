@@ -199,6 +199,14 @@ func (s *Store[T, PT]) List(ctx context.Context, tenantID string) ([]T, error) {
 
 // Update requires obj's resource_version to match the stored value
 // (optimistic concurrency); mismatches return errs.Conflict.
+//
+// deleted_at is one-way (see Delete and docs/architecture.md "Finalizer"):
+// once Delete has set it, this always keeps the stored value regardless of
+// what obj carries -- a caller can shrink finalizers, but can never
+// resurrect an object already marked for deletion. If that shrink empties
+// finalizers, the object is actually removed here (emitting Deleted)
+// instead of being stored (emitting Modified), the same way the
+// finalizer-free path of Delete itself would have removed it immediately.
 func (s *Store[T, PT]) Update(ctx context.Context, obj T) (T, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -214,9 +222,28 @@ func (s *Store[T, PT]) Update(ctx context.Context, obj T) (T, error) {
 		return zero, s.errs.Conflict
 	}
 
+	if deletedAt := PT(&current).GetDeletedAt(); deletedAt != nil {
+		p.SetDeletedAt(deletedAt)
+		if len(p.GetFinalizers()) == 0 {
+			s.removeLocked(p)
+			s.nextRV++
+			p.SetResourceVersion(s.nextRV)
+			s.emitLocked(Event[T]{Type: EventDeleted, Object: obj, ResourceVersion: s.nextRV})
+			return obj, nil
+		}
+	}
+
 	return s.putLocked(obj, EventModified), nil
 }
 
+// Delete removes the object immediately if it has no finalizers (the
+// common case today -- unchanged from before finalizers existed). If it
+// has finalizers, this instead marks it for deletion (sets deleted_at, if
+// not already set) and emits Modified rather than Deleted: whoever holds a
+// finalizer is expected to Watch for deleted_at appearing, do its cleanup,
+// then call Update with its own entry removed from finalizers. Once the
+// last one clears, Update performs the actual removal (see above). See
+// docs/architecture.md "Finalizer".
 func (s *Store[T, PT]) Delete(ctx context.Context, tenantID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -226,14 +253,36 @@ func (s *Store[T, PT]) Delete(ctx context.Context, tenantID, id string) error {
 	if !ok || p.GetTenantID() != tenantID {
 		return s.errs.NotFound
 	}
-	delete(s.byID, id)
-	if p.GetName() != "" {
-		delete(s.byTenantName, tenantID+"/"+p.GetName())
+
+	if len(p.GetFinalizers()) == 0 {
+		s.removeLocked(p)
+		s.nextRV++
+		p.SetResourceVersion(s.nextRV)
+		s.emitLocked(Event[T]{Type: EventDeleted, Object: obj, ResourceVersion: s.nextRV})
+		return nil
 	}
-	s.nextRV++
-	p.SetResourceVersion(s.nextRV)
-	s.emitLocked(Event[T]{Type: EventDeleted, Object: obj, ResourceVersion: s.nextRV})
+
+	if p.GetDeletedAt() != nil {
+		// Deletion is already in progress (a prior Delete call already set
+		// this): a repeated call is a true no-op, not a second Modified
+		// event over nothing actually new.
+		return nil
+	}
+	now := time.Now()
+	p.SetDeletedAt(&now)
+	s.putLocked(obj, EventModified)
 	return nil
+}
+
+// removeLocked deletes id from both indexes. Callers must hold s.mu and
+// still need to bump nextRV/emit themselves (this alone doesn't produce an
+// event, since Delete and Update need different ResourceVersion/Event
+// values around it).
+func (s *Store[T, PT]) removeLocked(p PT) {
+	delete(s.byID, p.GetID())
+	if p.GetName() != "" {
+		delete(s.byTenantName, p.GetTenantID()+"/"+p.GetName())
+	}
 }
 
 // Watch replays history newer than sinceRV (0 for "from the start") and

@@ -156,6 +156,7 @@ func toMetaProto(m resource.ObjectMeta) *resourcev1.ObjectMeta {
 		TenantId:        m.TenantID,
 		ResourceVersion: m.ResourceVersion,
 		CreatedAt:       timestamppb.New(m.CreatedAt),
+		Finalizers:      m.Finalizers,
 	}
 	if m.DeletedAt != nil {
 		out.DeletedAt = timestamppb.New(*m.DeletedAt)

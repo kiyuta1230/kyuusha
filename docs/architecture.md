@@ -122,7 +122,8 @@ message ObjectMeta {
   string tenant_id = 3;       // = KaaSクラスタ単位のテナント
   int64  resource_version = 4; // 楽観的並行性制御(更新時に一致確認)
   int64  created_at = 5;
-  int64  deleted_at = 6;      // 論理削除(任意)
+  int64  deleted_at = 6;      // Delete呼び出し時に一度だけセット、以後不変。「Finalizer」節参照
+  repeated string finalizers = 7; // 空でなければdeleted_at後も実削除をブロックする。同節参照
 }
 
 message Condition {
@@ -834,6 +835,91 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
   `Running`/`Stopped`から`Scheduled`（新ハイパーバイザー）へ差し戻し、`Provisioning`を再実行する。既存の
   `NetworkInterface`（IPは維持しtapのみ再配線）と、`persistent_root_disk`なら`status.root_volume_ref`の
   Volumeを再利用する。`NONE`の場合は`Error`へ遷移し`HypervisorUnreachable`を記録するのみ（復旧はKaaS側の責務）
+
+## Finalizer: 外部システムによる削除ブロック
+
+### きっかけ: OpenStackでの外部システム連携の難しさ
+
+OpenStack運用の実体験から、2種類の異なるニーズが浮かび上がった。(1)「VM起動が
+終わったら自社CMDBに登録する」「IPが払い出されたらネットワーク台帳に登録する」
+のような**通知系**の連携と、(2)「VM作成前に独自バリデーションを追加する」
+「VM削除時、そのインターフェースのIPが外部のネットワークACLにまだ残っていたら
+削除を拒否する」のような**ゲート系**の連携。前者はOpenStackのRabbitMQ notification
+（取りこぼしが起きうる、resumeできない）で対応するしかなく運用上つらい。後者に
+至っては、Nova/Neutronにはそもそも標準の拡張点がなく、パッチを当てるかポーリングで
+外側からDBを見に行くような無理のあるやり方しかなかった。
+
+kyuushaでは、この2つを別の仕組みとして素直に解決する。
+
+- **通知系**: 既存のWatch（`resource_version`からの再開）で十分。OpenStackの
+  notificationと違い取りこぼしても再開できるため、新しい仕組みは要らない
+- **ゲート系（Delete側）**: 本節で説明する**Finalizer**（Kubernetesの同名パターンを
+  そのまま借用）
+- **ゲート系（Create側）**: ValidatingAdmissionWebhook相当の仕組みが要るはずだが、
+  同期的な外部呼び出しの分だけ可用性のカップリング・timeout/failure policy設計・
+  「誰がwebhookを登録できるか」というセキュリティ面まで検討が必要で、Finalizerより
+  一段複雑。設計自体は今後の課題として明示しておくが、本パスでは実装しない
+
+### 仕組み
+
+`ObjectMeta`に`finalizers`（不透明な文字列のリスト）を追加する。`Delete`は
+`finalizers`が空なら（今まで通り）即座に削除する。空でなければ、`deleted_at`を
+セットして**実削除はせず**、`Modified`イベントとして扱う（`Deleted`イベントは
+まだ出さない）。`deleted_at`は一度セットされたら二度と消せない——Updateでどんな
+値を送ってきても、サーバー側が保持している値をそのまま維持する。
+
+外部コントローラーは、対象リソースの生成時（またはいつでも）自分の名前
+（例: `"acme.corp/network-acl-cleanup"`）を`finalizers`にUpdateで追加しておく。
+Watchで`deleted_at`が付いたオブジェクトを見つけたら、自分の後処理（外部ACLの
+確認など）を行い、完了したら自分のエントリだけを取り除いてUpdateを呼ぶ。
+`finalizers`が空になった時点で、そのUpdate呼び出しの中で実際に削除され、
+`Deleted`イベントが出る。
+
+```mermaid
+sequenceDiagram
+    participant Cl as Client
+    participant St as resource.Store
+    participant Ex as 外部コントローラー
+
+    Ex->>St: Update(finalizers += "acme.corp/network-acl-cleanup")
+    Cl->>St: Delete()
+    alt finalizersが空
+        St->>St: 即座に削除、Deletedイベント
+    else finalizersが非空
+        St->>St: deleted_atをセット、Modifiedイベント（実削除しない）
+        Ex->>Ex: Watchでdeleted_at検知→外部ACL確認等の後処理
+        Ex->>St: Update(finalizers -= "acme.corp/network-acl-cleanup")
+        St->>St: finalizersが空になった→実際に削除、Deletedイベント
+    end
+```
+
+**新しい通信路もRPCも要らない**: 既存のWatch/Updateだけで表現できる。
+**フェイルセーフ**: 外部コントローラーが落ちていれば、単に削除がブロックされ
+続けるだけ（誤って削除が進むことはない）。この2点が、admission webhookより
+先にFinalizerから着手する理由——低コストでリターンが大きい。
+
+### 汎用実装、今のところVirtualMachineだけが使う
+
+`finalizers`/`deleted_at`の処理自体は`internal/resource.Store`（全リソース共通の
+汎用実装）に入っており、どのリソース型でも使える。ただし現時点で実際に
+Finalizerを使う経路が存在するのはVirtualMachineのみ（`compute.Service.Delete`が
+Finalizer存在時に`status.phase = Deleting`へ遷移させてからstore.Deleteを呼ぶ）。
+
+**既知の穴**: Subnet/NetworkInterface/Volumeの各`Delete`実装は、VLAN/IPプールの
+解放や`tenant_usage`の減算を「Deleteが呼ばれた時点で」無条件に行っている。これらの
+型に将来Finalizerを付けると、オブジェクト自体はまだ存在している（Finalizer待ち）
+のに、プール割当だけ先に解放されてしまう整合性の穴がある。今のところこれらの型に
+Finalizerを付ける経路が無いため実害はないが、対応は個別に必要。
+
+**既知の穴（認可）**: Finalizerエントリの削除は、対象オブジェクトへのUpdate権限が
+あれば誰でもできる。Finalizer名ごとの細粒度認可（「このFinalizerは登録した
+コントローラー自身しか消せない」）は無い——現状のOPAポリシー（`tenant_id`と`role`
+のみを見る）では表現できないため、テナント自身のトークンが外部コントローラーの
+Finalizerを勝手に消してしまうことを技術的には妨げない。将来の課題。
+
+`deleted_at`はprotoの`ObjectMeta`に元々あった「論理削除(任意)」というコメント付きの
+未使用フィールドをそのまま転用した——新しいフィールドを増やす前に、既にある
+休眠フィールドの意図を確認して再利用する形にした。
 
 ## 認証・認可とHypervisor登録
 

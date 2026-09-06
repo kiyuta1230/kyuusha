@@ -128,6 +128,7 @@ func toHypervisor(h compute.Hypervisor) *computev1.Hypervisor {
 		TenantId:        h.Meta.TenantID,
 		ResourceVersion: h.Meta.ResourceVersion,
 		CreatedAt:       timestamppb.New(h.Meta.CreatedAt),
+		Finalizers:      h.Meta.Finalizers,
 	}
 	if h.Meta.DeletedAt != nil {
 		meta.DeletedAt = timestamppb.New(*h.Meta.DeletedAt)

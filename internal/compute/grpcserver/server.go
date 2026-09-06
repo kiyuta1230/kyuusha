@@ -242,6 +242,7 @@ func toVM(vm compute.VirtualMachine) *computev1.VirtualMachine {
 		TenantId:        vm.Meta.TenantID,
 		ResourceVersion: vm.Meta.ResourceVersion,
 		CreatedAt:       timestamppb.New(vm.Meta.CreatedAt),
+		Finalizers:      vm.Meta.Finalizers,
 	}
 	if vm.Meta.DeletedAt != nil {
 		meta.DeletedAt = timestamppb.New(*vm.Meta.DeletedAt)
@@ -262,6 +263,7 @@ func fromVM(vm *computev1.VirtualMachine) compute.VirtualMachine {
 			TenantID:        meta.GetTenantId(),
 			ResourceVersion: meta.GetResourceVersion(),
 			CreatedAt:       meta.GetCreatedAt().AsTime(),
+			Finalizers:      meta.GetFinalizers(),
 		},
 		Spec:   fromSpec(vm.GetSpec()),
 		Status: fromStatusProto(vm.GetStatus()),

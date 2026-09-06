@@ -177,6 +177,22 @@ func (s *Service) Update(ctx context.Context, machine *VirtualMachine) (*Virtual
 
 // Delete removes the VM and, per "Quota設計", decrements tenant_usage in
 // the same critical section.
+//
+// If the VM carries Finalizers (see docs/architecture.md "Finalizer"),
+// store.Delete doesn't actually remove it -- it lingers with DeletedAt set
+// until every Finalizer entry is cleared via Update. This method still
+// decrements tenant_usage immediately regardless: quota accounting is
+// tied to "Delete was requested", not to the object's eventual real
+// removal, the same "don't do live SUM aggregation" simplification
+// Quota設計 already accepts elsewhere. The one-time cost is that a tenant
+// could transiently look like it has more quota headroom than a strictly
+// literal reading of "what still physically exists" would allow, for as
+// long as a Finalizer blocks the real removal -- accepted as harmless
+// since it's self-inflicted (the same tenant's own VM) and not a cross-
+// tenant safety issue. reconcile()'s physical teardown (releasing
+// Hypervisor capacity, telling compute-agent to stop the process) is
+// unaffected either way: it's driven by the Deleted event, which now
+// correctly only fires once Finalizers actually clear.
 func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
@@ -185,8 +201,25 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 	if err != nil {
 		return err
 	}
+	// A repeated Delete call while Finalizers are still pending finds the
+	// object still here (DeletedAt already set by the first call): don't
+	// decrement tenant_usage a second time for the same VM.
+	alreadyPendingDeletion := vm.Meta.DeletedAt != nil
+
+	if len(vm.Meta.Finalizers) > 0 && vm.Status.Phase != PhaseDeleting {
+		vm.Status.Phase = PhaseDeleting
+		updated, err := s.store.Update(ctx, vm)
+		if err != nil {
+			return err
+		}
+		vm = updated
+	}
+
 	if err := s.store.Delete(ctx, tenantID, id); err != nil {
 		return err
+	}
+	if alreadyPendingDeletion {
+		return nil
 	}
 
 	usage := s.usage[tenantID]

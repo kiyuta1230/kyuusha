@@ -50,3 +50,7 @@ func (v *Volume) GetResourceVersion() int64   { return v.Meta.ResourceVersion }
 func (v *Volume) SetResourceVersion(rv int64) { v.Meta.ResourceVersion = rv }
 func (v *Volume) GetCreatedAt() time.Time     { return v.Meta.CreatedAt }
 func (v *Volume) SetCreatedAt(t time.Time)    { v.Meta.CreatedAt = t }
+func (v *Volume) GetDeletedAt() *time.Time    { return v.Meta.DeletedAt }
+func (v *Volume) SetDeletedAt(t *time.Time)   { v.Meta.DeletedAt = t }
+func (v *Volume) GetFinalizers() []string     { return v.Meta.Finalizers }
+func (v *Volume) SetFinalizers(f []string)    { v.Meta.Finalizers = f }

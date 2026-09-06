@@ -198,6 +198,7 @@ func toImage(img image.Image) *imagev1.Image {
 		TenantId:        img.Meta.TenantID,
 		ResourceVersion: img.Meta.ResourceVersion,
 		CreatedAt:       timestamppb.New(img.Meta.CreatedAt),
+		Finalizers:      img.Meta.Finalizers,
 	}
 	if img.Meta.DeletedAt != nil {
 		meta.DeletedAt = timestamppb.New(*img.Meta.DeletedAt)

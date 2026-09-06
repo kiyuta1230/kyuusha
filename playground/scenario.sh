@@ -337,4 +337,30 @@ if KYUUSHA_TOKEN="$other_token" go run ./cmd/kyuusha vm list -addr=localhost:808
 fi
 grep -q PermissionDenied /tmp/kyuusha-authz-check.log && echo "    denied as expected"
 
+echo "==> confirming Finalizer blocks VM deletion until cleared (see docs/specs/external-integration.md)"
+vm6_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-6 ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
+add_fin_line="$(go run ./cmd/kyuusha vm add-finalizer -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" -finalizer=acme.corp/network-acl-cleanup)"
+echo "$add_fin_line"
+if ! echo "$add_fin_line" | grep -q 'finalizers=acme.corp/network-acl-cleanup'; then
+  echo "!! finalizer did not round-trip: $add_fin_line" >&2
+  exit 1
+fi
+
+go run ./cmd/kyuusha vm delete -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id"
+
+pending_line="$(go run ./cmd/kyuusha vm get -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id")"
+echo "$pending_line"
+if ! echo "$pending_line" | grep -q 'phase=Deleting' || echo "$pending_line" | grep -q 'deleted_at= '; then
+  echo "!! VM with a pending finalizer was not left Deleting with deleted_at set after Delete: $pending_line" >&2
+  exit 1
+fi
+echo "    confirmed: Delete did not remove the VM while its finalizer was still present"
+
+go run ./cmd/kyuusha vm remove-finalizer -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" -finalizer=acme.corp/network-acl-cleanup >/dev/null
+if go run ./cmd/kyuusha vm get -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" 2>/tmp/kyuusha-finalizer-gone-check.log; then
+  echo "!! expected NotFound but the VM still exists after its last finalizer was removed" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-finalizer-gone-check.log && echo "    confirmed: removing the last finalizer let the real deletion (and the still-running Firecracker process's teardown) proceed"
+
 echo "==> stack left running; run 'docker compose down' when done"

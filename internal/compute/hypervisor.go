@@ -64,3 +64,7 @@ func (h *Hypervisor) GetResourceVersion() int64   { return h.Meta.ResourceVersio
 func (h *Hypervisor) SetResourceVersion(rv int64) { h.Meta.ResourceVersion = rv }
 func (h *Hypervisor) GetCreatedAt() time.Time     { return h.Meta.CreatedAt }
 func (h *Hypervisor) SetCreatedAt(t time.Time)    { h.Meta.CreatedAt = t }
+func (h *Hypervisor) GetDeletedAt() *time.Time    { return h.Meta.DeletedAt }
+func (h *Hypervisor) SetDeletedAt(t *time.Time)   { h.Meta.DeletedAt = t }
+func (h *Hypervisor) GetFinalizers() []string     { return h.Meta.Finalizers }
+func (h *Hypervisor) SetFinalizers(f []string)    { h.Meta.Finalizers = f }

@@ -177,6 +177,7 @@ func toTenant(tn identity.Tenant) *identityv1.Tenant {
 		TenantId:        tn.Meta.TenantID,
 		ResourceVersion: tn.Meta.ResourceVersion,
 		CreatedAt:       timestamppb.New(tn.Meta.CreatedAt),
+		Finalizers:      tn.Meta.Finalizers,
 	}
 	if tn.Meta.DeletedAt != nil {
 		meta.DeletedAt = timestamppb.New(*tn.Meta.DeletedAt)
@@ -197,6 +198,7 @@ func fromTenant(tn *identityv1.Tenant) identity.Tenant {
 			TenantID:        meta.GetTenantId(),
 			ResourceVersion: meta.GetResourceVersion(),
 			CreatedAt:       meta.GetCreatedAt().AsTime(),
+			Finalizers:      meta.GetFinalizers(),
 		},
 		Spec:   fromSpec(tn.GetSpec()),
 		Status: fromStatusProto(tn.GetStatus()),

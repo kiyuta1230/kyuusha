@@ -14,7 +14,12 @@ type ObjectMeta struct {
 	TenantID        string
 	ResourceVersion int64
 	CreatedAt       time.Time
-	DeletedAt       *time.Time // nil unless soft-deleted
+	DeletedAt       *time.Time // nil unless Delete has been called; see Finalizers
+	// Finalizers holds opaque holder names; a non-empty list blocks Store.
+	// Delete from actually removing the object (see store.go's Delete/
+	// Update and docs/architecture.md "Finalizer"). Almost always empty in
+	// practice today -- only VirtualMachine actively uses it so far.
+	Finalizers []string
 }
 
 func (m *ObjectMeta) GetID() string              { return m.ID }
@@ -27,6 +32,10 @@ func (m *ObjectMeta) GetResourceVersion() int64  { return m.ResourceVersion }
 func (m *ObjectMeta) SetResourceVersion(v int64) { m.ResourceVersion = v }
 func (m *ObjectMeta) GetCreatedAt() time.Time    { return m.CreatedAt }
 func (m *ObjectMeta) SetCreatedAt(t time.Time)   { m.CreatedAt = t }
+func (m *ObjectMeta) GetDeletedAt() *time.Time   { return m.DeletedAt }
+func (m *ObjectMeta) SetDeletedAt(t *time.Time)  { m.DeletedAt = t }
+func (m *ObjectMeta) GetFinalizers() []string    { return m.Finalizers }
+func (m *ObjectMeta) SetFinalizers(f []string)   { m.Finalizers = f }
 
 // Meta is the constraint every generic Store[T, PT] resource type's pointer
 // receiver (PT) must satisfy. Resources embed ObjectMeta as a named field
@@ -44,4 +53,8 @@ type Meta interface {
 	SetResourceVersion(int64)
 	GetCreatedAt() time.Time
 	SetCreatedAt(time.Time)
+	GetDeletedAt() *time.Time
+	SetDeletedAt(*time.Time)
+	GetFinalizers() []string
+	SetFinalizers([]string)
 }
