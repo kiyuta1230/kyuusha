@@ -72,6 +72,59 @@ func (ImageFormat) EnumDescriptor() ([]byte, []int) {
 	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{0}
 }
 
+// See docs/specs/image.md "マルチテナント対応（可視性/共有）". Visibility only
+// ever affects read/reference access (Get/List/Watch, and being referenced
+// by another tenant's VM at Create time) -- Update (SetVisibility) and
+// Delete always remain restricted to the owning tenant_id regardless.
+type ImageVisibility int32
+
+const (
+	ImageVisibility_IMAGE_VISIBILITY_UNSPECIFIED ImageVisibility = 0 // treated as PRIVATE
+	ImageVisibility_PRIVATE                      ImageVisibility = 1 // default: visible only to the owning tenant, plus shared_with_tenant_ids
+	ImageVisibility_PUBLIC                       ImageVisibility = 2 // visible to every tenant; shared_with_tenant_ids is then meaningless (ignored)
+)
+
+// Enum value maps for ImageVisibility.
+var (
+	ImageVisibility_name = map[int32]string{
+		0: "IMAGE_VISIBILITY_UNSPECIFIED",
+		1: "PRIVATE",
+		2: "PUBLIC",
+	}
+	ImageVisibility_value = map[string]int32{
+		"IMAGE_VISIBILITY_UNSPECIFIED": 0,
+		"PRIVATE":                      1,
+		"PUBLIC":                       2,
+	}
+)
+
+func (x ImageVisibility) Enum() *ImageVisibility {
+	p := new(ImageVisibility)
+	*p = x
+	return p
+}
+
+func (x ImageVisibility) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ImageVisibility) Descriptor() protoreflect.EnumDescriptor {
+	return file_kyuusha_image_v1_image_proto_enumTypes[1].Descriptor()
+}
+
+func (ImageVisibility) Type() protoreflect.EnumType {
+	return &file_kyuusha_image_v1_image_proto_enumTypes[1]
+}
+
+func (x ImageVisibility) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ImageVisibility.Descriptor instead.
+func (ImageVisibility) EnumDescriptor() ([]byte, []int) {
+	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{1}
+}
+
 type ImageEvent_Type int32
 
 const (
@@ -111,11 +164,11 @@ func (x ImageEvent_Type) String() string {
 }
 
 func (ImageEvent_Type) Descriptor() protoreflect.EnumDescriptor {
-	return file_kyuusha_image_v1_image_proto_enumTypes[1].Descriptor()
+	return file_kyuusha_image_v1_image_proto_enumTypes[2].Descriptor()
 }
 
 func (ImageEvent_Type) Type() protoreflect.EnumType {
-	return &file_kyuusha_image_v1_image_proto_enumTypes[1]
+	return &file_kyuusha_image_v1_image_proto_enumTypes[2]
 }
 
 func (x ImageEvent_Type) Number() protoreflect.EnumNumber {
@@ -124,7 +177,7 @@ func (x ImageEvent_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ImageEvent_Type.Descriptor instead.
 func (ImageEvent_Type) EnumDescriptor() ([]byte, []int) {
-	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{10, 0}
+	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{11, 0}
 }
 
 type ImageArtifact struct {
@@ -180,14 +233,16 @@ func (x *ImageArtifact) GetDigest() string {
 }
 
 type ImageSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Format        ImageFormat            `protobuf:"varint,1,opt,name=format,proto3,enum=kyuusha.image.v1.ImageFormat" json:"format,omitempty"`
-	Kernel        *ImageArtifact         `protobuf:"bytes,2,opt,name=kernel,proto3" json:"kernel,omitempty"`                     // KERNEL_ROOTFS only
-	Rootfs        *ImageArtifact         `protobuf:"bytes,3,opt,name=rootfs,proto3" json:"rootfs,omitempty"`                     // KERNEL_ROOTFS only
-	Disk          *ImageArtifact         `protobuf:"bytes,4,opt,name=disk,proto3" json:"disk,omitempty"`                         // QCOW2 only
-	BootArgs      string                 `protobuf:"bytes,5,opt,name=boot_args,json=bootArgs,proto3" json:"boot_args,omitempty"` // direct kernel boot args, e.g. "console=ttyS0 reboot=k panic=1 root=/dev/vda rw"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Format              ImageFormat            `protobuf:"varint,1,opt,name=format,proto3,enum=kyuusha.image.v1.ImageFormat" json:"format,omitempty"`
+	Kernel              *ImageArtifact         `protobuf:"bytes,2,opt,name=kernel,proto3" json:"kernel,omitempty"`                     // KERNEL_ROOTFS only
+	Rootfs              *ImageArtifact         `protobuf:"bytes,3,opt,name=rootfs,proto3" json:"rootfs,omitempty"`                     // KERNEL_ROOTFS only
+	Disk                *ImageArtifact         `protobuf:"bytes,4,opt,name=disk,proto3" json:"disk,omitempty"`                         // QCOW2 only
+	BootArgs            string                 `protobuf:"bytes,5,opt,name=boot_args,json=bootArgs,proto3" json:"boot_args,omitempty"` // direct kernel boot args, e.g. "console=ttyS0 reboot=k panic=1 root=/dev/vda rw"
+	Visibility          ImageVisibility        `protobuf:"varint,6,opt,name=visibility,proto3,enum=kyuusha.image.v1.ImageVisibility" json:"visibility,omitempty"`
+	SharedWithTenantIds []string               `protobuf:"bytes,7,rep,name=shared_with_tenant_ids,json=sharedWithTenantIds,proto3" json:"shared_with_tenant_ids,omitempty"` // meaningful only when visibility == PRIVATE
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ImageSpec) Reset() {
@@ -253,6 +308,20 @@ func (x *ImageSpec) GetBootArgs() string {
 		return x.BootArgs
 	}
 	return ""
+}
+
+func (x *ImageSpec) GetVisibility() ImageVisibility {
+	if x != nil {
+		return x.Visibility
+	}
+	return ImageVisibility_IMAGE_VISIBILITY_UNSPECIFIED
+}
+
+func (x *ImageSpec) GetSharedWithTenantIds() []string {
+	if x != nil {
+		return x.SharedWithTenantIds
+	}
+	return nil
 }
 
 type ImageStatus struct {
@@ -643,6 +712,74 @@ func (x *DeleteImageRequest) GetDryRun() bool {
 	return false
 }
 
+type SetImageVisibilityRequest struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	TenantId            string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // must be the owning tenant; sharing only ever grants read access to others, never write
+	Id                  string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	Visibility          ImageVisibility        `protobuf:"varint,3,opt,name=visibility,proto3,enum=kyuusha.image.v1.ImageVisibility" json:"visibility,omitempty"`
+	SharedWithTenantIds []string               `protobuf:"bytes,4,rep,name=shared_with_tenant_ids,json=sharedWithTenantIds,proto3" json:"shared_with_tenant_ids,omitempty"` // replaces the existing list entirely (not merged)
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *SetImageVisibilityRequest) Reset() {
+	*x = SetImageVisibilityRequest{}
+	mi := &file_kyuusha_image_v1_image_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetImageVisibilityRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetImageVisibilityRequest) ProtoMessage() {}
+
+func (x *SetImageVisibilityRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_image_v1_image_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetImageVisibilityRequest.ProtoReflect.Descriptor instead.
+func (*SetImageVisibilityRequest) Descriptor() ([]byte, []int) {
+	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SetImageVisibilityRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *SetImageVisibilityRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SetImageVisibilityRequest) GetVisibility() ImageVisibility {
+	if x != nil {
+		return x.Visibility
+	}
+	return ImageVisibility_IMAGE_VISIBILITY_UNSPECIFIED
+}
+
+func (x *SetImageVisibilityRequest) GetSharedWithTenantIds() []string {
+	if x != nil {
+		return x.SharedWithTenantIds
+	}
+	return nil
+}
+
 type WatchImagesRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	TenantId             string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -653,7 +790,7 @@ type WatchImagesRequest struct {
 
 func (x *WatchImagesRequest) Reset() {
 	*x = WatchImagesRequest{}
-	mi := &file_kyuusha_image_v1_image_proto_msgTypes[9]
+	mi := &file_kyuusha_image_v1_image_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -665,7 +802,7 @@ func (x *WatchImagesRequest) String() string {
 func (*WatchImagesRequest) ProtoMessage() {}
 
 func (x *WatchImagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_image_v1_image_proto_msgTypes[9]
+	mi := &file_kyuusha_image_v1_image_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -678,7 +815,7 @@ func (x *WatchImagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchImagesRequest.ProtoReflect.Descriptor instead.
 func (*WatchImagesRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{9}
+	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *WatchImagesRequest) GetTenantId() string {
@@ -706,7 +843,7 @@ type ImageEvent struct {
 
 func (x *ImageEvent) Reset() {
 	*x = ImageEvent{}
-	mi := &file_kyuusha_image_v1_image_proto_msgTypes[10]
+	mi := &file_kyuusha_image_v1_image_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -718,7 +855,7 @@ func (x *ImageEvent) String() string {
 func (*ImageEvent) ProtoMessage() {}
 
 func (x *ImageEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_image_v1_image_proto_msgTypes[10]
+	mi := &file_kyuusha_image_v1_image_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -731,7 +868,7 @@ func (x *ImageEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImageEvent.ProtoReflect.Descriptor instead.
 func (*ImageEvent) Descriptor() ([]byte, []int) {
-	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{10}
+	return file_kyuusha_image_v1_image_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ImageEvent) GetType() ImageEvent_Type {
@@ -762,13 +899,17 @@ const file_kyuusha_image_v1_image_proto_rawDesc = "" +
 	"\x1ckyuusha/image/v1/image.proto\x12\x10kyuusha.image.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"9\n" +
 	"\rImageArtifact\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x16\n" +
-	"\x06digest\x18\x02 \x01(\tR\x06digest\"\x86\x02\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\"\xfe\x02\n" +
 	"\tImageSpec\x125\n" +
 	"\x06format\x18\x01 \x01(\x0e2\x1d.kyuusha.image.v1.ImageFormatR\x06format\x127\n" +
 	"\x06kernel\x18\x02 \x01(\v2\x1f.kyuusha.image.v1.ImageArtifactR\x06kernel\x127\n" +
 	"\x06rootfs\x18\x03 \x01(\v2\x1f.kyuusha.image.v1.ImageArtifactR\x06rootfs\x123\n" +
 	"\x04disk\x18\x04 \x01(\v2\x1f.kyuusha.image.v1.ImageArtifactR\x04disk\x12\x1b\n" +
-	"\tboot_args\x18\x05 \x01(\tR\bbootArgs\"\x82\x01\n" +
+	"\tboot_args\x18\x05 \x01(\tR\bbootArgs\x12A\n" +
+	"\n" +
+	"visibility\x18\x06 \x01(\x0e2!.kyuusha.image.v1.ImageVisibilityR\n" +
+	"visibility\x123\n" +
+	"\x16shared_with_tenant_ids\x18\a \x03(\tR\x13sharedWithTenantIds\"\x82\x01\n" +
 	"\vImageStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -795,7 +936,14 @@ const file_kyuusha_image_v1_image_proto_rawDesc = "" +
 	"\x12DeleteImageRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x17\n" +
-	"\adry_run\x18\x03 \x01(\bR\x06dryRun\"g\n" +
+	"\adry_run\x18\x03 \x01(\bR\x06dryRun\"\xc0\x01\n" +
+	"\x19SetImageVisibilityRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12A\n" +
+	"\n" +
+	"visibility\x18\x03 \x01(\x0e2!.kyuusha.image.v1.ImageVisibilityR\n" +
+	"visibility\x123\n" +
+	"\x16shared_with_tenant_ids\x18\x04 \x03(\tR\x13sharedWithTenantIds\"g\n" +
 	"\x12WatchImagesRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x124\n" +
 	"\x16since_resource_version\x18\x02 \x01(\x03R\x14sinceResourceVersion\"\xef\x01\n" +
@@ -813,13 +961,19 @@ const file_kyuusha_image_v1_image_proto_rawDesc = "" +
 	"\vImageFormat\x12\x1c\n" +
 	"\x18IMAGE_FORMAT_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rKERNEL_ROOTFS\x10\x01\x12\t\n" +
-	"\x05QCOW2\x10\x022\x84\x03\n" +
+	"\x05QCOW2\x10\x02*L\n" +
+	"\x0fImageVisibility\x12 \n" +
+	"\x1cIMAGE_VISIBILITY_UNSPECIFIED\x10\x00\x12\v\n" +
+	"\aPRIVATE\x10\x01\x12\n" +
+	"\n" +
+	"\x06PUBLIC\x10\x022\xdb\x03\n" +
 	"\fImageService\x12G\n" +
 	"\x06Create\x12$.kyuusha.image.v1.CreateImageRequest\x1a\x17.kyuusha.image.v1.Image\x12A\n" +
 	"\x03Get\x12!.kyuusha.image.v1.GetImageRequest\x1a\x17.kyuusha.image.v1.Image\x12Q\n" +
 	"\x04List\x12#.kyuusha.image.v1.ListImagesRequest\x1a$.kyuusha.image.v1.ListImagesResponse\x12F\n" +
 	"\x06Delete\x12$.kyuusha.image.v1.DeleteImageRequest\x1a\x16.google.protobuf.Empty\x12M\n" +
-	"\x05Watch\x12$.kyuusha.image.v1.WatchImagesRequest\x1a\x1c.kyuusha.image.v1.ImageEvent0\x01B@Z>gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1;imagev1b\x06proto3"
+	"\x05Watch\x12$.kyuusha.image.v1.WatchImagesRequest\x1a\x1c.kyuusha.image.v1.ImageEvent0\x01\x12U\n" +
+	"\rSetVisibility\x12+.kyuusha.image.v1.SetImageVisibilityRequest\x1a\x17.kyuusha.image.v1.ImageB@Z>gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1;imagev1b\x06proto3"
 
 var (
 	file_kyuusha_image_v1_image_proto_rawDescOnce sync.Once
@@ -833,54 +987,60 @@ func file_kyuusha_image_v1_image_proto_rawDescGZIP() []byte {
 	return file_kyuusha_image_v1_image_proto_rawDescData
 }
 
-var file_kyuusha_image_v1_image_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kyuusha_image_v1_image_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_kyuusha_image_v1_image_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_kyuusha_image_v1_image_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_kyuusha_image_v1_image_proto_goTypes = []any{
-	(ImageFormat)(0),           // 0: kyuusha.image.v1.ImageFormat
-	(ImageEvent_Type)(0),       // 1: kyuusha.image.v1.ImageEvent.Type
-	(*ImageArtifact)(nil),      // 2: kyuusha.image.v1.ImageArtifact
-	(*ImageSpec)(nil),          // 3: kyuusha.image.v1.ImageSpec
-	(*ImageStatus)(nil),        // 4: kyuusha.image.v1.ImageStatus
-	(*Image)(nil),              // 5: kyuusha.image.v1.Image
-	(*CreateImageRequest)(nil), // 6: kyuusha.image.v1.CreateImageRequest
-	(*GetImageRequest)(nil),    // 7: kyuusha.image.v1.GetImageRequest
-	(*ListImagesRequest)(nil),  // 8: kyuusha.image.v1.ListImagesRequest
-	(*ListImagesResponse)(nil), // 9: kyuusha.image.v1.ListImagesResponse
-	(*DeleteImageRequest)(nil), // 10: kyuusha.image.v1.DeleteImageRequest
-	(*WatchImagesRequest)(nil), // 11: kyuusha.image.v1.WatchImagesRequest
-	(*ImageEvent)(nil),         // 12: kyuusha.image.v1.ImageEvent
-	(*v1.Condition)(nil),       // 13: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),      // 14: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),      // 15: google.protobuf.Empty
+	(ImageFormat)(0),                  // 0: kyuusha.image.v1.ImageFormat
+	(ImageVisibility)(0),              // 1: kyuusha.image.v1.ImageVisibility
+	(ImageEvent_Type)(0),              // 2: kyuusha.image.v1.ImageEvent.Type
+	(*ImageArtifact)(nil),             // 3: kyuusha.image.v1.ImageArtifact
+	(*ImageSpec)(nil),                 // 4: kyuusha.image.v1.ImageSpec
+	(*ImageStatus)(nil),               // 5: kyuusha.image.v1.ImageStatus
+	(*Image)(nil),                     // 6: kyuusha.image.v1.Image
+	(*CreateImageRequest)(nil),        // 7: kyuusha.image.v1.CreateImageRequest
+	(*GetImageRequest)(nil),           // 8: kyuusha.image.v1.GetImageRequest
+	(*ListImagesRequest)(nil),         // 9: kyuusha.image.v1.ListImagesRequest
+	(*ListImagesResponse)(nil),        // 10: kyuusha.image.v1.ListImagesResponse
+	(*DeleteImageRequest)(nil),        // 11: kyuusha.image.v1.DeleteImageRequest
+	(*SetImageVisibilityRequest)(nil), // 12: kyuusha.image.v1.SetImageVisibilityRequest
+	(*WatchImagesRequest)(nil),        // 13: kyuusha.image.v1.WatchImagesRequest
+	(*ImageEvent)(nil),                // 14: kyuusha.image.v1.ImageEvent
+	(*v1.Condition)(nil),              // 15: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),             // 16: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),             // 17: google.protobuf.Empty
 }
 var file_kyuusha_image_v1_image_proto_depIdxs = []int32{
 	0,  // 0: kyuusha.image.v1.ImageSpec.format:type_name -> kyuusha.image.v1.ImageFormat
-	2,  // 1: kyuusha.image.v1.ImageSpec.kernel:type_name -> kyuusha.image.v1.ImageArtifact
-	2,  // 2: kyuusha.image.v1.ImageSpec.rootfs:type_name -> kyuusha.image.v1.ImageArtifact
-	2,  // 3: kyuusha.image.v1.ImageSpec.disk:type_name -> kyuusha.image.v1.ImageArtifact
-	13, // 4: kyuusha.image.v1.ImageStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	14, // 5: kyuusha.image.v1.Image.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	3,  // 6: kyuusha.image.v1.Image.spec:type_name -> kyuusha.image.v1.ImageSpec
-	4,  // 7: kyuusha.image.v1.Image.status:type_name -> kyuusha.image.v1.ImageStatus
-	3,  // 8: kyuusha.image.v1.CreateImageRequest.spec:type_name -> kyuusha.image.v1.ImageSpec
-	5,  // 9: kyuusha.image.v1.ListImagesResponse.items:type_name -> kyuusha.image.v1.Image
-	1,  // 10: kyuusha.image.v1.ImageEvent.type:type_name -> kyuusha.image.v1.ImageEvent.Type
-	5,  // 11: kyuusha.image.v1.ImageEvent.image:type_name -> kyuusha.image.v1.Image
-	6,  // 12: kyuusha.image.v1.ImageService.Create:input_type -> kyuusha.image.v1.CreateImageRequest
-	7,  // 13: kyuusha.image.v1.ImageService.Get:input_type -> kyuusha.image.v1.GetImageRequest
-	8,  // 14: kyuusha.image.v1.ImageService.List:input_type -> kyuusha.image.v1.ListImagesRequest
-	10, // 15: kyuusha.image.v1.ImageService.Delete:input_type -> kyuusha.image.v1.DeleteImageRequest
-	11, // 16: kyuusha.image.v1.ImageService.Watch:input_type -> kyuusha.image.v1.WatchImagesRequest
-	5,  // 17: kyuusha.image.v1.ImageService.Create:output_type -> kyuusha.image.v1.Image
-	5,  // 18: kyuusha.image.v1.ImageService.Get:output_type -> kyuusha.image.v1.Image
-	9,  // 19: kyuusha.image.v1.ImageService.List:output_type -> kyuusha.image.v1.ListImagesResponse
-	15, // 20: kyuusha.image.v1.ImageService.Delete:output_type -> google.protobuf.Empty
-	12, // 21: kyuusha.image.v1.ImageService.Watch:output_type -> kyuusha.image.v1.ImageEvent
-	17, // [17:22] is the sub-list for method output_type
-	12, // [12:17] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	3,  // 1: kyuusha.image.v1.ImageSpec.kernel:type_name -> kyuusha.image.v1.ImageArtifact
+	3,  // 2: kyuusha.image.v1.ImageSpec.rootfs:type_name -> kyuusha.image.v1.ImageArtifact
+	3,  // 3: kyuusha.image.v1.ImageSpec.disk:type_name -> kyuusha.image.v1.ImageArtifact
+	1,  // 4: kyuusha.image.v1.ImageSpec.visibility:type_name -> kyuusha.image.v1.ImageVisibility
+	15, // 5: kyuusha.image.v1.ImageStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	16, // 6: kyuusha.image.v1.Image.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	4,  // 7: kyuusha.image.v1.Image.spec:type_name -> kyuusha.image.v1.ImageSpec
+	5,  // 8: kyuusha.image.v1.Image.status:type_name -> kyuusha.image.v1.ImageStatus
+	4,  // 9: kyuusha.image.v1.CreateImageRequest.spec:type_name -> kyuusha.image.v1.ImageSpec
+	6,  // 10: kyuusha.image.v1.ListImagesResponse.items:type_name -> kyuusha.image.v1.Image
+	1,  // 11: kyuusha.image.v1.SetImageVisibilityRequest.visibility:type_name -> kyuusha.image.v1.ImageVisibility
+	2,  // 12: kyuusha.image.v1.ImageEvent.type:type_name -> kyuusha.image.v1.ImageEvent.Type
+	6,  // 13: kyuusha.image.v1.ImageEvent.image:type_name -> kyuusha.image.v1.Image
+	7,  // 14: kyuusha.image.v1.ImageService.Create:input_type -> kyuusha.image.v1.CreateImageRequest
+	8,  // 15: kyuusha.image.v1.ImageService.Get:input_type -> kyuusha.image.v1.GetImageRequest
+	9,  // 16: kyuusha.image.v1.ImageService.List:input_type -> kyuusha.image.v1.ListImagesRequest
+	11, // 17: kyuusha.image.v1.ImageService.Delete:input_type -> kyuusha.image.v1.DeleteImageRequest
+	13, // 18: kyuusha.image.v1.ImageService.Watch:input_type -> kyuusha.image.v1.WatchImagesRequest
+	12, // 19: kyuusha.image.v1.ImageService.SetVisibility:input_type -> kyuusha.image.v1.SetImageVisibilityRequest
+	6,  // 20: kyuusha.image.v1.ImageService.Create:output_type -> kyuusha.image.v1.Image
+	6,  // 21: kyuusha.image.v1.ImageService.Get:output_type -> kyuusha.image.v1.Image
+	10, // 22: kyuusha.image.v1.ImageService.List:output_type -> kyuusha.image.v1.ListImagesResponse
+	17, // 23: kyuusha.image.v1.ImageService.Delete:output_type -> google.protobuf.Empty
+	14, // 24: kyuusha.image.v1.ImageService.Watch:output_type -> kyuusha.image.v1.ImageEvent
+	6,  // 25: kyuusha.image.v1.ImageService.SetVisibility:output_type -> kyuusha.image.v1.Image
+	20, // [20:26] is the sub-list for method output_type
+	14, // [14:20] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_image_v1_image_proto_init() }
@@ -893,8 +1053,8 @@ func file_kyuusha_image_v1_image_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_image_v1_image_proto_rawDesc), len(file_kyuusha_image_v1_image_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   11,
+			NumEnums:      3,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

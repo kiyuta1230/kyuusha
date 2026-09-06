@@ -124,6 +124,10 @@ func (f *FakeImageClient) Watch(context.Context, *imagev1.WatchImagesRequest, ..
 	panic("FakeImageClient: Watch not implemented; compute.Service never calls it")
 }
 
+func (f *FakeImageClient) SetVisibility(context.Context, *imagev1.SetImageVisibilityRequest, ...grpc.CallOption) (*imagev1.Image, error) {
+	panic("FakeImageClient: SetVisibility not implemented; compute.Service never calls it")
+}
+
 // FakeSubnetClient is a minimal networkv1.SubnetServiceClient for tests
 // that don't want to run a real network server: Get always returns a Ready
 // Subnet in the given Zone (default "zone-a") with a plausible CIDR/

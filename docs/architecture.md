@@ -458,12 +458,20 @@ message ImageArtifact {
   string digest = 2; // sha256:...。取得後の整合性検証に使う
 }
 
+enum ImageVisibility {
+  IMAGE_VISIBILITY_UNSPECIFIED = 0; // PRIVATE扱い
+  PRIVATE = 1; // 既定: 所有テナント + shared_with_tenant_idsのみ参照可
+  PUBLIC = 2;  // 全テナントから参照可（shared_with_tenant_idsは無意味）
+}
+
 message ImageSpec {
   ImageFormat format = 1;
   ImageArtifact kernel = 2; // KERNEL_ROOTFS時のみ
   ImageArtifact rootfs = 3; // KERNEL_ROOTFS時のみ
   ImageArtifact disk = 4;   // QCOW2時のみ
   string boot_args = 5;     // 直接カーネルブート用の引数（例: "console=ttyS0 reboot=k panic=1 root=/dev/vda rw"）
+  ImageVisibility visibility = 6;
+  repeated string shared_with_tenant_ids = 7; // visibility == PRIVATE時のみ意味を持つ
 }
 
 message ImageStatus {
@@ -478,6 +486,11 @@ message ImageStatus {
 不一致ならCreate時に拒否する。フォーマット変換（自動トランスコード）は行わない。イメージの
 作成者（運用者、あるいはKaaS側のイメージビルドパイプライン）が対象driverに合った形式で
 公開する前提とする。
+
+**マルチテナント対応**: `visibility=PUBLIC`、または`PRIVATE`のまま`shared_with_tenant_ids`に
+列挙することで、所有テナント以外からもGet/List/Watch/VM Create時の参照ができる（Update相当の
+`SetVisibility`とDeleteは常に所有テナントのみ）。詳細は[Image仕様](specs/image.md)
+「マルチテナント対応（可視性/共有）」参照。
 
 **ストレージ: 必須の外部依存にしない**。VolumeとImageは性質が違う。Volumeは「排他的に1台の
 VirtualMachineへattachされる可変ブロックデバイス」だが、Imageは常に**外部でビルドされる不変

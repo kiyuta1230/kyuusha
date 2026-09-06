@@ -38,6 +38,10 @@ func (p *ImageProxy) Delete(ctx context.Context, req *imagev1.DeleteImageRequest
 	return p.backend.Delete(ctx, req)
 }
 
+func (p *ImageProxy) SetVisibility(ctx context.Context, req *imagev1.SetImageVisibilityRequest) (*imagev1.Image, error) {
+	return p.backend.SetVisibility(ctx, req)
+}
+
 func (p *ImageProxy) Watch(req *imagev1.WatchImagesRequest, stream imagev1.ImageService_WatchServer) error {
 	backendStream, err := p.backend.Watch(stream.Context(), req)
 	if err != nil {

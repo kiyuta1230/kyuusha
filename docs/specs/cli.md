@@ -49,18 +49,21 @@ compute向け。全サブコマンドが**admin-only**（`tenant_id`を持たな
 | `watch` | `-since-resource-version` |
 | `set-schedulable` | `-id`(必須) `-schedulable`(既定`true`) |
 
-## `kyuusha image <create|get|list|watch>`
+## `kyuusha image <create|get|list|watch|share>`
 
 image向け。`create`は`-tenant`を持つためadmin-onlyではない（テナント自身が自分のImageを作れる）。
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-format`(`kernel_rootfs`\|`qcow2`、必須) `-kernel-url` `-kernel-digest` `-rootfs-url` `-rootfs-digest` `-disk-url` `-disk-digest` `-boot-args` |
-| `get` | `-tenant`(必須) `-id`(必須) |
-| `list` | `-tenant`(必須) |
-| `watch` | `-tenant`(必須) `-since-resource-version` |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-format`(`kernel_rootfs`\|`qcow2`、必須) `-kernel-url` `-kernel-digest` `-rootfs-url` `-rootfs-digest` `-disk-url` `-disk-digest` `-boot-args` `-visibility`(`private`\|`public`、既定`private`) `-shared-with-tenant-ids`(カンマ区切り、`private`時のみ意味を持つ) |
+| `get` | `-tenant`(必須) `-id`(必須)。所有テナントでなくてもPUBLIC/共有されたImageなら見える |
+| `list` | `-tenant`(必須)。自分のImage + 見えるPUBLIC/共有Image |
+| `watch` | `-tenant`(必須) `-since-resource-version`。同上 |
+| `share` | `-tenant`(必須、所有テナントである必要あり) `-id`(必須) `-visibility`(既定`private`) `-shared-with-tenant-ids`(既存の一覧を丸ごと置き換える) |
 
-`delete`はgRPC APIとしては存在するがCLIには未実装。
+`delete`はgRPC APIとしては存在するがCLIには未実装。`share`が呼ぶ`SetVisibility`は
+[Image仕様](image.md)「マルチテナント対応（可視性/共有）」参照——kernel/rootfs/disk自体を
+変える汎用`update`は存在しない（意図的に無い）。
 
 ## `kyuusha subnet <create|get|list|watch>`
 

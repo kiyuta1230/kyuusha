@@ -100,6 +100,66 @@ if [ "$phase" != "Ready" ]; then
   exit 1
 fi
 
+echo "==> confirming Image multi-tenant visibility/sharing (see docs/specs/image.md 'マルチテナント対応（可視性/共有）')"
+echo "==> creating a second Tenant (real quota, via identity) to exercise cross-tenant Image sharing"
+tenant2_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 \
+  -name="scenario-b-$(date +%s)" -display-name="Scenario Tenant B" \
+  -max-vcpu=2 -max-memory-mb=2048 -max-vms=1 -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
+tenant2="$(echo "$tenant2_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if [ -z "$tenant2" ]; then
+  echo "!! could not parse tenant2 id from: $tenant2_line" >&2
+  exit 1
+fi
+token2="$(go run ./cmd/kyuusha token mint -tenant="$tenant2")"
+
+if KYUUSHA_TOKEN="$token2" go run ./cmd/kyuusha image get -addr=localhost:8080 -tenant="$tenant2" -id="$image" 2>/tmp/kyuusha-image-private-check.log; then
+  echo "!! expected NotFound but a different tenant could Get a PRIVATE, unshared Image" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-image-private-check.log && echo "    confirmed: PRIVATE unshared Image is hidden from other tenants"
+
+echo "==> creating a PUBLIC Image and confirming a different tenant can both see it and boot a VM from it"
+public_image_line="$(go run ./cmd/kyuusha image create -addr=localhost:8080 -tenant="$tenant" -name=scenario-image-public \
+  -format=kernel_rootfs -kernel-url=http://image-assets/vmlinux -rootfs-url=http://image-assets/rootfs.ext4 -visibility=public)"
+echo "$public_image_line"
+public_image="$(echo "$public_image_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+for _ in $(seq 1 30); do
+  phase="$(KYUUSHA_TOKEN="$token2" go run ./cmd/kyuusha image get -addr=localhost:8080 -tenant="$tenant2" -id="$public_image" | grep -o 'phase=[^ ]*' | cut -d= -f2)"
+  [ "$phase" = "Ready" ] && break
+  sleep 1
+done
+if [ "$phase" != "Ready" ]; then
+  echo "!! a different tenant could not see the PUBLIC Image reach Ready, last phase=$phase" >&2
+  exit 1
+fi
+public_vm_line="$(KYUUSHA_TOKEN="$token2" go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant2" -name=vm-public-image \
+  -image="$public_image" -vcpu=1 -memory-mb=128 -wait)"
+echo "$public_vm_line"
+if ! echo "$public_vm_line" | grep -q 'phase=Running'; then
+  echo "!! a different tenant could not boot a VM from a PUBLIC Image owned by tenant $tenant: $public_vm_line" >&2
+  exit 1
+fi
+echo "    confirmed: tenant $tenant2 booted a VM from tenant $tenant's PUBLIC Image, unmodified compute-side code"
+
+echo "==> confirming SetVisibility is owner-only and can retroactively share/unshare a PRIVATE Image"
+if KYUUSHA_TOKEN="$token2" go run ./cmd/kyuusha image share -addr=localhost:8080 -tenant="$tenant2" -id="$public_image" -visibility=private 2>/tmp/kyuusha-image-setvis-check.log; then
+  echo "!! expected NotFound but a non-owner could SetVisibility" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-image-setvis-check.log && echo "    confirmed: SetVisibility rejected for a non-owner"
+
+share_line="$(go run ./cmd/kyuusha image share -addr=localhost:8080 -tenant="$tenant" -id="$image" -visibility=private -shared-with-tenant-ids="$tenant2")"
+echo "$share_line"
+if ! echo "$share_line" | grep -q "shared_with=$tenant2"; then
+  echo "!! shared_with_tenant_ids did not round-trip: $share_line" >&2
+  exit 1
+fi
+if ! KYUUSHA_TOKEN="$token2" go run ./cmd/kyuusha image get -addr=localhost:8080 -tenant="$tenant2" -id="$image" >/dev/null 2>&1; then
+  echo "!! tenant $tenant2 still could not Get the Image after being added to shared_with_tenant_ids" >&2
+  exit 1
+fi
+echo "    confirmed: retroactively sharing a PRIVATE Image via 'image share' grants access"
+
 echo "==> creating $count VMs for tenant $tenant"
 for i in $(seq 1 "$count"); do
   go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name="vm-$i" \

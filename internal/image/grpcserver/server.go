@@ -65,6 +65,14 @@ func (s *Server) Delete(ctx context.Context, req *imagev1.DeleteImageRequest) (*
 	return &emptypb.Empty{}, nil
 }
 
+func (s *Server) SetVisibility(ctx context.Context, req *imagev1.SetImageVisibilityRequest) (*imagev1.Image, error) {
+	img, err := s.svc.SetVisibility(ctx, req.GetTenantId(), req.GetId(), fromVisibility(req.GetVisibility()), req.GetSharedWithTenantIds())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toImage(*img), nil
+}
+
 func (s *Server) Watch(req *imagev1.WatchImagesRequest, stream imagev1.ImageService_WatchServer) error {
 	events, err := s.svc.Watch(stream.Context(), req.GetTenantId(), req.GetSinceResourceVersion())
 	if err != nil {
@@ -123,23 +131,49 @@ func toFormat(f image.Format) imagev1.ImageFormat {
 	}
 }
 
+func fromVisibility(v imagev1.ImageVisibility) image.Visibility {
+	switch v {
+	case imagev1.ImageVisibility_PRIVATE:
+		return image.VisibilityPrivate
+	case imagev1.ImageVisibility_PUBLIC:
+		return image.VisibilityPublic
+	default:
+		return image.VisibilityUnspecified
+	}
+}
+
+func toVisibility(v image.Visibility) imagev1.ImageVisibility {
+	switch v {
+	case image.VisibilityPrivate:
+		return imagev1.ImageVisibility_PRIVATE
+	case image.VisibilityPublic:
+		return imagev1.ImageVisibility_PUBLIC
+	default:
+		return imagev1.ImageVisibility_IMAGE_VISIBILITY_UNSPECIFIED
+	}
+}
+
 func fromSpec(s *imagev1.ImageSpec) image.Spec {
 	return image.Spec{
-		Format:   fromFormat(s.GetFormat()),
-		Kernel:   fromArtifact(s.GetKernel()),
-		Rootfs:   fromArtifact(s.GetRootfs()),
-		Disk:     fromArtifact(s.GetDisk()),
-		BootArgs: s.GetBootArgs(),
+		Format:              fromFormat(s.GetFormat()),
+		Kernel:              fromArtifact(s.GetKernel()),
+		Rootfs:              fromArtifact(s.GetRootfs()),
+		Disk:                fromArtifact(s.GetDisk()),
+		BootArgs:            s.GetBootArgs(),
+		Visibility:          fromVisibility(s.GetVisibility()),
+		SharedWithTenantIDs: s.GetSharedWithTenantIds(),
 	}
 }
 
 func toSpec(s image.Spec) *imagev1.ImageSpec {
 	return &imagev1.ImageSpec{
-		Format:   toFormat(s.Format),
-		Kernel:   toArtifact(s.Kernel),
-		Rootfs:   toArtifact(s.Rootfs),
-		Disk:     toArtifact(s.Disk),
-		BootArgs: s.BootArgs,
+		Format:              toFormat(s.Format),
+		Kernel:              toArtifact(s.Kernel),
+		Rootfs:              toArtifact(s.Rootfs),
+		Disk:                toArtifact(s.Disk),
+		BootArgs:            s.BootArgs,
+		Visibility:          toVisibility(s.Visibility),
+		SharedWithTenantIds: s.SharedWithTenantIDs,
 	}
 }
 

@@ -13,10 +13,13 @@ kyuusha自体はイメージのバイト列を一切コピー・保管しない�
 | `spec.kernel` / `spec.rootfs` | `{url, digest}`。`KERNEL_ROOTFS`時のみ必須 |
 | `spec.disk` | `{url, digest}`。`QCOW2`時のみ必須 |
 | `spec.boot_args` | 直接カーネルブート時の起動引数 |
+| `spec.visibility` | `PRIVATE`（既定）/ `PUBLIC`。下記「マルチテナント対応（可視性/共有）」参照 |
+| `spec.shared_with_tenant_ids` | `PRIVATE`時のみ意味を持つ。ここに列挙されたテナントも参照可能になる |
 | `status.phase` | `Pending`（URL到達性チェック中） / `Ready` / `Error` |
 | `status.size_bytes` | 判明していれば |
 
-`tenant_id`を持つテナントスコープのリソース（VM/Volumeと同様）。
+`tenant_id`を持つテナントスコープのリソース（VM/Volumeと同様）。ただし`spec.visibility`/
+`spec.shared_with_tenant_ids`により、所有テナント以外からの参照が可能になる場合がある。
 
 ## Create時の検証
 
@@ -55,6 +58,47 @@ sequenceDiagram
 
 いずれも同期的なCreate時拒否で、Quotaと同じ「doomedなVirtualMachineを作ってからErrorにしない」
 という設計に従う。`spec.image_id`自体も必須項目（空文字は`ErrValidation`）。
+
+上記1.の`Get`は`internal/compute`から見て呼び出し元テナント自身の`tenant_id`で行われるが、
+下記「マルチテナント対応」により、`image.Service.Get`自身が可視性を見て他テナント所有の
+PUBLIC/共有Imageも透過的に解決する。compute側のコード自体は一切変更不要——`image_id`が
+「自分のImageか、見える他人のImageか」を区別する必要がない。
+
+## マルチテナント対応（可視性/共有）
+
+当初Imageは`tenant_id`による完全なテナント分離のみで、Subnetの`shared_with_tenant_ids`の
+ような共有の仕組みが一切なかった。kyuusha想定スケール（~500テナント）ではUbuntu/Talos/
+Flatcarのような共通ベースイメージをテナントごとに再アップロードさせるのは無駄なため、
+`spec.visibility`（`PRIVATE`既定 / `PUBLIC`）と、`PRIVATE`時のみ効く
+`spec.shared_with_tenant_ids`を追加した。
+
+```mermaid
+flowchart LR
+    A["Get/List/Watch(tenant_id=X)"] --> B{tenant_id X が所有？}
+    B -->|Yes| C[常に見える]
+    B -->|No| D{visibility}
+    D -->|PUBLIC| C
+    D -->|PRIVATE| E{shared_with_tenant_idsにXが含まれる？}
+    E -->|Yes| C
+    E -->|No| F[NotFound]
+```
+
+- **強制されるのは読み取り/参照だけ**: Update相当の`SetVisibility`とDeleteは常に所有テナント
+  のみ（共有先テナントは可視性を変えたり削除したりできない）
+- **汎用リソース層(`resource.Store`)は一切変更していない**: `Store.Get`は今も厳密な
+  `tenant_id`一致のみを見る（VM/Hypervisor/Subnet/NetworkInterfaceと共有する汎用実装に
+  Image固有の可視性ルールを持ち込まないため）。`image.Service`側で
+  「まず自分のstoreをGet、NotFoundなら`store.List(ctx, "")`（全テナント横断、内部用途と
+  同じ既存の抜け道）を舐めて可視性チェック」というフォールバックにしている
+- **List/Watchも同様に全テナント横断でスキャン/フィルタ**——このシステムの想定スケール
+  （VM数万に対しImageカタログはずっと小規模、かつ多くが共有される想定）では許容範囲
+- **存在の秘匿**: 見えないImageへのGetは「他人のPRIVATE Imageが存在する」ことを教えない
+  よう、常に`NotFound`を返す（`PermissionDenied`にしない）
+- **`SetVisibility`という専用RPCで、Update RPC自体は追加していない**:
+  kernel/rootfs/disk URLは作成後不変であるべきなので、汎用Updateを開けるのではなく
+  `compute.SetSchedulable`と同じ思想の狭いミューテーションにした
+- CLI: `kyuusha image create -visibility=public`、または作成後に
+  `kyuusha image share -id=... -visibility=private -shared-with-tenant-ids=tenant-b,tenant-c`
 
 ## 未実装
 

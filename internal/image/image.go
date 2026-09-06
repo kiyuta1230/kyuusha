@@ -26,12 +26,33 @@ type Artifact struct {
 	Digest string
 }
 
+// Visibility controls cross-tenant read access (Get/List/Watch, and being
+// referenced by another tenant's VM at Create time -- see
+// docs/specs/image.md "マルチテナント対応（可視性/共有）"). Mutation
+// (SetVisibility) and Delete always remain restricted to the owning
+// tenant_id regardless of Visibility: sharing only ever grants read/
+// reference access, never write.
+type Visibility string
+
+const (
+	VisibilityUnspecified Visibility = "" // defaults to PRIVATE at Create time
+	VisibilityPrivate     Visibility = "PRIVATE"
+	VisibilityPublic      Visibility = "PUBLIC"
+)
+
 type Spec struct {
-	Format   Format
-	Kernel   Artifact // KERNEL_ROOTFS only
-	Rootfs   Artifact // KERNEL_ROOTFS only
-	Disk     Artifact // QCOW2 only
-	BootArgs string
+	Format     Format
+	Kernel     Artifact // KERNEL_ROOTFS only
+	Rootfs     Artifact // KERNEL_ROOTFS only
+	Disk       Artifact // QCOW2 only
+	BootArgs   string
+	Visibility Visibility
+	// SharedWithTenantIDs is meaningful only when Visibility is
+	// VisibilityPrivate: those tenants (in addition to the owner) may
+	// Get/List/Watch/reference this Image, exactly as if it were their
+	// own -- but never Delete or SetVisibility it. Ignored when
+	// Visibility is VisibilityPublic (everyone already can see it).
+	SharedWithTenantIDs []string
 }
 
 type Phase string

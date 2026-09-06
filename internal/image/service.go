@@ -55,6 +55,9 @@ func NewService() *Service {
 // Pending; Run's background check flips it to Ready or Error once the
 // artifact URL(s) are confirmed reachable (or not).
 func (s *Service) Create(ctx context.Context, tenantID, name string, spec Spec) (*Image, error) {
+	if spec.Visibility == VisibilityUnspecified {
+		spec.Visibility = VisibilityPrivate
+	}
 	if err := validateSpec(spec); err != nil {
 		return nil, err
 	}
@@ -82,22 +85,109 @@ func validateSpec(spec Spec) error {
 	default:
 		return fmt.Errorf("%w: spec.format must be set", ErrValidation)
 	}
+	switch spec.Visibility {
+	case VisibilityPrivate, VisibilityPublic:
+	default:
+		return fmt.Errorf("%w: spec.visibility must be PRIVATE or PUBLIC", ErrValidation)
+	}
 	return nil
 }
 
+// visibleTo reports whether tenantID may Get/List/Watch/reference an Image
+// it doesn't own: true for a VisibilityPublic Image (any tenant), or a
+// VisibilityPrivate one that explicitly names tenantID in
+// spec.shared_with_tenant_ids.
+func visibleTo(spec Spec, tenantID string) bool {
+	if spec.Visibility == VisibilityPublic {
+		return true
+	}
+	for _, t := range spec.SharedWithTenantIDs {
+		if t == tenantID {
+			return true
+		}
+	}
+	return false
+}
+
+// Get returns id if tenantID owns it, or -- since the generic
+// resource.Store has no notion of cross-tenant visibility -- falls back to
+// a scan for one it doesn't own but can still see (VisibilityPublic, or
+// VisibilityPrivate shared with tenantID). The fallback never distinguishes
+// "doesn't exist" from "exists but not visible to you": both return
+// ErrNotFound, so a tenant can't probe for another tenant's private Image
+// IDs.
 func (s *Service) Get(ctx context.Context, tenantID, id string) (*Image, error) {
-	out, err := s.store.Get(ctx, tenantID, id)
+	if out, err := s.store.Get(ctx, tenantID, id); err == nil {
+		return &out, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+
+	all, err := s.store.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, img := range all {
+		if img.Meta.ID == id && visibleTo(img.Spec, tenantID) {
+			return &img, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+// List returns every Image tenantID owns, plus every other tenant's Image
+// it can see (see visibleTo) -- or every Image across all tenants,
+// unfiltered, when tenantID is empty (internal use only; external callers
+// must always pass their own tenant_id). Scans every Image regardless of
+// tenantID rather than using resource.Store's own tenant-scoped List:
+// fine at this system's target scale (a modest, mostly-shared image
+// catalog, not VM-scale numbers -- see docs/architecture.md).
+func (s *Service) List(ctx context.Context, tenantID string) ([]Image, error) {
+	all, err := s.store.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	if tenantID == "" {
+		return all, nil
+	}
+	out := make([]Image, 0, len(all))
+	for _, img := range all {
+		if img.Meta.TenantID == tenantID || visibleTo(img.Spec, tenantID) {
+			out = append(out, img)
+		}
+	}
+	return out, nil
+}
+
+// SetVisibility replaces spec.visibility/shared_with_tenant_ids wholesale.
+// Restricted to the owning tenantID regardless of the existing Visibility
+// -- sharing only ever grants others read/reference access, never the
+// ability to reshare or unshare it themselves. There's no separate Update
+// RPC for Image (unlike VirtualMachine/Subnet): kernel/rootfs/disk URLs are
+// meant to be immutable once Created (see docs/specs/image.md), so this is
+// a narrow, purpose-built mutation rather than a general one, mirroring
+// compute.Service.SetSchedulable.
+func (s *Service) SetVisibility(ctx context.Context, tenantID, id string, visibility Visibility, sharedWithTenantIDs []string) (*Image, error) {
+	if visibility == VisibilityUnspecified {
+		visibility = VisibilityPrivate
+	}
+	switch visibility {
+	case VisibilityPrivate, VisibilityPublic:
+	default:
+		return nil, fmt.Errorf("%w: visibility must be PRIVATE or PUBLIC", ErrValidation)
+	}
+
+	img, err := s.store.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	img.Spec.Visibility = visibility
+	img.Spec.SharedWithTenantIDs = sharedWithTenantIDs
+	out, err := s.store.Update(ctx, img)
 	if err != nil {
 		return nil, err
 	}
 	return &out, nil
-}
-
-// List returns every Image for tenantID, or every Image across all tenants
-// when tenantID is empty (internal use only; external callers must always
-// pass their own tenant_id).
-func (s *Service) List(ctx context.Context, tenantID string) ([]Image, error) {
-	return s.store.List(ctx, tenantID)
 }
 
 func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
@@ -105,12 +195,37 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 }
 
 // Watch replays history newer than sinceRV (0 for "from the start") and then
-// streams live events, both scoped to tenantID. An empty tenantID watches
-// across all tenants, for internal use by Run; external callers must
+// streams live events for tenantID's own Images plus every other tenant's
+// Image it can see (see visibleTo), by watching every tenant's events (the
+// generic resource.Store has no notion of cross-tenant visibility to watch
+// selectively) and filtering here. An empty tenantID watches across all
+// tenants unfiltered, for internal use by Run; external callers must
 // always pass their own tenant_id. The returned channel is closed when ctx
 // is done.
 func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-chan Event, error) {
-	return s.store.Watch(ctx, tenantID, sinceRV)
+	upstream, err := s.store.Watch(ctx, "", sinceRV)
+	if err != nil {
+		return nil, err
+	}
+	if tenantID == "" {
+		return upstream, nil
+	}
+
+	out := make(chan Event, 64)
+	go func() {
+		defer close(out)
+		for e := range upstream {
+			if e.Type != EventBookmark && e.Object.Meta.TenantID != tenantID && !visibleTo(e.Object.Spec, tenantID) {
+				continue
+			}
+			select {
+			case out <- e:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
 }
 
 // Run blocks, watching for newly-Created (Pending) Images and checking

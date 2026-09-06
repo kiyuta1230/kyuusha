@@ -20,11 +20,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ImageService_Create_FullMethodName = "/kyuusha.image.v1.ImageService/Create"
-	ImageService_Get_FullMethodName    = "/kyuusha.image.v1.ImageService/Get"
-	ImageService_List_FullMethodName   = "/kyuusha.image.v1.ImageService/List"
-	ImageService_Delete_FullMethodName = "/kyuusha.image.v1.ImageService/Delete"
-	ImageService_Watch_FullMethodName  = "/kyuusha.image.v1.ImageService/Watch"
+	ImageService_Create_FullMethodName        = "/kyuusha.image.v1.ImageService/Create"
+	ImageService_Get_FullMethodName           = "/kyuusha.image.v1.ImageService/Get"
+	ImageService_List_FullMethodName          = "/kyuusha.image.v1.ImageService/List"
+	ImageService_Delete_FullMethodName        = "/kyuusha.image.v1.ImageService/Delete"
+	ImageService_Watch_FullMethodName         = "/kyuusha.image.v1.ImageService/Watch"
+	ImageService_SetVisibility_FullMethodName = "/kyuusha.image.v1.ImageService/SetVisibility"
 )
 
 // ImageServiceClient is the client API for ImageService service.
@@ -36,6 +37,7 @@ type ImageServiceClient interface {
 	List(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error)
 	Delete(ctx context.Context, in *DeleteImageRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Watch(ctx context.Context, in *WatchImagesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ImageEvent], error)
+	SetVisibility(ctx context.Context, in *SetImageVisibilityRequest, opts ...grpc.CallOption) (*Image, error)
 }
 
 type imageServiceClient struct {
@@ -105,6 +107,16 @@ func (c *imageServiceClient) Watch(ctx context.Context, in *WatchImagesRequest, 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ImageService_WatchClient = grpc.ServerStreamingClient[ImageEvent]
 
+func (c *imageServiceClient) SetVisibility(ctx context.Context, in *SetImageVisibilityRequest, opts ...grpc.CallOption) (*Image, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Image)
+	err := c.cc.Invoke(ctx, ImageService_SetVisibility_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ImageServiceServer is the server API for ImageService service.
 // All implementations must embed UnimplementedImageServiceServer
 // for forward compatibility.
@@ -114,6 +126,7 @@ type ImageServiceServer interface {
 	List(context.Context, *ListImagesRequest) (*ListImagesResponse, error)
 	Delete(context.Context, *DeleteImageRequest) (*emptypb.Empty, error)
 	Watch(*WatchImagesRequest, grpc.ServerStreamingServer[ImageEvent]) error
+	SetVisibility(context.Context, *SetImageVisibilityRequest) (*Image, error)
 	mustEmbedUnimplementedImageServiceServer()
 }
 
@@ -138,6 +151,9 @@ func (UnimplementedImageServiceServer) Delete(context.Context, *DeleteImageReque
 }
 func (UnimplementedImageServiceServer) Watch(*WatchImagesRequest, grpc.ServerStreamingServer[ImageEvent]) error {
 	return status.Error(codes.Unimplemented, "method Watch not implemented")
+}
+func (UnimplementedImageServiceServer) SetVisibility(context.Context, *SetImageVisibilityRequest) (*Image, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetVisibility not implemented")
 }
 func (UnimplementedImageServiceServer) mustEmbedUnimplementedImageServiceServer() {}
 func (UnimplementedImageServiceServer) testEmbeddedByValue()                      {}
@@ -243,6 +259,24 @@ func _ImageService_Watch_Handler(srv interface{}, stream grpc.ServerStream) erro
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ImageService_WatchServer = grpc.ServerStreamingServer[ImageEvent]
 
+func _ImageService_SetVisibility_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetImageVisibilityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageServiceServer).SetVisibility(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageService_SetVisibility_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageServiceServer).SetVisibility(ctx, req.(*SetImageVisibilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ImageService_ServiceDesc is the grpc.ServiceDesc for ImageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -265,6 +299,10 @@ var ImageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _ImageService_Delete_Handler,
+		},
+		{
+			MethodName: "SetVisibility",
+			Handler:    _ImageService_SetVisibility_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
