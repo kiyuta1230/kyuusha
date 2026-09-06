@@ -23,6 +23,7 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/gateway"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
+	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
@@ -35,6 +36,7 @@ func main() {
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address")
 	imageAddr := flag.String("image-addr", "localhost:8083", "image service address")
 	networkAddr := flag.String("network-addr", "localhost:8084", "network service address")
+	blockStorageAddr := flag.String("block-storage-addr", "localhost:8085", "block-storage service address")
 	jwtPublicKey := flag.String("jwt-public-key", "hack/devkeys/jwt-dev.pub", "PEM public key file to verify client JWTs against (dev/test; ignored if -jwt-jwks-url is set)")
 	jwtJWKSURL := flag.String("jwt-jwks-url", "", "JWKS endpoint to verify client JWTs against (e.g. a Keycloak realm's .../protocol/openid-connect/certs); takes precedence over -jwt-public-key")
 	metricsAddr := flag.String("metrics-addr", ":9093", "address to serve /metrics (Prometheus) on")
@@ -149,6 +151,18 @@ func main() {
 	subnetProxy := gateway.NewSubnetProxy(networkv1.NewSubnetServiceClient(networkConn))
 	networkInterfaceProxy := gateway.NewNetworkInterfaceProxy(networkv1.NewNetworkInterfaceServiceClient(networkConn))
 
+	blockStorageConn, err := grpc.NewClient(*blockStorageAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial block-storage", "addr", *blockStorageAddr, "err", err)
+		os.Exit(1)
+	}
+	defer blockStorageConn.Close()
+	volumeProxy := gateway.NewVolumeProxy(blockstoragev1.NewVolumeServiceClient(blockStorageConn))
+	volumeAttachmentProxy := gateway.NewVolumeAttachmentProxy(blockstoragev1.NewVolumeAttachmentServiceClient(blockStorageConn))
+
 	lis, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
 		slog.Error("listen", "addr", *listenAddr, "err", err)
@@ -165,13 +179,15 @@ func main() {
 	imagev1.RegisterImageServiceServer(grpcServer, imageProxy)
 	networkv1.RegisterSubnetServiceServer(grpcServer, subnetProxy)
 	networkv1.RegisterNetworkInterfaceServiceServer(grpcServer, networkInterfaceProxy)
+	blockstoragev1.RegisterVolumeServiceServer(grpcServer, volumeProxy)
+	blockstoragev1.RegisterVolumeAttachmentServiceServer(grpcServer, volumeAttachmentProxy)
 
 	go func() {
 		<-ctx.Done()
 		grpcServer.GracefulStop()
 	}()
 
-	slog.Info("api-gateway: serving", "addr", *listenAddr, "compute-addr", *computeAddr, "identity-addr", *identityAddr, "image-addr", *imageAddr, "network-addr", *networkAddr)
+	slog.Info("api-gateway: serving", "addr", *listenAddr, "compute-addr", *computeAddr, "identity-addr", *identityAddr, "image-addr", *imageAddr, "network-addr", *networkAddr, "block-storage-addr", *blockStorageAddr)
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("grpc serve", "err", err)
 		os.Exit(1)

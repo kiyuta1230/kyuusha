@@ -1,8 +1,9 @@
 # Multi-hypervisor playground: one NATS/JetStream broker, api-gateway (the
 # only client-facing, JWT/OPA-checked entrypoint), one compute control-plane,
-# one identity control-plane, one image control-plane, and one network
-# control-plane (none exposed to the host -- only api-gateway may reach
-# them; see docs/specs/network.md), and three compute-agent
+# one identity control-plane, one image control-plane, one network
+# control-plane, and one block-storage control-plane (none exposed to the
+# host -- only api-gateway may reach them; see docs/specs/network.md and
+# docs/specs/volume.md), and three compute-agent
 # "hypervisors" that self-register with compute at startup, so the real
 # scheduler (Ready phase + driver + capacity + zone filters, most-available-
 # first pick) has real inventory to spread VMs across. compute-agent boots
@@ -17,7 +18,7 @@
 # Bring it up with
 # `docker compose -f playground/docker-compose.yml up -d --build` (from the
 # repo root) and drive it with playground/scenario.sh or
-# `go run ./cmd/kyuusha vm|tenant|hypervisor|image|subnet|netif ...
+# `go run ./cmd/kyuusha vm|tenant|hypervisor|image|subnet|netif|volume|volattach ...
 # -addr=localhost:8080 -token=...` (`kyuusha token mint` for a dev token).
 #
 # Also brings up Jaeger (traces), Prometheus (metrics), Loki+Promtail (logs,
@@ -151,6 +152,23 @@ services:
         condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
 
+  block-storage:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: block-storage
+    command:
+      - "-grpc-addr=:8085"
+      - "-identity-addr=identity:8082"
+      - "-metrics-addr=:9097"
+      - "-otlp-endpoint=jaeger:4317"
+    depends_on:
+      identity:
+        condition: service_started
+      jaeger:
+        condition: service_started
+    # No ports exposed to the host: same reasoning as compute above.
+
   api-gateway:
     build:
       context: ..
@@ -162,6 +180,7 @@ services:
       - "-identity-addr=identity:8082"
       - "-image-addr=image:8083"
       - "-network-addr=network:8084"
+      - "-block-storage-addr=block-storage:8085"
       - "-metrics-addr=:9093"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
@@ -169,6 +188,7 @@ services:
       - identity
       - image
       - network
+      - block-storage
       - jaeger
     ports:
       - "8080:8080"

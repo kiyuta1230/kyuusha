@@ -39,6 +39,10 @@ func main() {
 		subnetCmd(os.Args[2:])
 	case "netif":
 		netifCmd(os.Args[2:])
+	case "volume":
+		volumeCmd(os.Args[2:])
+	case "volattach":
+		volattachCmd(os.Args[2:])
 	case "token":
 		tokenCmd(os.Args[2:])
 	default:
@@ -55,6 +59,8 @@ func usage() {
   kyuusha image <create|get|list|watch> [flags]
   kyuusha subnet <create|get|list|watch> [flags]
   kyuusha netif <create|get|list|watch> [flags]
+  kyuusha volume <create|get|list|watch> [flags]
+  kyuusha volattach <create|get|list|watch> [flags]
   kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 

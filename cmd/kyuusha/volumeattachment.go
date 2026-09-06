@@ -1,0 +1,162 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
+)
+
+func dialVolumeAttachments(addr string) blockstoragev1.VolumeAttachmentServiceClient {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		fatal("dial %s: %v", addr, err)
+	}
+	return blockstoragev1.NewVolumeAttachmentServiceClient(conn)
+}
+
+func volattachCmd(args []string) {
+	if len(args) < 1 {
+		usage()
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "create":
+		volattachCreate(args[1:])
+	case "get":
+		volattachGet(args[1:])
+	case "list":
+		volattachList(args[1:])
+	case "watch":
+		volattachWatch(args[1:])
+	default:
+		usage()
+		os.Exit(2)
+	}
+}
+
+func volattachCreate(args []string) {
+	fs := flag.NewFlagSet("volattach create", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	name := fs.String("name", "", "volume attachment name (idempotency key)")
+	vmID := fs.String("vm", "", "VM ID (required)")
+	volumeID := fs.String("volume", "", "volume ID (required)")
+	deviceHint := fs.String("device-hint", "", "requested device path (optional)")
+	fs.Parse(args)
+
+	if *tenant == "" || *vmID == "" || *volumeID == "" {
+		fatal("-tenant, -vm, and -volume are required")
+	}
+
+	client := dialVolumeAttachments(*addr)
+	ctx := authedContext(context.Background(), *token)
+
+	a, err := client.Create(ctx, &blockstoragev1.CreateVolumeAttachmentRequest{
+		TenantId: *tenant,
+		Name:     *name,
+		Spec: &blockstoragev1.VolumeAttachmentSpec{
+			VmId:       *vmID,
+			VolumeId:   *volumeID,
+			DeviceHint: *deviceHint,
+		},
+	})
+	if err != nil {
+		fatal("create: %v", err)
+	}
+	printVolumeAttachment(a)
+}
+
+func volattachGet(args []string) {
+	fs := flag.NewFlagSet("volattach get", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "volume attachment ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dialVolumeAttachments(*addr)
+	ctx := authedContext(context.Background(), *token)
+	a, err := client.Get(ctx, &blockstoragev1.GetVolumeAttachmentRequest{TenantId: *tenant, Id: *id})
+	if err != nil {
+		fatal("get: %v", err)
+	}
+	printVolumeAttachment(a)
+}
+
+func volattachList(args []string) {
+	fs := flag.NewFlagSet("volattach list", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" {
+		fatal("-tenant is required")
+	}
+	client := dialVolumeAttachments(*addr)
+	ctx := authedContext(context.Background(), *token)
+	resp, err := client.List(ctx, &blockstoragev1.ListVolumeAttachmentsRequest{TenantId: *tenant})
+	if err != nil {
+		fatal("list: %v", err)
+	}
+	for _, a := range resp.GetItems() {
+		printVolumeAttachment(a)
+	}
+}
+
+func volattachWatch(args []string) {
+	fs := flag.NewFlagSet("volattach watch", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
+	fs.Parse(args)
+
+	if *tenant == "" {
+		fatal("-tenant is required")
+	}
+	client := dialVolumeAttachments(*addr)
+	ctx := authedContext(context.Background(), *token)
+	stream, err := client.Watch(ctx, &blockstoragev1.WatchVolumeAttachmentsRequest{
+		TenantId:             *tenant,
+		SinceResourceVersion: *since,
+	})
+	if err != nil {
+		fatal("watch: %v", err)
+	}
+	for {
+		ev, err := stream.Recv()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			fatal("watch: %v", err)
+		}
+		if ev.GetType() == blockstoragev1.VolumeAttachmentEvent_BOOKMARK {
+			fmt.Printf("BOOKMARK resource_version=%d\n", ev.GetResourceVersion())
+			continue
+		}
+		a := ev.GetVolumeAttachment()
+		fmt.Printf("%-10s %-24s phase=%-10s rv=%d\n",
+			ev.GetType(), a.GetMeta().GetId(), a.GetStatus().GetPhase(), ev.GetResourceVersion())
+	}
+}
+
+func printVolumeAttachment(a *blockstoragev1.VolumeAttachment) {
+	fmt.Printf("id=%s name=%s tenant=%s vm=%s volume=%s phase=%s device_path=%s rv=%d\n",
+		a.GetMeta().GetId(), a.GetMeta().GetName(), a.GetMeta().GetTenantId(),
+		a.GetSpec().GetVmId(), a.GetSpec().GetVolumeId(),
+		a.GetStatus().GetPhase(), a.GetStatus().GetDevicePath(),
+		a.GetMeta().GetResourceVersion())
+}

@@ -63,7 +63,7 @@ grep -q PermissionDenied /tmp/kyuusha-tenant-admin-check.log && echo "    denied
 echo "==> creating Tenant $tenant_name via identity (admin token)"
 tenant_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 \
   -name="$tenant_name" -display-name="Scenario Tenant" \
-  -max-vcpu=8 -max-memory-mb=16384 -max-vms="$((count + 1))" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
+  -max-vcpu=8 -max-memory-mb=16384 -max-volume-gb=50 -max-vms="$((count + 1))" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
 echo "$tenant_line"
 tenant="$(echo "$tenant_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 if [ -z "$tenant" ]; then
@@ -270,6 +270,49 @@ if [ "$ranged_ip" != "10.0.6.10" ] && [ "$ranged_ip" != "10.0.6.11" ]; then
   exit 1
 fi
 echo "    confirmed: ip_address stayed inside the configured allocatable_ip_ranges"
+
+echo "==> creating a Volume (block-storage; no real backend yet, Quota-check-then-Ready -- see docs/specs/volume.md)"
+volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume -size-gb=10)"
+echo "$volume_line"
+volume="$(echo "$volume_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if [ -z "$volume" ] || ! echo "$volume_line" | grep -q 'phase=Ready'; then
+  echo "!! volume was not created Ready: $volume_line" >&2
+  exit 1
+fi
+
+echo "==> attaching the Volume to vm-1 and confirming the exclusive-attach constraint (docs/architecture.md '具体的な排他制御')"
+first_attach_line="$(go run ./cmd/kyuusha volattach create -addr=localhost:8080 -tenant="$tenant" -name=scenario-attach-1 -vm="$vm1_id" -volume="$volume")"
+echo "$first_attach_line"
+if ! echo "$first_attach_line" | grep -q 'phase=Attached'; then
+  echo "!! first VolumeAttachment did not reach Attached: $first_attach_line" >&2
+  exit 1
+fi
+
+second_attach_line="$(go run ./cmd/kyuusha volattach create -addr=localhost:8080 -tenant="$tenant" -name=scenario-attach-2 -vm="$vm1_id" -volume="$volume")"
+echo "$second_attach_line"
+if ! echo "$second_attach_line" | grep -q 'phase=Pending'; then
+  echo "!! a second VolumeAttachment for the same, still-attached Volume should be Pending (waiting on the first), got: $second_attach_line" >&2
+  exit 1
+fi
+echo "    confirmed: a second attachment to an already-attached Volume is created Pending, not rejected"
+
+if ! go run ./cmd/kyuusha volattach create -addr=localhost:8080 -tenant="$tenant" -name=scenario-attach-bad -vm="$vm1_id" -volume=volume-does-not-exist 2>/tmp/kyuusha-volattach-validation-check.log; then
+  grep -q InvalidArgument /tmp/kyuusha-volattach-validation-check.log && echo "    confirmed: VolumeAttachment Create rejects an unknown volume_id"
+else
+  echo "!! expected InvalidArgument but volattach create with an unknown volume_id succeeded" >&2
+  exit 1
+fi
+# (retrying the Pending second attachment once the first is deleted is unit-
+# tested -- TestService_ExclusiveAttachBlocksSecondAttachmentThenRetrySucceeds
+# -- since VolumeAttachmentService.Delete has no CLI yet, matching Subnet/
+# NetworkInterface/Image's identical "delete exists over gRPC, not the CLI" state)
+
+echo "==> confirming Volume Create enforces max_volume_gb quota"
+if go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume-over-quota -size-gb=99999 2>/tmp/kyuusha-volume-quota-check.log; then
+  echo "!! expected ResourceExhausted but Volume creation over quota succeeded" >&2
+  exit 1
+fi
+grep -q ResourceExhausted /tmp/kyuusha-volume-quota-check.log && echo "    denied as expected"
 
 echo "==> hypervisor distribution (expect it spread across hypervisor-1/2/3)"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" \

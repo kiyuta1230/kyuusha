@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package kyuusha.blockstorage.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1;blockstoragev1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// See docs/architecture.md "block-storageサービスのリソース: Volume / VolumeAttachment".
+// Volume is a standalone resource that can outlive any single VirtualMachine;
+// VolumeAttachment represents the (temporary) binding between one Volume and
+// one VirtualMachine -- the same "make the binding itself a resource"
+// pattern as network's NetworkInterface. See docs/specs/volume.md for what
+// this first pass does and doesn't cover (there is no real StorageBackend
+// yet -- see docs/architecture.md "block-storageのバックエンド抽象化" for the
+// eventual ZFS/NVMe-oF design).
+
+message VolumeSpec {
+  int64 size_gb = 1;
+}
+
+message VolumeStatus {
+  string phase = 1; // Pending(バックエンド確保中) / Ready / Deleting / Error
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+}
+
+message Volume {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  VolumeSpec spec = 2;
+  VolumeStatus status = 3;
+}
+
+message CreateVolumeRequest {
+  string tenant_id = 1;
+  string name = 2; // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing Volume
+  VolumeSpec spec = 3;
+  bool dry_run = 4;
+}
+
+message GetVolumeRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
+message ListVolumesRequest {
+  string tenant_id = 1;
+}
+
+message ListVolumesResponse {
+  repeated Volume items = 1;
+}
+
+message DeleteVolumeRequest {
+  string tenant_id = 1;
+  string id = 2;
+  bool dry_run = 3;
+}
+
+message WatchVolumesRequest {
+  string tenant_id = 1;
+  int64 since_resource_version = 2;
+}
+
+message VolumeEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  Volume volume = 2;
+  int64 resource_version = 3;
+}
+
+service VolumeService {
+  rpc Create(CreateVolumeRequest) returns (Volume);
+  rpc Get(GetVolumeRequest) returns (Volume);
+  rpc List(ListVolumesRequest) returns (ListVolumesResponse);
+  rpc Delete(DeleteVolumeRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchVolumesRequest) returns (stream VolumeEvent);
+}
+
+message VolumeAttachmentSpec {
+  string volume_id = 1;
+  string vm_id = 2;
+  string device_hint = 3; // 省略可
+}
+
+message VolumeAttachmentStatus {
+  string phase = 1; // Pending / Attaching / Attached / Detaching / Deleting / Error
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+  string device_path = 3; // 実際に割り当てられたデバイスパス（実バックエンドができるまでは常に空）
+  string hypervisor = 4;  // 実バックエンド/compute連携ができるまでは常に空
+}
+
+message VolumeAttachment {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  VolumeAttachmentSpec spec = 2;
+  VolumeAttachmentStatus status = 3;
+}
+
+message CreateVolumeAttachmentRequest {
+  string tenant_id = 1;
+  string name = 2; // idempotency key
+  VolumeAttachmentSpec spec = 3;
+  bool dry_run = 4;
+}
+
+message GetVolumeAttachmentRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
+message ListVolumeAttachmentsRequest {
+  string tenant_id = 1;
+}
+
+message ListVolumeAttachmentsResponse {
+  repeated VolumeAttachment items = 1;
+}
+
+message DeleteVolumeAttachmentRequest {
+  string tenant_id = 1;
+  string id = 2;
+  bool dry_run = 3;
+}
+
+message WatchVolumeAttachmentsRequest {
+  string tenant_id = 1;
+  int64 since_resource_version = 2;
+}
+
+message VolumeAttachmentEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  VolumeAttachment volume_attachment = 2;
+  int64 resource_version = 3;
+}
+
+service VolumeAttachmentService {
+  rpc Create(CreateVolumeAttachmentRequest) returns (VolumeAttachment);
+  rpc Get(GetVolumeAttachmentRequest) returns (VolumeAttachment);
+  rpc List(ListVolumeAttachmentsRequest) returns (ListVolumeAttachmentsResponse);
+  rpc Delete(DeleteVolumeAttachmentRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchVolumeAttachmentsRequest) returns (stream VolumeAttachmentEvent);
+}

@@ -28,9 +28,9 @@ Quota強制→認可拒否まで一通り確認する（詳細は各仕様書参
 
 ## 構成
 
-kyuusha自身のサービス（api-gateway/compute/identity/image/compute-agent/NATS）は
-[システム構成仕様](../docs/specs/system-overview.md)を参照。ここではplayground固有の
-observabilityコンポーネントのみ挙げる。
+kyuusha自身のサービス（api-gateway/compute/identity/image/network/block-storage/
+compute-agent/NATS）は[システム構成仕様](../docs/specs/system-overview.md)を参照。
+ここではplayground固有のobservabilityコンポーネントのみ挙げる。
 
 | compose service | 実行イメージ | 備考 |
 |---|---|---|

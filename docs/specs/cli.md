@@ -1,7 +1,7 @@
 # CLI仕様
 
 `cmd/kyuusha`（`kyuusha`）。api-gateway経由でのみ通信するクライアント。backendサービス
-（compute/identity/image）を直接叩くことはない。
+（compute/identity/image/network/block-storage）を直接叩くことはない。
 
 ## 共通
 
@@ -83,8 +83,9 @@ network向け（[network仕様](network.md)参照）。`create`は`-tenant`を�
 ## `kyuusha netif <create|get|list|watch>`
 
 network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`のCLI名は
-`netif`（プロト上のメッセージ名は`NetworkInterface`）。`ip_address`/`hypervisor`は
-現状モック（`ip_address`は常に`0.0.0.0`、`hypervisor`は常に空）。
+`netif`（プロト上のメッセージ名は`NetworkInterface`）。`ip_address`/`mac_address`は
+実IPAMにより実際に払い出される。`hypervisor`は実バックエンド/tap配線報告連携がまだ
+ないため常に空（[network仕様](network.md)参照）。
 
 | サブコマンド | フラグ |
 |---|---|
@@ -94,6 +95,39 @@ network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`
 | `watch` | `-tenant`(必須) `-since-resource-version` |
 
 `update`/`delete`はgRPC APIとしては存在するがCLIには未実装。
+
+## `kyuusha volume <create|get|list|watch>`
+
+block-storage向け（[Volume仕様](volume.md)参照）。`create`は`-tenant`を持つため
+admin-onlyではない。実バックエンドがまだ無いため`size_gb`のQuotaチェックさえ通れば
+即`Ready`になる。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-size-gb`(必須) |
+| `get` | `-tenant`(必須) `-id`(必須) |
+| `list` | `-tenant`(必須) |
+| `watch` | `-tenant`(必須) `-since-resource-version` |
+
+`delete`はgRPC APIとしては存在するがCLIには未実装。`update`（リサイズ等）自体が存在しない
+（[Volume仕様](volume.md)参照）。
+
+## `kyuusha volattach <create|get|list|watch>`
+
+block-storage向け（[Volume仕様](volume.md)参照）。`VolumeAttachmentService`のCLI名は
+`volattach`。同一`volume_id`について非`Deleting`なVolumeAttachmentは同時に1つまで
+（排他制御。他の有効なアタッチメントが残っている間のCreateは拒否ではなく`Pending`で
+受理され、10秒毎に再試行される）。`device_path`/`hypervisor`は実バックエンド/compute
+連携がまだないため常に空。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-vm`(VM ID、必須) `-volume`(Volume ID、必須) `-device-hint`(省略可) |
+| `get` | `-tenant`(必須) `-id`(必須) |
+| `list` | `-tenant`(必須) |
+| `watch` | `-tenant`(必須) `-since-resource-version` |
+
+`delete`はgRPC APIとしては存在するがCLIには未実装。
 
 ## `kyuusha token mint`
 
