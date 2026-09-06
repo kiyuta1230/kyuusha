@@ -141,12 +141,17 @@ func (s *Service) runHealthSweep(ctx context.Context) {
 }
 
 // scheduleVM picks a Hypervisor satisfying spec's hard constraints (see
-// "フィルタ（ハード制約）"; zone and PCI filters are deferred -- no
-// network/PCI inventory exists yet), reserves capacity against it, and
-// returns its id. Callers are responsible for then transitioning the VM to
-// Scheduled and releasing the reservation (releaseHypervisorCapacity) if
-// that fails.
-func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec) (string, error) {
+// "フィルタ（ハード制約）"; PCI filters are deferred -- no PCI inventory
+// exists yet), reserves capacity against it, and returns its id. Callers
+// are responsible for then transitioning the VM to Scheduled and releasing
+// the reservation (releaseHypervisorCapacity) if that fails.
+//
+// requiredZone (derived from spec.network_interfaces' Subnets by the
+// caller -- see reconciler.go) restricts candidates to that zone; empty
+// means no constraint (a VM with no network_interfaces yet, since
+// compute-agent doesn't wire anything real regardless -- see
+// docs/specs/network.md).
+func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, requiredZone string) (string, error) {
 	candidates, err := s.hypervisors.List(ctx, "")
 	if err != nil {
 		return "", err
@@ -155,7 +160,7 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec) (stri
 	if driver == VmmDriverUnspecified {
 		driver = VmmDriverFirecracker
 	}
-	filtered := filterSchedulable(candidates, driver, spec.VCPU, spec.MemoryMB)
+	filtered := filterSchedulable(candidates, driver, spec.VCPU, spec.MemoryMB, requiredZone)
 	picked, err := s.scheduler.Pick(filtered)
 	if err != nil {
 		return "", err
@@ -167,7 +172,7 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec) (stri
 	return picked.Meta.ID, nil
 }
 
-func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, memoryMB int64) []Hypervisor {
+func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, memoryMB int64, requiredZone string) []Hypervisor {
 	var out []Hypervisor
 	for _, h := range candidates {
 		if h.Status.Phase != HypervisorPhaseReady {
@@ -183,6 +188,9 @@ func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, me
 			continue
 		}
 		if h.Status.AllocatableMemoryMB-h.Status.AllocatedMemoryMB < memoryMB {
+			continue
+		}
+		if requiredZone != "" && h.Status.Zone != requiredZone {
 			continue
 		}
 		out = append(out, h)

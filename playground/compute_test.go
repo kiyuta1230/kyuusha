@@ -91,7 +91,7 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 		t.Fatalf("jetstream.New: %v", err)
 	}
 
-	svc, err := compute.NewService(ctx, &compute.FakeTenantClient{}, &compute.FakeImageClient{})
+	svc, err := compute.NewService(ctx, &compute.FakeTenantClient{}, &compute.FakeImageClient{}, &compute.FakeSubnetClient{}, &compute.FakeNetworkInterfaceClient{})
 	if err != nil {
 		t.Fatalf("compute.NewService: %v", err)
 	}

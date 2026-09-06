@@ -87,6 +87,7 @@ services:
       - "-grpc-addr=:8081"
       - "-identity-addr=identity:8082"
       - "-image-addr=image:8083"
+      - "-network-addr=network:8084"
       - "-metrics-addr=:9092"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
@@ -95,6 +96,8 @@ services:
       identity:
         condition: service_started
       image:
+        condition: service_started
+      network:
         condition: service_started
       jaeger:
         condition: service_started

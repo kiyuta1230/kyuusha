@@ -63,7 +63,7 @@ grep -q PermissionDenied /tmp/kyuusha-tenant-admin-check.log && echo "    denied
 echo "==> creating Tenant $tenant_name via identity (admin token)"
 tenant_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 \
   -name="$tenant_name" -display-name="Scenario Tenant" \
-  -max-vcpu=8 -max-memory-mb=16384 -max-vms="$count" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
+  -max-vcpu=8 -max-memory-mb=16384 -max-vms="$((count + 1))" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
 echo "$tenant_line"
 tenant="$(echo "$tenant_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 if [ -z "$tenant" ]; then
@@ -128,6 +128,26 @@ if [ -z "$subnet" ] || ! echo "$subnet_line" | grep -q 'phase=Ready' || [ -z "$v
   exit 1
 fi
 
+echo "==> creating a VM with -subnets=$subnet (compute-network integration: compute validates the Subnet at Create time and the Reconciler creates the NetworkInterface itself once Scheduled -- see docs/specs/network.md 'compute側の統合')"
+netvm_line="$(go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-netif \
+  -image="$image" -vcpu=1 -memory-mb=128 -subnets="$subnet" -wait)"
+echo "$netvm_line"
+netvm_id="$(echo "$netvm_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+netvm_iface="$(echo "$netvm_line" | grep 'phase=Running' | grep -o 'interfaces=[^ ]*' | tail -1 | cut -d= -f2)"
+if ! echo "$netvm_line" | grep -q 'phase=Running' || [ -z "$netvm_iface" ]; then
+  echo "!! VM with -subnets did not reach Running with a populated interface_refs: $netvm_line" >&2
+  exit 1
+fi
+echo "    confirmed: interface_refs populated by the Reconciler ($netvm_iface)"
+
+echo "==> confirming VM Create rejects an unknown subnet_id in -subnets"
+if go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-bad-subnet \
+  -image="$image" -vcpu=1 -memory-mb=128 -subnets=subnet-does-not-exist 2>/tmp/kyuusha-vm-subnet-validation-check.log; then
+  echo "!! expected InvalidArgument but vm create with an unknown subnet_id succeeded" >&2
+  exit 1
+fi
+grep -q InvalidArgument /tmp/kyuusha-vm-subnet-validation-check.log && echo "    rejected as expected"
+
 echo "==> creating NetworkInterface for vm-1 on subnet $subnet (real IP allocated from its CIDR; see docs/specs/network.md)"
 netif_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-netif -vm="$vm1_id" -subnet="$subnet")"
 echo "$netif_line"
@@ -180,7 +200,7 @@ echo "==> hypervisor distribution (expect it spread across hypervisor-1/2/3)"
 go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" \
   | grep -o 'hypervisor=[^ ]*' | sort | uniq -c
 
-echo "==> hypervisor capacity reservations (expect allocated=2/8vcpu on each)"
+echo "==> hypervisor capacity reservations (expect allocated=2/8vcpu on two of the three, 3/8vcpu on whichever got vm-netif)"
 KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha hypervisor list -addr=localhost:8080
 
 echo "==> confirming quota is enforced (max-vms=$count already reached)"

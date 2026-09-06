@@ -11,6 +11,7 @@ import (
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
 	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
@@ -121,4 +122,94 @@ func (f *FakeImageClient) Delete(context.Context, *imagev1.DeleteImageRequest, .
 
 func (f *FakeImageClient) Watch(context.Context, *imagev1.WatchImagesRequest, ...grpc.CallOption) (imagev1.ImageService_WatchClient, error) {
 	panic("FakeImageClient: Watch not implemented; compute.Service never calls it")
+}
+
+// FakeSubnetClient is a minimal networkv1.SubnetServiceClient for tests
+// that don't want to run a real network server: Get always returns a Ready
+// Subnet in the given Zone (default "zone-a") regardless of the requested
+// id, unless the id is empty; every other method panics since
+// compute.Service never calls them.
+type FakeSubnetClient struct {
+	Zone  string // default: "zone-a"
+	Phase string // default: "Ready"
+}
+
+func (f *FakeSubnetClient) zone() string {
+	if f.Zone != "" {
+		return f.Zone
+	}
+	return "zone-a"
+}
+
+func (f *FakeSubnetClient) phase() string {
+	if f.Phase != "" {
+		return f.Phase
+	}
+	return "Ready"
+}
+
+func (f *FakeSubnetClient) Get(ctx context.Context, req *networkv1.GetSubnetRequest, opts ...grpc.CallOption) (*networkv1.Subnet, error) {
+	if req.GetId() == "" {
+		return nil, status.Error(codes.NotFound, "subnet: not found")
+	}
+	return &networkv1.Subnet{
+		Meta:   &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
+		Spec:   &networkv1.SubnetSpec{Zone: f.zone()},
+		Status: &networkv1.SubnetStatus{Phase: f.phase()},
+	}, nil
+}
+
+func (f *FakeSubnetClient) Create(context.Context, *networkv1.CreateSubnetRequest, ...grpc.CallOption) (*networkv1.Subnet, error) {
+	panic("FakeSubnetClient: Create not implemented; compute.Service never calls it")
+}
+
+func (f *FakeSubnetClient) List(context.Context, *networkv1.ListSubnetsRequest, ...grpc.CallOption) (*networkv1.ListSubnetsResponse, error) {
+	panic("FakeSubnetClient: List not implemented; compute.Service never calls it")
+}
+
+func (f *FakeSubnetClient) Update(context.Context, *networkv1.UpdateSubnetRequest, ...grpc.CallOption) (*networkv1.Subnet, error) {
+	panic("FakeSubnetClient: Update not implemented; compute.Service never calls it")
+}
+
+func (f *FakeSubnetClient) Delete(context.Context, *networkv1.DeleteSubnetRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
+	panic("FakeSubnetClient: Delete not implemented; compute.Service never calls it")
+}
+
+func (f *FakeSubnetClient) Watch(context.Context, *networkv1.WatchSubnetsRequest, ...grpc.CallOption) (networkv1.SubnetService_WatchClient, error) {
+	panic("FakeSubnetClient: Watch not implemented; compute.Service never calls it")
+}
+
+// FakeNetworkInterfaceClient is a minimal
+// networkv1.NetworkInterfaceServiceClient for tests: Create always
+// succeeds, deriving the id from the request's name (deterministic and
+// traceable in test assertions, unlike network's own random IDs); every
+// other method panics since compute.Service never calls them.
+type FakeNetworkInterfaceClient struct{}
+
+func (f *FakeNetworkInterfaceClient) Create(ctx context.Context, req *networkv1.CreateNetworkInterfaceRequest, opts ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
+	return &networkv1.NetworkInterface{
+		Meta:   &resourcev1.ObjectMeta{Id: "netif-" + req.GetName(), TenantId: req.GetTenantId()},
+		Spec:   req.GetSpec(),
+		Status: &networkv1.NetworkInterfaceStatus{Phase: "Ready"},
+	}, nil
+}
+
+func (f *FakeNetworkInterfaceClient) Get(context.Context, *networkv1.GetNetworkInterfaceRequest, ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
+	panic("FakeNetworkInterfaceClient: Get not implemented; compute.Service never calls it")
+}
+
+func (f *FakeNetworkInterfaceClient) List(context.Context, *networkv1.ListNetworkInterfacesRequest, ...grpc.CallOption) (*networkv1.ListNetworkInterfacesResponse, error) {
+	panic("FakeNetworkInterfaceClient: List not implemented; compute.Service never calls it")
+}
+
+func (f *FakeNetworkInterfaceClient) Update(context.Context, *networkv1.UpdateNetworkInterfaceRequest, ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
+	panic("FakeNetworkInterfaceClient: Update not implemented; compute.Service never calls it")
+}
+
+func (f *FakeNetworkInterfaceClient) Delete(context.Context, *networkv1.DeleteNetworkInterfaceRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
+	panic("FakeNetworkInterfaceClient: Delete not implemented; compute.Service never calls it")
+}
+
+func (f *FakeNetworkInterfaceClient) Watch(context.Context, *networkv1.WatchNetworkInterfacesRequest, ...grpc.CallOption) (networkv1.NetworkInterfaceService_WatchClient, error) {
+	panic("FakeNetworkInterfaceClient: Watch not implemented; compute.Service never calls it")
 }

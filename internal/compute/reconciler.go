@@ -96,7 +96,27 @@ func (r *Reconciler) runPendingSweep(ctx context.Context) {
 func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 	switch vm.Status.Phase {
 	case PhasePending:
-		hypervisorID, err := r.svc.scheduleVM(ctx, vm.Spec)
+		// Re-derive the required zone from spec.network_interfaces' Subnets
+		// now rather than trusting anything cached from Create time: a Subnet
+		// could have changed (or been deleted) in the meantime, and this is
+		// the same validation Create already ran, just re-run immediately
+		// before scheduling so the zone constraint is always fresh.
+		zone, err := validateNetworkInterfaces(ctx, r.svc.subnetClient, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+		if err != nil {
+			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+				Type:             "Unschedulable",
+				Status:           resource.ConditionTrue,
+				Reason:           "NetworkInterfaceInvalid",
+				Message:          err.Error(),
+				LastTransitionAt: time.Now(),
+			})
+			if _, uerr := r.svc.Update(ctx, &vm); uerr != nil {
+				slog.Error("unschedulable: report condition failed", "vm_id", vm.Meta.ID, "err", uerr)
+			}
+			return
+		}
+
+		hypervisorID, err := r.svc.scheduleVM(ctx, vm.Spec, zone)
 		if err != nil {
 			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 				Type:             "Unschedulable",
@@ -125,6 +145,20 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 		}
 
 	case PhaseScheduled:
+		// Create the NetworkInterface objects themselves now, not at Create
+		// time: creating them earlier (e.g. while still Pending, possibly
+		// never scheduled) would leak them with no owning VM ever having run.
+		// createNetworkInterfaces names each with the deterministic
+		// iface-<vm-id>-<index> convention (docs/architecture.md), so a
+		// retry of this same reconcile (e.g. after the Update below fails)
+		// re-creates nothing -- network's Create is idempotent by name.
+		refs, err := createNetworkInterfaces(ctx, r.svc.netifClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.NetworkInterfaces)
+		if err != nil {
+			slog.Error("provision: create network interfaces failed", "vm_id", vm.Meta.ID, "err", err)
+			return
+		}
+		vm.Status.InterfaceRefs = refs
+
 		vm.Status.Phase = PhaseProvisioning
 		if _, err := r.svc.Update(ctx, &vm); err != nil {
 			slog.Error("provision: update failed", "vm_id", vm.Meta.ID, "err", err)

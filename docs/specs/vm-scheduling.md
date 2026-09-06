@@ -41,8 +41,17 @@ sequenceDiagram
 3. `spec.driver_hint`（VMの要求。未指定なら`FIRECRACKER`）が`status.supported_drivers`に含まれる
 4. `status.allocatable_vcpu - status.allocated_vcpu >= 要求vcpu`
 5. `status.allocatable_memory_mb - status.allocated_memory_mb >= 要求memory_mb`
+6. `status.zone == requiredZone`（`requiredZone`が空でない場合のみ）
 
-zoneフィルタ・PCIデバイスフィルタは未実装（network/PCI在庫が存在しないため）。
+`requiredZone`は`spec.network_interfaces`が参照するSubnetのzoneから導出する
+（[network.md](network.md)「compute側の統合」参照）。マルチAZにまたがる
+VirtualMachineは作れない、という`docs/architecture.md`の決定を実際に強制する
+のはこのフィルタで、`network_interfaces`が空のVM（zone制約なし）には影響しない。
+PhasePendingの`reconcile()`が毎回Subnetを引き直してzoneを求めるため、
+Create時点から実際のスケジュール時点までの間にSubnetが変わっていても
+（例えば削除されていても）常に最新の状態で評価される。
+
+PCIデバイスフィルタは未実装（PCI在庫が存在しないため）。
 
 ## ピック（MostAvailableFirst）
 

@@ -8,7 +8,7 @@ import (
 
 func newTestService(t *testing.T, ctx context.Context) *Service {
 	t.Helper()
-	svc, err := NewService(ctx, &FakeTenantClient{}, &FakeImageClient{})
+	svc, err := NewService(ctx, &FakeTenantClient{}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -84,11 +84,46 @@ Subnetの組み合わせを自動許可する、という形で参照される�
   status.hypervisor`は現状常に空文字列で、tap配線が実装された時に反映される。この配線を
   CNIのように任意バイナリへ委譲するプラガブルな仕組みにすべきかは判断保留中
   （`docs/architecture.md`「未決事項」3.参照）
-- **compute側の統合**: VM Create時に`spec.network_interfaces`からNetworkInterfaceを
-  作る/参照する連携はまだない。今のcomputeの`VirtualMachineSpec.network_interfaces`
-  フィールド自体は存在するが、networkサービスへの問い合わせはしていない
 - ネットワーク分離の実現方式（VRF/ルートリーク禁止によるテナント間非疎通性、
   DNS/名前解決の拡張機能）は設計のみ（`docs/architecture.md`参照）、実装はまだ
+- **NetworkInterfaceのオーファンGC**: VM Deleteはcomputeの予約解放とcompute-agentへの
+  削除コマンド送出のみ行い、そのVMが持っていたNetworkInterfaceには一切触れない
+  （`compute.Reconciler.releaseIfReserved`参照）。`docs/architecture.md`が決めている
+  「子リソースが親の存在を10分毎にGetで確認し、NotFoundなら自分を消す」という
+  オーファンGCパターンはNetworkInterfaceにはまだ実装されておらず、VMを削除しても
+  そのNetworkInterfaceは`Bound`のまま残り続ける（実質的なリソースリーク）。次に
+  着手すべきギャップとして明示的に残している
+
+## compute側の統合
+
+VM Create時、`spec.network_interfaces`の各要素（`subnet_id`）についてSubnetの存在/
+同一テナント/`Ready`を検証し（`compute.validateNetworkInterfaces`、上記「Create時の
+バリデーション」と同じ形）、参照先Subnetがすべて同じzoneであることも合わせて検証する
+（マルチAZにまたがるVirtualMachineは作れない、という`docs/architecture.md`の決定を
+ここで強制する）。この検証で得たzoneは、VMがPhasePendingからスケジュールされる
+瞬間（`Reconciler.reconcile`）にもう一度Subnetを引き直して再計算し、
+`scheduleVM`のzoneフィルタ（[vm-scheduling.md](vm-scheduling.md)参照）に渡す
+——Create時点とスケジュール時点の間でSubnetが変わる可能性があるため、キャッシュせず
+毎回引き直す。
+
+実際のNetworkInterfaceオブジェクトの作成は、VMがPhaseScheduledになった時点
+（`Reconciler.reconcile`のPhaseScheduledケース）で行う。まだ一度もスケジュールされて
+いないPending中のVMのために先にNetworkInterfaceを作ってしまうと、そのVMが結局
+一度も動かないまま終わった場合にオーファンになるため。作成する各NetworkInterfaceの
+`name`は`iface-<vm-id>-<index>`という決定的な命名（`docs/architecture.md`
+「子リソースのID命名規則」参照）で、これがそのままCreateの冪等性キーになる
+——reconcileが同じVMに対して複数回呼ばれても（例えば直前のUpdateが失敗して
+リトライされても）二重に作られることはない。作成に成功したNetworkInterfaceの
+IDは`VirtualMachineStatus.interface_refs`に書き込まれ、`Phase = Provisioning`
+への遷移と同じUpdateで永続化される。
+
+`network_interfaces`は`image_id`と違い必須ではない（空配列でも良い）。空の場合、
+zoneは強制されず（`scheduleVM`のzoneフィルタは無効化）、NetworkInterfaceも
+作られない——ネットワークなし・シリアルのみのVMという、現状のFirecracker実VM起動の
+第一段階（[firecracker-boot.md](firecracker-boot.md)参照）とも整合する。
+
+CLIからは`kyuusha vm create -subnets=<id1>,<id2>,...`で指定でき、先頭のSubnetが
+`primary`になる。
 
 ## エンドポイント
 

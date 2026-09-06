@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -131,11 +132,20 @@ func vmCreate(args []string) {
 	vcpu := fs.Int("vcpu", 1, "vCPU count")
 	memoryMB := fs.Int64("memory-mb", 1024, "memory in MB")
 	recovery := fs.String("recovery-policy", "none", "none|self-heal")
+	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
 	wait := fs.Bool("wait", false, "block until the VM reaches Running or Error")
 	fs.Parse(args)
 
 	if *tenant == "" || *image == "" {
 		fatal("-tenant and -image are required")
+	}
+
+	var netifs []*computev1.NetworkAttachment
+	for i, subnetID := range strings.Split(*subnets, ",") {
+		if subnetID == "" {
+			continue
+		}
+		netifs = append(netifs, &computev1.NetworkAttachment{SubnetId: subnetID, Primary: i == 0})
 	}
 
 	client := dial(*addr)
@@ -145,10 +155,11 @@ func vmCreate(args []string) {
 		TenantId: *tenant,
 		Name:     *name,
 		Spec: &computev1.VirtualMachineSpec{
-			ImageId:        *image,
-			Vcpu:           int32(*vcpu),
-			MemoryMb:       *memoryMB,
-			RecoveryPolicy: parseRecoveryPolicy(*recovery),
+			ImageId:           *image,
+			Vcpu:              int32(*vcpu),
+			MemoryMb:          *memoryMB,
+			RecoveryPolicy:    parseRecoveryPolicy(*recovery),
+			NetworkInterfaces: netifs,
 		},
 	})
 	if err != nil {
@@ -316,9 +327,10 @@ func vmConsole(args []string) {
 }
 
 func printVM(vm *computev1.VirtualMachine) {
-	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s rv=%d\n",
 		vm.GetMeta().GetId(), vm.GetMeta().GetName(), vm.GetMeta().GetTenantId(),
-		vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(), vm.GetMeta().GetResourceVersion())
+		vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(),
+		strings.Join(vm.GetStatus().GetInterfaceRefs(), ","), vm.GetMeta().GetResourceVersion())
 }
 
 func parseRecoveryPolicy(s string) computev1.RecoveryPolicy {

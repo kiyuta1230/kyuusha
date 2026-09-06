@@ -67,7 +67,7 @@ func TestService_ScheduleVMExcludesUnschedulable(t *testing.T) {
 		t.Fatalf("SetSchedulable: %v", err)
 	}
 
-	_, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024, RecoveryPolicy: RecoveryPolicyNone})
+	_, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024, RecoveryPolicy: RecoveryPolicyNone}, "")
 	if !errors.Is(err, ErrUnschedulable) {
 		t.Fatalf("scheduleVM against a cordoned-only Hypervisor: got %v, want ErrUnschedulable", err)
 	}
@@ -75,7 +75,7 @@ func TestService_ScheduleVMExcludesUnschedulable(t *testing.T) {
 	if _, err := svc.SetSchedulable(ctx, "hypervisor-1", true); err != nil {
 		t.Fatalf("SetSchedulable(true): %v", err)
 	}
-	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024, RecoveryPolicy: RecoveryPolicyNone})
+	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024, RecoveryPolicy: RecoveryPolicyNone}, "")
 	if err != nil {
 		t.Fatalf("scheduleVM after uncordon: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestService_ScheduleVMFiltersAndReserves(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 2, MemoryMB: 4096, RecoveryPolicy: RecoveryPolicyNone})
+	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 2, MemoryMB: 4096, RecoveryPolicy: RecoveryPolicyNone}, "")
 	if err != nil {
 		t.Fatalf("scheduleVM: %v", err)
 	}
@@ -135,6 +135,32 @@ func TestService_ScheduleVMFiltersAndReserves(t *testing.T) {
 	}
 }
 
+func TestService_ScheduleVMFiltersByZone(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-a", "zone-a", 8, 16384, []string{"FIRECRACKER"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-b", "zone-b", 8, 16384, []string{"FIRECRACKER"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024, RecoveryPolicy: RecoveryPolicyNone}, "zone-b")
+	if err != nil {
+		t.Fatalf("scheduleVM with requiredZone=zone-b: %v", err)
+	}
+	if picked != "hypervisor-b" {
+		t.Fatalf("scheduleVM picked %q, want hypervisor-b", picked)
+	}
+
+	// No Hypervisor exists in zone-c: unschedulable despite zone-a/zone-b
+	// both having ample spare capacity.
+	if _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024, RecoveryPolicy: RecoveryPolicyNone}, "zone-c"); !errors.Is(err, ErrUnschedulable) {
+		t.Fatalf("scheduleVM with requiredZone=zone-c: got %v, want ErrUnschedulable", err)
+	}
+}
+
 func TestService_ScheduleVMUnschedulableWhenNoCandidateFits(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
@@ -143,7 +169,7 @@ func TestService_ScheduleVMUnschedulableWhenNoCandidateFits(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	_, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 4, MemoryMB: 8192, RecoveryPolicy: RecoveryPolicyNone})
+	_, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 4, MemoryMB: 8192, RecoveryPolicy: RecoveryPolicyNone}, "")
 	if err == nil {
 		t.Fatal("expected ErrUnschedulable, got nil")
 	}

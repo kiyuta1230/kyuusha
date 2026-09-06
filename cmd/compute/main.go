@@ -27,6 +27,7 @@ import (
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
 
 func main() {
@@ -34,6 +35,7 @@ func main() {
 	grpcAddr := flag.String("grpc-addr", ":8081", "address to serve VirtualMachineService/HypervisorService on")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
 	imageAddr := flag.String("image-addr", "localhost:8083", "image service address, for Create-time Image validation")
+	networkAddr := flag.String("network-addr", "localhost:8084", "network service address, for Create-time NetworkInterface validation/creation")
 	metricsAddr := flag.String("metrics-addr", ":9092", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	flag.Parse()
@@ -108,7 +110,23 @@ func main() {
 	}
 	defer imageConn.Close()
 
-	svc, err := compute.NewService(ctx, identityv1.NewTenantServiceClient(identityConn), imagev1.NewImageServiceClient(imageConn))
+	// compute -> network is plaintext for now; see the identical note above.
+	networkConn, err := grpc.NewClient(*networkAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial network", "addr", *networkAddr, "err", err)
+		os.Exit(1)
+	}
+	defer networkConn.Close()
+
+	svc, err := compute.NewService(ctx,
+		identityv1.NewTenantServiceClient(identityConn),
+		imagev1.NewImageServiceClient(imageConn),
+		networkv1.NewSubnetServiceClient(networkConn),
+		networkv1.NewNetworkInterfaceServiceClient(networkConn),
+	)
 	if err != nil {
 		slog.Error("new compute service", "err", err)
 		os.Exit(1)
@@ -134,7 +152,7 @@ func main() {
 		grpcServer.GracefulStop()
 	}()
 
-	slog.Info("compute: serving VirtualMachineService/HypervisorService", "addr", *grpcAddr)
+	slog.Info("compute: serving VirtualMachineService/HypervisorService", "addr", *grpcAddr, "network-addr", *networkAddr)
 	if err := grpcServer.Serve(lis); err != nil {
 		slog.Error("grpc serve", "err", err)
 		os.Exit(1)

@@ -10,6 +10,7 @@ import (
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
 
 var (
@@ -49,13 +50,15 @@ type Service struct {
 	scheduler      SchedulingStrategy
 	identityClient identityv1.TenantServiceClient
 	imageClient    imagev1.ImageServiceClient
+	subnetClient   networkv1.SubnetServiceClient
+	netifClient    networkv1.NetworkInterfaceServiceClient
 	quota          *quotaChecker
 
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
 }
 
-func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient, imageClient imagev1.ImageServiceClient) (*Service, error) {
+func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient, imageClient imagev1.ImageServiceClient, subnetClient networkv1.SubnetServiceClient, netifClient networkv1.NetworkInterfaceServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
@@ -74,6 +77,8 @@ func NewService(ctx context.Context, identityClient identityv1.TenantServiceClie
 		scheduler:      MostAvailableFirst{},
 		identityClient: identityClient,
 		imageClient:    imageClient,
+		subnetClient:   subnetClient,
+		netifClient:    netifClient,
 		quota:          quota,
 		usage:          make(map[string]tenantUsage),
 	}, nil
@@ -108,6 +113,9 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	}
 
 	if err := validateImage(ctx, s.imageClient, tenantID, spec.ImageID, spec.DriverHint); err != nil {
+		return nil, err
+	}
+	if _, err := validateNetworkInterfaces(ctx, s.subnetClient, tenantID, spec.NetworkInterfaces); err != nil {
 		return nil, err
 	}
 
