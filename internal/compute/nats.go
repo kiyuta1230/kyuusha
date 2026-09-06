@@ -65,6 +65,34 @@ type CreateCommand struct {
 	KernelURL  string `json:"kernel_url,omitempty"`
 	RootfsURL  string `json:"rootfs_url,omitempty"`
 	BootArgs   string `json:"boot_args,omitempty"`
+	// Interfaces is populated by reconciler.go's PhaseScheduled branch from
+	// the NetworkInterfaces it just created (see internal/compute/
+	// network.go's createNetworkInterfaces) -- same reasoning as
+	// KernelURL/RootfsURL above: compute-agent has no network service
+	// client of its own, so everything it needs to wire a real tap device
+	// per interface (internal/compute-agent/netsetup) travels here.
+	Interfaces []NetworkInterfaceInfo `json:"interfaces,omitempty"`
+}
+
+// NetworkInterfaceInfo is one VM network attachment, already resolved to
+// concrete wiring inputs: IPAddress/MACAddress come from the
+// NetworkInterface itself, CIDR/GatewayIP/VLANID from its Subnet. IPAddress
+// and CIDR are both empty if that NetworkInterface's own IP allocation
+// hadn't succeeded yet by the time the VM was scheduled (its Subnet's pool
+// was exhausted -- see docs/specs/network.md's IPAM section); compute-agent
+// skips wiring that one NIC rather than blocking the whole VM's boot on it.
+type NetworkInterfaceInfo struct {
+	IfaceID    string `json:"iface_id"`
+	IPAddress  string `json:"ip_address,omitempty"`
+	MACAddress string `json:"mac_address,omitempty"`
+	CIDR       string `json:"cidr,omitempty"`
+	GatewayIP  string `json:"gateway_ip,omitempty"`
+	VLANID     int32  `json:"vlan_id,omitempty"`
+	// Primary mirrors the originating NetworkAttachment.Primary: only the
+	// primary interface gets a default route in the guest (see
+	// docker/fc-guest-init.sh) -- a VM with several NICs would otherwise
+	// end up with an ambiguous or last-one-wins default gateway.
+	Primary bool `json:"primary,omitempty"`
 }
 
 type CreateResult struct {

@@ -3,12 +3,13 @@
 ## 概要
 
 `driver_hint=FIRECRACKER`（未指定時のデフォルト）のVirtualMachineは、compute-agentが実際に
-Firecrackerプロセスを起動する。この最初の実装は**ネットワークデバイスなし・jailerなし**の
-最小スコープに限定している。tap配線/VLANはnetworkサービス（未実装）に依存するため、それが
-できるまでは意図的に外してある。jailer（chroot+cgroup+namespace分離）も同様に見送っており、
-Firecrackerプロセスはcompute-agentコンテナの権限のまま動く（**本番の隔離設計は
-docs/architecture.mdの「Firecracker: jailerとtapデバイス」節を参照。ここに書くのはあくまで
-現状の実装**）。`driver_hint=QEMU`は引き続き未実装（stub-success）のまま。
+Firecrackerプロセスを起動する。`VirtualMachineSpec.network_interfaces`が指定されたVMには
+実際のtapデバイスも配線される（[network.md](network.md)「tap配線とローカルネットワーク」
+参照）。それ以外の部分は今も**jailerなし**の最小スコープのまま——jailer
+（chroot+cgroup+namespace分離）は意図的に見送っており、Firecrackerプロセスは
+compute-agentコンテナの権限のまま動く（**本番の隔離設計はdocs/architecture.mdの
+「Firecracker: jailerとtapデバイス」節を参照。ここに書くのはあくまで現状の実装**）。
+`driver_hint=QEMU`は引き続き未実装（stub-success）のまま。
 
 ## computeからcompute-agentへ渡る情報
 
@@ -21,6 +22,7 @@ Imageを解決し、起動に必要な情報をすべて`CreateCommand`（NATS�
 | `driver_hint` | `VirtualMachineSpec.driver_hint`（未指定なら`FIRECRACKER`） |
 | `kernel_url` / `rootfs_url` | 解決したImageの`spec.kernel.url` / `spec.rootfs.url`（`QCOW2`の場合は空） |
 | `boot_args` | Imageの`spec.boot_args`（空ならcompute-agent側のデフォルトを使う） |
+| `interfaces` | `network_interfaces`から作られたNetworkInterface+そのSubnetの情報（[network.md](network.md)参照）。空配列ならネットワークなしで起動する |
 
 `kernel_url`/`rootfs_url`が空、または`driver_hint`が`FIRECRACKER`以外の場合、compute-agentは
 即座に成功を返す旧来のstub動作にフォールバックする。
@@ -56,9 +58,11 @@ publishする（結果イベントなし -- VM削除自体はこれの完了を�
 ## シリアルコンソールアクセス（`VirtualMachineService.StreamConsole`）
 
 `kyuusha vm console -tenant=... -id=... [-tail-bytes=N] [-follow]`で、`<vm_id>/console.log`
-（＝Firecrackerの標準出力＝ゲストのシリアルコンソール`ttyS0`）を読める。ネットワークが
-まだ無いこの実装では、ゲストの状態を外から確認する唯一の手段（`docs/specs/audit-logging.md`
-のような監査目的ではなく、デバッグ目的）。
+（＝Firecrackerの標準出力＝ゲストのシリアルコンソール`ttyS0`）を読める。SSHのような
+インタラクティブなゲストアクセス手段がまだ無いこの実装では、ゲストの状態を外から確認する
+唯一の手段（`docs/specs/audit-logging.md`のような監査目的ではなく、デバッグ目的）。実際、
+tap配線（[network.md](network.md)参照）が正しく効いているかどうか自体もこのコンソール
+出力（ゲストの`/init`が書くping結果の行）で確認する。
 
 - **既定**: 末尾64KiB相当を返して終了（`-tail-bytes`未指定時）。`-tail-bytes`に負の値を
   渡すとログ全体、正の値を渡すとその バイト数分の末尾を返す
@@ -81,7 +85,8 @@ publishする（結果イベントなし -- VM削除自体はこれの完了を�
 
 - `/dev/kvm`をcompute-agentコンテナへ渡す必要がある（`playground/docker-compose.yml`の
   `compute-agent-1/2/3`の`devices:`）。ホストにKVMがない場合、Firecrackerの起動自体が
-  失敗する（スタックの他の部分は影響を受けない）
+  失敗する（スタックの他の部分は影響を受けない）。同様に、tap配線には`/dev/net/tun`と
+  `CAP_NET_ADMIN`が要る（同じ`devices:`/`cap_add:`）——なければtap配線だけが失敗する
 - kernel/rootfsは`image-assets`という専用compose serviceが配信する（プレーンHTTP、ホストには
   公開しない）。中身はビルド時（`docker build`。このsandboxではコンテナのランタイムネット
   ワークが外部インターネットに届かないため、実行時ではなくビルド時に取得している）に用意する:
@@ -94,7 +99,8 @@ publishする（結果イベントなし -- VM削除自体はこれの完了を�
 
 ## この実装がカバーしないもの
 
-- ネットワーク（tap/VLAN。networkサービス実装後の別途対応）
+- クロスHypervisorのネットワーク疎通（同じHypervisor内のtap+ブリッジのみ。
+  [network.md](network.md)「tap配線とローカルネットワーク」参照）
 - jailer（chroot/cgroup/namespace分離。本番運用前に必須、docs/architecture.md参照）
 - ダウンロードした`kernel_url`/`rootfs_url`の内容のdigest検証
 - Stop（一時停止）/Restart。今あるのは起動（Boot）と削除に伴う強制終了（Stop=プロセス終了）のみ

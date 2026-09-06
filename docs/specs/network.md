@@ -77,13 +77,21 @@ Subnetの組み合わせを自動許可する、という形で参照される�
 
 ## この実装がカバーしないもの
 
-- **tap配線・VLANタグ付け**: 実装されてもnetwork-agentという別プロセスは作らない方針
-  ——compute-agentに統合する。理由は、tap配線がVM起動と同じ物理ホスト内で完結する処理で
-  あり、OpenStackのnova-compute/neutron-agent分離のような**プロセス間の往復調整**
-  （ポートbind要求→plugged eventの待ち合わせ）を持ち込む必要がないため。`NetworkInterface.
-  status.hypervisor`は現状常に空文字列で、tap配線が実装された時に反映される。この配線を
-  CNIのように任意バイナリへ委譲するプラガブルな仕組みにすべきかは判断保留中
-  （`docs/architecture.md`「未決事項」3.参照）
+- **クロスHypervisor接続**: tap配線自体は下記「tap配線とローカルネットワーク」の通り
+  実装済みだが、同じHypervisor（同じcompute-agentプロセス、同じネットワーク名前空間）
+  内で完結するタップ+ブリッジだけで、異なるHypervisorに載った同じSubnet上の2つのVM同士
+  は疎通しない。物理アップリンクへの本物のVLANトランクか、VXLANのようなオーバーレイで
+  ホスト間のL2を延伸する仕組みが必要で、これは別の後続マイルストーンとして未着手
+  ——このスコープの絞り方自体、最初の実VM起動（[Firecracker起動仕様](firecracker-boot.md)
+  参照）を「ネットワークなし」に絞った時と同じ考え方
+- `NetworkInterface.status.hypervisor`は現状常に空文字列のまま（tap配線が実装された今も
+  未実装）。networkサービス側でどのHypervisorに実際にバインドされたかを追跡するには、
+  `NetworkInterfacePhase`にすでに用意されている`Binding`/`Rebinding`フェーズを使った
+  compute-agent→network側への報告の仕組みが要るが、tap配線そのものとは別の作業として
+  切り出している
+  この配線をCNIのように任意バイナリへ委譲するプラガブルな仕組みにすべきかは判断保留中
+  （`docs/architecture.md`「未決事項」3.参照）——今回はその判断を待たず、固定のtap+
+  ブリッジ実装を先に入れている
 - ネットワーク分離の実現方式（VRF/ルートリーク禁止によるテナント間非疎通性、
   DNS/名前解決の拡張機能）は設計のみ（`docs/architecture.md`参照）、実装はまだ
 - **NetworkInterfaceのオーファンGC**: VM Deleteはcomputeの予約解放とcompute-agentへの
@@ -124,6 +132,42 @@ zoneは強制されず（`scheduleVM`のzoneフィルタは無効化）、Networ
 
 CLIからは`kyuusha vm create -subnets=<id1>,<id2>,...`で指定でき、先頭のSubnetが
 `primary`になる。
+
+## tap配線とローカルネットワーク
+
+「compute-agentに統合する」という上記の設計方針を実装したのが
+`internal/compute-agent/netsetup`。`Reconciler.reconcile`のPhaseScheduledケースで
+作られた各NetworkInterface（IP/MAC）とそのSubnet（CIDR/gateway_ip/vlan_id）は
+`compute.CreateCommand.interfaces`としてcompute-agentに渡り（compute-agentはnetwork
+サービスのクライアントを一切持たない——Imageのkernel/rootfs解決と同じ理由）、
+compute-agentがそこから実際のtapデバイスを作る。
+
+具体的には、`vlan_id`ごとに1つのLinuxブリッジ（`kbr<vlan_id>`）をcompute-agent自身の
+ネットワーク名前空間内に作り、そのブリッジにSubnetの`gateway_ip`をそのまま割り当てる
+——ブリッジ自身が「そのSubnetのローカルなゲートウェイ」として実際に機能するようにして
+いる。NetworkInterfaceごとに専用のtapデバイス（名前は`netif-...`のような長いIDから
+決定的に導出した短い名前。Linuxのインタフェース名は15文字までしか使えないため）を
+作ってそのブリッジにmasterとして繋ぎ、Firecrackerの`network-interfaces`設定
+（`host_dev_name`/`guest_mac`）にそのtapを渡す。
+
+ゲストIPの設定にはDHCPもkernelのIP autoconfigurationも使っていない——確実に効く保証が
+ないため。代わりに、compute-agentがboot_argsへ`kyuusha.net.<index>.ip=<ip>/<prefix>`
+のような独自のカーネルコマンドライン規約を追記し、ゲスト側の`/init`
+（`docker/fc-guest-init.sh`）が`/proc/cmdline`から直接パースして`ip addr add`
+する。`primary`なインタフェースだけがゲスト側のデフォルトルートを持つ。設定が終わると
+`/init`はそのインタフェースのgateway_ip（＝ホスト側ブリッジのIP）へpingを打ち、結果を
+シリアルコンソールに書く（`kyuusha vm console`で確認できる）——tap配線が実際に機能して
+いることを、2台目のVMを用意しなくても1台のコンソール出力だけで確認できるようにする
+ための自己診断。
+
+tapデバイスの生成にはbusybox `ip`にない`tuntap add`ではなく、`/dev/net/tun`への
+`TUNSETIFF`/`TUNSETPERSIST` ioctl（`golang.org/x/sys/unix`）を直接使っている——
+compute-agentコンテナ・ゲストrootfsのどちらもbusybox `ip`しか持たないため。VM Stop時
+（`fcvmm.Manager.Stop`→プロセスが実際に終了した後の後始末）にtapは削除されるが、
+ブリッジ自体は残す（同じHypervisor上の他のVMと共有されるため）。
+
+この機能には`/dev/net/tun`と`CAP_NET_ADMIN`が要る。`/dev/kvm`と同様、なければこの
+機能だけが動かず（VMはError相当になる）、それ以外のスタックには影響しない。
 
 ## エンドポイント
 

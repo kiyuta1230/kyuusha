@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -174,14 +175,15 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 
 	result := compute.CreateResult{VMID: cmd.VMID, Success: true}
 	if a.Firecracker != nil && cmd.DriverHint == string(compute.VmmDriverFirecracker) && cmd.KernelURL != "" && cmd.RootfsURL != "" {
-		slog.Info("compute-agent: booting VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor)
+		slog.Info("compute-agent: booting VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "interfaces", len(cmd.Interfaces))
 		if err := a.Firecracker.Boot(ctx, computeagentfc.BootSpec{
-			VMID:      cmd.VMID,
-			VCPU:      cmd.VCPU,
-			MemoryMB:  cmd.MemoryMB,
-			KernelURL: cmd.KernelURL,
-			RootfsURL: cmd.RootfsURL,
-			BootArgs:  cmd.BootArgs,
+			VMID:              cmd.VMID,
+			VCPU:              cmd.VCPU,
+			MemoryMB:          cmd.MemoryMB,
+			KernelURL:         cmd.KernelURL,
+			RootfsURL:         cmd.RootfsURL,
+			BootArgs:          cmd.BootArgs,
+			NetworkInterfaces: buildNetIfaces(cmd.VMID, cmd.Interfaces),
 		}); err != nil {
 			span.RecordError(err)
 			slog.Error("compute-agent: boot failed", "vm_id", cmd.VMID, "err", err)
@@ -215,6 +217,41 @@ func (a *Agent) handleDelete(msg jetstream.Msg) {
 	if a.Firecracker != nil {
 		a.Firecracker.Stop(cmd.VMID)
 	}
+}
+
+// buildNetIfaces resolves cmd.Interfaces (compute.NetworkInterfaceInfo,
+// see nats.go) into what fcvmm.Manager.Boot needs to actually wire a tap
+// device for each: mainly parsing CIDR down to a prefix length, since the
+// kernel cmdline convention fcvmm builds (kyuusha.net.<i>.ip=<ip>/<prefix>)
+// needs it in that form. An interface with no IPAddress/CIDR (its
+// NetworkInterface's IP allocation hadn't succeeded yet when the VM was
+// scheduled -- see docs/specs/network.md) is skipped rather than failing
+// the whole boot: the guest simply comes up with one fewer NIC than
+// requested.
+func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []computeagentfc.NetIface {
+	var out []computeagentfc.NetIface
+	for _, ni := range infos {
+		if ni.IPAddress == "" || ni.CIDR == "" {
+			slog.Warn("compute-agent: skipping network interface with no allocated IP yet", "vm_id", vmID, "iface_id", ni.IfaceID)
+			continue
+		}
+		_, ipnet, err := net.ParseCIDR(ni.CIDR)
+		if err != nil {
+			slog.Warn("compute-agent: skipping network interface with unparseable cidr", "vm_id", vmID, "iface_id", ni.IfaceID, "cidr", ni.CIDR, "err", err)
+			continue
+		}
+		prefixLen, _ := ipnet.Mask.Size()
+		out = append(out, computeagentfc.NetIface{
+			IfaceID:    ni.IfaceID,
+			MACAddress: ni.MACAddress,
+			IPAddress:  ni.IPAddress,
+			PrefixLen:  prefixLen,
+			GatewayIP:  ni.GatewayIP,
+			VLANID:     ni.VLANID,
+			Primary:    ni.Primary,
+		})
+	}
+	return out
 }
 
 func (a *Agent) publishHeartbeat() {

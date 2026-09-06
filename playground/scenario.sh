@@ -119,7 +119,7 @@ else
 fi
 
 echo "==> creating Subnet for tenant $tenant (zone-a; real IPAM -- see docs/specs/network.md)"
-subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-subnet -zone=zone-a -cidr=10.0.1.0/24)"
+subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-subnet -zone=zone-a -cidr=10.0.1.0/24 -gateway-ip=10.0.1.1)"
 echo "$subnet_line"
 subnet="$(echo "$subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 vlan_id="$(echo "$subnet_line" | grep -o 'vlan_id=[^ ]*' | cut -d= -f2)"
@@ -139,6 +139,21 @@ if ! echo "$netvm_line" | grep -q 'phase=Running' || [ -z "$netvm_iface" ]; then
   exit 1
 fi
 echo "    confirmed: interface_refs populated by the Reconciler ($netvm_iface)"
+
+echo "==> confirming the guest actually got a real tap device (real IP config + a successful ping to the Subnet's gateway_ip -- see internal/compute-agent/netsetup and docs/specs/network.md)"
+netvm_console=""
+for _ in $(seq 1 10); do
+  netvm_console="$(go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$netvm_id" 2>/dev/null)"
+  echo "$netvm_console" | grep -q "kyuusha: eth0 " && break
+  sleep 1
+done
+if echo "$netvm_console" | grep -q "kyuusha: eth0 reached gateway 10.0.1.1 OK"; then
+  echo "    confirmed: guest reached its Subnet gateway over a real tap device"
+elif echo "$netvm_console" | grep -q "kyuusha: eth0 configured"; then
+  echo "!! guest configured eth0 but could not reach the gateway (needs CAP_NET_ADMIN + /dev/net/tun on the compute-agent container): $netvm_console" >&2
+else
+  echo "!! could not confirm real network wiring for vm-netif (no /dev/kvm or CAP_NET_ADMIN on this host? try: kyuusha vm console -tenant=$tenant -id=$netvm_id): $netvm_console" >&2
+fi
 
 echo "==> confirming VM Create rejects an unknown subnet_id in -subnets"
 if go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-bad-subnet \

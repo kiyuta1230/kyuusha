@@ -49,12 +49,22 @@ func validateNetworkInterfaces(ctx context.Context, client networkv1.SubnetServi
 // ルール": iface-<vm-id>-<index>) so a retry of this step (e.g. after the
 // Reconciler's own Update following this call fails and the VM is
 // re-observed still Scheduled) is idempotent via network's own
-// idempotent-by-name Create, not by anything special here. Returns the
-// created NetworkInterface IDs, for VirtualMachineStatus.InterfaceRefs.
-func createNetworkInterfaces(ctx context.Context, client networkv1.NetworkInterfaceServiceClient, tenantID, vmID string, attachments []NetworkAttachment) ([]string, error) {
-	refs := make([]string, 0, len(attachments))
+// idempotent-by-name Create, not by anything special here.
+//
+// Each result also carries its Subnet's CIDR/gateway_ip/vlan_id (re-fetched
+// here rather than reusing whatever validateNetworkInterfaces saw moments
+// earlier -- Subnets can change between Create and Scheduled, same
+// reasoning as the zone re-derivation in reconciler.go), so compute-agent
+// has everything it needs to wire a real tap device (see
+// internal/compute-agent/netsetup) without a network service client of its
+// own -- same shape as Image resolution for boot inputs. A NetworkInterface
+// whose own IP allocation hasn't succeeded yet (its Subnet's pool was
+// exhausted) is still returned (for VirtualMachineStatus.InterfaceRefs),
+// just with IPAddress/CIDR left empty; compute-agent skips wiring it.
+func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetServiceClient, netifClient networkv1.NetworkInterfaceServiceClient, tenantID, vmID string, attachments []NetworkAttachment) ([]NetworkInterfaceInfo, error) {
+	infos := make([]NetworkInterfaceInfo, 0, len(attachments))
 	for i, a := range attachments {
-		n, err := client.Create(ctx, &networkv1.CreateNetworkInterfaceRequest{
+		n, err := netifClient.Create(ctx, &networkv1.CreateNetworkInterfaceRequest{
 			TenantId: tenantID,
 			Name:     fmt.Sprintf("iface-%s-%d", vmID, i),
 			Spec: &networkv1.NetworkInterfaceSpec{
@@ -63,9 +73,24 @@ func createNetworkInterfaces(ctx context.Context, client networkv1.NetworkInterf
 			},
 		})
 		if err != nil {
-			return refs, err
+			return infos, err
 		}
-		refs = append(refs, n.GetMeta().GetId())
+		info := NetworkInterfaceInfo{
+			IfaceID:    n.GetMeta().GetId(),
+			IPAddress:  n.GetStatus().GetIpAddress(),
+			MACAddress: n.GetStatus().GetMacAddress(),
+			Primary:    a.Primary,
+		}
+		if info.IPAddress != "" {
+			sn, err := subnetClient.Get(ctx, &networkv1.GetSubnetRequest{TenantId: tenantID, Id: a.SubnetID})
+			if err != nil {
+				return infos, err
+			}
+			info.CIDR = sn.GetSpec().GetCidr()
+			info.GatewayIP = sn.GetSpec().GetGatewayIp()
+			info.VLANID = sn.GetStatus().GetVlanId()
+		}
+		infos = append(infos, info)
 	}
-	return refs, nil
+	return infos, nil
 }

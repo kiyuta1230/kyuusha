@@ -126,9 +126,11 @@ func (f *FakeImageClient) Watch(context.Context, *imagev1.WatchImagesRequest, ..
 
 // FakeSubnetClient is a minimal networkv1.SubnetServiceClient for tests
 // that don't want to run a real network server: Get always returns a Ready
-// Subnet in the given Zone (default "zone-a") regardless of the requested
-// id, unless the id is empty; every other method panics since
-// compute.Service never calls them.
+// Subnet in the given Zone (default "zone-a") with a plausible CIDR/
+// gateway_ip/vlan_id (so createNetworkInterfaces has something real to
+// build a NetworkInterfaceInfo from) regardless of the requested id, unless
+// the id is empty; every other method panics since compute.Service never
+// calls them.
 type FakeSubnetClient struct {
 	Zone  string // default: "zone-a"
 	Phase string // default: "Ready"
@@ -153,9 +155,13 @@ func (f *FakeSubnetClient) Get(ctx context.Context, req *networkv1.GetSubnetRequ
 		return nil, status.Error(codes.NotFound, "subnet: not found")
 	}
 	return &networkv1.Subnet{
-		Meta:   &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
-		Spec:   &networkv1.SubnetSpec{Zone: f.zone()},
-		Status: &networkv1.SubnetStatus{Phase: f.phase()},
+		Meta: &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
+		Spec: &networkv1.SubnetSpec{
+			Zone:      f.zone(),
+			Cidr:      "10.0.0.0/24",
+			GatewayIp: "10.0.0.1",
+		},
+		Status: &networkv1.SubnetStatus{Phase: f.phase(), VlanId: 1},
 	}, nil
 }
 
@@ -182,15 +188,34 @@ func (f *FakeSubnetClient) Watch(context.Context, *networkv1.WatchSubnetsRequest
 // FakeNetworkInterfaceClient is a minimal
 // networkv1.NetworkInterfaceServiceClient for tests: Create always
 // succeeds, deriving the id from the request's name (deterministic and
-// traceable in test assertions, unlike network's own random IDs); every
-// other method panics since compute.Service never calls them.
-type FakeNetworkInterfaceClient struct{}
+// traceable in test assertions, unlike network's own random IDs) and
+// allocating a plausible IP/MAC (so createNetworkInterfaces' full
+// NetworkInterfaceInfo path is exercised, not just the Pending/no-IP
+// short-circuit); every other method panics since compute.Service never
+// calls them.
+type FakeNetworkInterfaceClient struct {
+	// Pending, if true, simulates a Subnet whose IP pool is exhausted (see
+	// docs/specs/network.md): Create still succeeds, but the returned
+	// NetworkInterface has no IP/MAC allocated yet.
+	Pending bool
+}
 
 func (f *FakeNetworkInterfaceClient) Create(ctx context.Context, req *networkv1.CreateNetworkInterfaceRequest, opts ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
+	if f.Pending {
+		return &networkv1.NetworkInterface{
+			Meta:   &resourcev1.ObjectMeta{Id: "netif-" + req.GetName(), TenantId: req.GetTenantId()},
+			Spec:   req.GetSpec(),
+			Status: &networkv1.NetworkInterfaceStatus{Phase: "Pending"},
+		}, nil
+	}
 	return &networkv1.NetworkInterface{
-		Meta:   &resourcev1.ObjectMeta{Id: "netif-" + req.GetName(), TenantId: req.GetTenantId()},
-		Spec:   req.GetSpec(),
-		Status: &networkv1.NetworkInterfaceStatus{Phase: "Ready"},
+		Meta: &resourcev1.ObjectMeta{Id: "netif-" + req.GetName(), TenantId: req.GetTenantId()},
+		Spec: req.GetSpec(),
+		Status: &networkv1.NetworkInterfaceStatus{
+			Phase:      "Ready",
+			IpAddress:  "10.0.0.5",
+			MacAddress: "02:00:00:00:00:01",
+		},
 	}, nil
 }
 

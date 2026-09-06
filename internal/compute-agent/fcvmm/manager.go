@@ -1,11 +1,12 @@
 // Package fcvmm runs real Firecracker microVMs for compute-agent. This is
 // the first real (non-stub) VMM integration: it deliberately skips jailer
-// (chroot/cgroup/namespace isolation) and any network device (tap/VLAN),
-// since the network service they depend on doesn't exist yet -- see
-// docs/specs/firecracker-boot.md for the scope this covers and what it
-// doesn't. Only driver_hint=FIRECRACKER (KERNEL_ROOTFS images) is handled
-// here; QEMU remains an unimplemented stub, same as before this package
-// existed.
+// (chroot/cgroup/namespace isolation) -- see docs/specs/firecracker-boot.md
+// for the scope this covers and what it doesn't. Real network interfaces
+// (tap devices, per-VLAN bridges -- see internal/compute-agent/netsetup)
+// are wired for VMs whose spec carries them; a VM with none boots exactly
+// as before (network-less, serial-only). Only driver_hint=FIRECRACKER
+// (KERNEL_ROOTFS images) is handled here; QEMU remains an unimplemented
+// stub, same as before this package existed.
 package fcvmm
 
 import (
@@ -20,9 +21,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/netsetup"
 )
 
 const (
@@ -46,12 +50,29 @@ const (
 // BootSpec is what Manager needs to boot one VM. Callers (agent.go) build
 // this from a compute.CreateCommand.
 type BootSpec struct {
-	VMID      string
-	VCPU      int32
-	MemoryMB  int64
-	KernelURL string
-	RootfsURL string
-	BootArgs  string
+	VMID              string
+	VCPU              int32
+	MemoryMB          int64
+	KernelURL         string
+	RootfsURL         string
+	BootArgs          string
+	NetworkInterfaces []NetIface
+}
+
+// NetIface is one already-resolved network attachment Boot should wire for
+// real (see internal/compute-agent/netsetup): agent.go builds these from
+// compute.CreateCommand.Interfaces, having already parsed CIDR down to
+// PrefixLen. IPAddress/CIDR are only ever missing (and so never turned into
+// a NetIface at all) when the NetworkInterface's own IP allocation hadn't
+// succeeded yet at Scheduled time -- see docs/specs/network.md.
+type NetIface struct {
+	IfaceID    string
+	MACAddress string
+	IPAddress  string
+	PrefixLen  int
+	GatewayIP  string
+	VLANID     int32
+	Primary    bool
 }
 
 // Manager tracks the Firecracker processes this compute-agent has booted.
@@ -72,7 +93,15 @@ type Manager struct {
 	downloadMu sync.Mutex // serializes ensureCached; fine at playground scale
 
 	mu      sync.Mutex
-	running map[string]*exec.Cmd
+	running map[string]*runningVM
+}
+
+// runningVM tracks what Boot did for one VM, so Stop (and the exit-watch
+// goroutine Boot starts) can tear all of it down: the process itself, and
+// every tap device Wire created for it.
+type runningVM struct {
+	cmd  *exec.Cmd
+	taps []string
 }
 
 func (m *Manager) binPath() string {
@@ -139,9 +168,52 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	apiSock := filepath.Join(vmDir, "api.sock")
 	_ = os.Remove(apiSock) // stale socket from a previous failed attempt, if any; Firecracker refuses to start if this exists
 
+	// Wire every real network interface before Firecracker starts (it opens
+	// each host_dev_name by name at boot, so the tap must already exist).
+	// On a failure partway through, unwire whatever this call already
+	// created rather than leaking tap devices for a VM that never boots.
+	var fcNetIfaces []fcNetworkInterface
+	var netArgs []string
+	var taps []string
+	for i, ni := range spec.NetworkInterfaces {
+		wired, err := netsetup.Wire(netsetup.Interface{
+			IfaceID:    ni.IfaceID,
+			MACAddress: ni.MACAddress,
+			GatewayIP:  ni.GatewayIP,
+			PrefixLen:  ni.PrefixLen,
+			VLANID:     ni.VLANID,
+		})
+		if err != nil {
+			for _, t := range taps {
+				_ = netsetup.DeleteTap(t)
+			}
+			return fmt.Errorf("fcvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
+		}
+		taps = append(taps, wired.TapName)
+		fcNetIfaces = append(fcNetIfaces, fcNetworkInterface{
+			IfaceID:     fmt.Sprintf("eth%d", i),
+			GuestMAC:    wired.MACAddress,
+			HostDevName: wired.TapName,
+		})
+		// kyuusha.net.<i>.* is not a real kernel parameter: it's parsed by
+		// this guest's own /init (docker/fc-guest-init.sh), which is why
+		// static IP configuration can travel this way instead of needing a
+		// DHCP server or kernel IP autoconfiguration support.
+		netArgs = append(netArgs, fmt.Sprintf("kyuusha.net.%d.ip=%s/%d", i, ni.IPAddress, ni.PrefixLen))
+		if ni.GatewayIP != "" {
+			netArgs = append(netArgs, fmt.Sprintf("kyuusha.net.%d.gw=%s", i, ni.GatewayIP))
+		}
+		if ni.Primary {
+			netArgs = append(netArgs, fmt.Sprintf("kyuusha.net.%d.primary=1", i))
+		}
+	}
+
 	bootArgs := spec.BootArgs
 	if bootArgs == "" {
 		bootArgs = defaultBootArgs
+	}
+	if len(netArgs) > 0 {
+		bootArgs = bootArgs + " " + strings.Join(netArgs, " ")
 	}
 	cfg := fcConfig{
 		BootSource: fcBootSource{KernelImagePath: kernelPath, BootArgs: bootArgs},
@@ -151,19 +223,29 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 			IsRootDevice: true,
 			IsReadOnly:   false,
 		}},
-		MachineConfig: fcMachineConfig{VcpuCount: spec.VCPU, MemSizeMib: spec.MemoryMB},
+		MachineConfig:     fcMachineConfig{VcpuCount: spec.VCPU, MemSizeMib: spec.MemoryMB},
+		NetworkInterfaces: fcNetIfaces,
 	}
 	configPath := filepath.Join(vmDir, "config.json")
 	configBytes, err := json.Marshal(cfg)
 	if err != nil {
+		for _, t := range taps {
+			_ = netsetup.DeleteTap(t)
+		}
 		return fmt.Errorf("fcvmm: marshal config: %w", err)
 	}
 	if err := os.WriteFile(configPath, configBytes, 0o644); err != nil {
+		for _, t := range taps {
+			_ = netsetup.DeleteTap(t)
+		}
 		return fmt.Errorf("fcvmm: write config: %w", err)
 	}
 
 	consoleLog, err := os.Create(filepath.Join(vmDir, "console.log"))
 	if err != nil {
+		for _, t := range taps {
+			_ = netsetup.DeleteTap(t)
+		}
 		return fmt.Errorf("fcvmm: create console log: %w", err)
 	}
 	defer consoleLog.Close()
@@ -175,6 +257,9 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	cmd.Stdout = consoleLog
 	cmd.Stderr = consoleLog
 	if err := cmd.Start(); err != nil {
+		for _, t := range taps {
+			_ = netsetup.DeleteTap(t)
+		}
 		return fmt.Errorf("fcvmm: start firecracker: %w", err)
 	}
 
@@ -183,15 +268,18 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 
 	select {
 	case err := <-exitCh:
+		for _, t := range taps {
+			_ = netsetup.DeleteTap(t)
+		}
 		return fmt.Errorf("fcvmm: firecracker exited immediately (see %s): %w", consoleLog.Name(), err)
 	case <-time.After(bootGracePeriod):
 	}
 
 	m.mu.Lock()
 	if m.running == nil {
-		m.running = make(map[string]*exec.Cmd)
+		m.running = make(map[string]*runningVM)
 	}
-	m.running[spec.VMID] = cmd
+	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps}
 	m.mu.Unlock()
 
 	go func() {
@@ -199,6 +287,9 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		m.mu.Lock()
 		delete(m.running, spec.VMID)
 		m.mu.Unlock()
+		for _, t := range taps {
+			_ = netsetup.DeleteTap(t)
+		}
 		if err != nil {
 			slog.Warn("fcvmm: firecracker process exited", "vm_id", spec.VMID, "err", err)
 		} else {
@@ -215,16 +306,19 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 // reconciler.go's releaseIfReserved.
 func (m *Manager) Stop(vmID string) {
 	m.mu.Lock()
-	cmd, ok := m.running[vmID]
+	rv, ok := m.running[vmID]
 	m.mu.Unlock()
 	if !ok {
 		return
 	}
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = rv.cmd.Process.Signal(syscall.SIGTERM)
 	go func() {
 		time.Sleep(killGracePeriod)
-		_ = cmd.Process.Signal(syscall.SIGKILL) // no-op if it already exited on SIGTERM
+		_ = rv.cmd.Process.Signal(syscall.SIGKILL) // no-op if it already exited on SIGTERM
 	}()
+	// Tap cleanup happens in Boot's exit-watch goroutine once the process
+	// actually exits, not here -- deleting a tap while Firecracker still
+	// has it open is unnecessary churn for no benefit.
 }
 
 // ensureCached downloads rawURL into CacheDir if not already present,
@@ -312,8 +406,15 @@ type fcMachineConfig struct {
 	MemSizeMib int64 `json:"mem_size_mib"`
 }
 
+type fcNetworkInterface struct {
+	IfaceID     string `json:"iface_id"`
+	GuestMAC    string `json:"guest_mac"`
+	HostDevName string `json:"host_dev_name"`
+}
+
 type fcConfig struct {
-	BootSource    fcBootSource    `json:"boot-source"`
-	Drives        []fcDrive       `json:"drives"`
-	MachineConfig fcMachineConfig `json:"machine-config"`
+	BootSource        fcBootSource         `json:"boot-source"`
+	Drives            []fcDrive            `json:"drives"`
+	MachineConfig     fcMachineConfig      `json:"machine-config"`
+	NetworkInterfaces []fcNetworkInterface `json:"network-interfaces,omitempty"`
 }

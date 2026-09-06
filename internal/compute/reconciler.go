@@ -152,10 +152,14 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 		// iface-<vm-id>-<index> convention (docs/architecture.md), so a
 		// retry of this same reconcile (e.g. after the Update below fails)
 		// re-creates nothing -- network's Create is idempotent by name.
-		refs, err := createNetworkInterfaces(ctx, r.svc.netifClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.NetworkInterfaces)
+		netifs, err := createNetworkInterfaces(ctx, r.svc.subnetClient, r.svc.netifClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.NetworkInterfaces)
 		if err != nil {
 			slog.Error("provision: create network interfaces failed", "vm_id", vm.Meta.ID, "err", err)
 			return
+		}
+		refs := make([]string, len(netifs))
+		for i, n := range netifs {
+			refs[i] = n.IfaceID
 		}
 		vm.Status.InterfaceRefs = refs
 
@@ -186,6 +190,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			VCPU:       vm.Spec.VCPU,
 			MemoryMB:   vm.Spec.MemoryMB,
 			DriverHint: string(vm.Spec.DriverHint),
+			Interfaces: netifs,
 		}
 		// Resolve the Image to concrete boot inputs now (not at Create time:
 		// the Image could have changed, and compute-agent has no image

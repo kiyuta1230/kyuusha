@@ -1323,9 +1323,16 @@ scrapeするなり`remote_write`で自分の長期保存基盤に転送するな
 
 - 各VirtualMachineの Firecracker プロセスは**jailerでラップする**（chroot + cgroup + namespace分離）。
   同一ホストに複数テナントのVirtualMachineが同居する前提上、プロセス分離は必須と判断
-- cgroupのCPU/メモリ制限は`spec.vcpu`/`spec.memory_mb`の値からそのまま設定する
-- tapデバイスは`NetworkInterface`ごとに決定的な名前（例: `tap-<interface-idの短縮形>`）で作成し、
-  ホスト側ブリッジで`Subnet.status.vlan_id`のVLANタグを付与してFirecrackerに渡す
+  ——**未実装**（実装は今もcompute-agentコンテナの権限のまま動く。[Firecracker起動仕様](specs/firecracker-boot.md)参照）
+- cgroupのCPU/メモリ制限は`spec.vcpu`/`spec.memory_mb`の値からそのまま設定する ——未実装
+- tapデバイスは**実装済み**（`internal/compute-agent/netsetup`、[network仕様](specs/network.md)
+  「tap配線とローカルネットワーク」参照）: `NetworkInterface`ごとに決定的な名前
+  （IDのSHA-256短縮形、`tap<12桁hex>`）で作成する。ここに書いた当初の想定は「1つの
+  ホスト側ブリッジに`Subnet.status.vlan_id`で802.1Qタグ付けする」だったが、実装は
+  `vlan_id`ごとに別々のLinuxブリッジ（`kbr<vlan_id>`）を作る方式にした——物理アップリンクへの
+  VLANトランクがまだ無い単一ホスト構成では、タグ付けよりブリッジを分ける方が単純で、同じ
+  分離効果が得られるため。複数ホストへの本物のVLANトランク/VXLANオーバーレイは未着手
+  （[network仕様](specs/network.md)「クロスHypervisor接続」参照）
 
 ### コンソールアクセス
 
