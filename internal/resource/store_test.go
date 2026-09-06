@@ -26,8 +26,8 @@ func (t *thing) GetCreatedAt() time.Time     { return t.Meta.CreatedAt }
 func (t *thing) SetCreatedAt(tm time.Time)   { t.Meta.CreatedAt = tm }
 func (t *thing) GetDeletedAt() *time.Time    { return t.Meta.DeletedAt }
 func (t *thing) SetDeletedAt(tm *time.Time)  { t.Meta.DeletedAt = tm }
-func (t *thing) GetFinalizers() []string     { return t.Meta.Finalizers }
-func (t *thing) SetFinalizers(f []string)    { t.Meta.Finalizers = f }
+func (t *thing) GetFinalizers() []Finalizer  { return t.Meta.Finalizers }
+func (t *thing) SetFinalizers(f []Finalizer) { t.Meta.Finalizers = f }
 
 var (
 	errThingNotFound = errors.New("thing: not found")
@@ -66,7 +66,7 @@ func TestStore_DeleteWithFinalizersMarksAndWaits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	out.Meta.Finalizers = []string{"acme.corp/network-acl-cleanup"}
+	out.Meta.Finalizers = []Finalizer{{Name: "acme.corp/network-acl-cleanup"}}
 	out, err = s.Update(ctx, out)
 	if err != nil {
 		t.Fatalf("Update to add finalizer: %v", err)
@@ -150,7 +150,7 @@ func TestStore_UpdateCannotResurrectAPendingDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	out.Meta.Finalizers = []string{"acme.corp/cleanup"}
+	out.Meta.Finalizers = []Finalizer{{Name: "acme.corp/cleanup"}}
 	out, err = s.Update(ctx, out)
 	if err != nil {
 		t.Fatalf("Update to add finalizer: %v", err)

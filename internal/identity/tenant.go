@@ -50,17 +50,17 @@ type Tenant struct {
 // own Meta.TenantID equals its Meta.ID (see Service.Create), which is what
 // lets a caller "self-service" Get/Watch their own Tenant through the same
 // tenant-scoped authorization compute's VirtualMachine uses.
-func (t *Tenant) GetID() string               { return t.Meta.ID }
-func (t *Tenant) SetID(id string)             { t.Meta.ID = id }
-func (t *Tenant) GetName() string             { return t.Meta.Name }
-func (t *Tenant) SetName(name string)         { t.Meta.Name = name }
-func (t *Tenant) GetTenantID() string         { return t.Meta.TenantID }
-func (t *Tenant) SetTenantID(id string)       { t.Meta.TenantID = id }
-func (t *Tenant) GetResourceVersion() int64   { return t.Meta.ResourceVersion }
-func (t *Tenant) SetResourceVersion(rv int64) { t.Meta.ResourceVersion = rv }
-func (t *Tenant) GetCreatedAt() time.Time     { return t.Meta.CreatedAt }
-func (t *Tenant) SetCreatedAt(tm time.Time)   { t.Meta.CreatedAt = tm }
-func (t *Tenant) GetDeletedAt() *time.Time    { return t.Meta.DeletedAt }
-func (t *Tenant) SetDeletedAt(tm *time.Time)  { t.Meta.DeletedAt = tm }
-func (t *Tenant) GetFinalizers() []string     { return t.Meta.Finalizers }
-func (t *Tenant) SetFinalizers(f []string)    { t.Meta.Finalizers = f }
+func (t *Tenant) GetID() string                        { return t.Meta.ID }
+func (t *Tenant) SetID(id string)                      { t.Meta.ID = id }
+func (t *Tenant) GetName() string                      { return t.Meta.Name }
+func (t *Tenant) SetName(name string)                  { t.Meta.Name = name }
+func (t *Tenant) GetTenantID() string                  { return t.Meta.TenantID }
+func (t *Tenant) SetTenantID(id string)                { t.Meta.TenantID = id }
+func (t *Tenant) GetResourceVersion() int64            { return t.Meta.ResourceVersion }
+func (t *Tenant) SetResourceVersion(rv int64)          { t.Meta.ResourceVersion = rv }
+func (t *Tenant) GetCreatedAt() time.Time              { return t.Meta.CreatedAt }
+func (t *Tenant) SetCreatedAt(tm time.Time)            { t.Meta.CreatedAt = tm }
+func (t *Tenant) GetDeletedAt() *time.Time             { return t.Meta.DeletedAt }
+func (t *Tenant) SetDeletedAt(tm *time.Time)           { t.Meta.DeletedAt = tm }
+func (t *Tenant) GetFinalizers() []resource.Finalizer  { return t.Meta.Finalizers }
+func (t *Tenant) SetFinalizers(f []resource.Finalizer) { t.Meta.Finalizers = f }

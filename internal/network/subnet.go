@@ -56,17 +56,17 @@ type Subnet struct {
 
 // Delegating methods so *Subnet satisfies resource.Meta, letting it plug
 // into the generic resource.Store.
-func (s *Subnet) GetID() string               { return s.Meta.ID }
-func (s *Subnet) SetID(id string)             { s.Meta.ID = id }
-func (s *Subnet) GetName() string             { return s.Meta.Name }
-func (s *Subnet) SetName(name string)         { s.Meta.Name = name }
-func (s *Subnet) GetTenantID() string         { return s.Meta.TenantID }
-func (s *Subnet) SetTenantID(id string)       { s.Meta.TenantID = id }
-func (s *Subnet) GetResourceVersion() int64   { return s.Meta.ResourceVersion }
-func (s *Subnet) SetResourceVersion(rv int64) { s.Meta.ResourceVersion = rv }
-func (s *Subnet) GetCreatedAt() time.Time     { return s.Meta.CreatedAt }
-func (s *Subnet) SetCreatedAt(t time.Time)    { s.Meta.CreatedAt = t }
-func (s *Subnet) GetDeletedAt() *time.Time    { return s.Meta.DeletedAt }
-func (s *Subnet) SetDeletedAt(t *time.Time)   { s.Meta.DeletedAt = t }
-func (s *Subnet) GetFinalizers() []string     { return s.Meta.Finalizers }
-func (s *Subnet) SetFinalizers(f []string)    { s.Meta.Finalizers = f }
+func (s *Subnet) GetID() string                        { return s.Meta.ID }
+func (s *Subnet) SetID(id string)                      { s.Meta.ID = id }
+func (s *Subnet) GetName() string                      { return s.Meta.Name }
+func (s *Subnet) SetName(name string)                  { s.Meta.Name = name }
+func (s *Subnet) GetTenantID() string                  { return s.Meta.TenantID }
+func (s *Subnet) SetTenantID(id string)                { s.Meta.TenantID = id }
+func (s *Subnet) GetResourceVersion() int64            { return s.Meta.ResourceVersion }
+func (s *Subnet) SetResourceVersion(rv int64)          { s.Meta.ResourceVersion = rv }
+func (s *Subnet) GetCreatedAt() time.Time              { return s.Meta.CreatedAt }
+func (s *Subnet) SetCreatedAt(t time.Time)             { s.Meta.CreatedAt = t }
+func (s *Subnet) GetDeletedAt() *time.Time             { return s.Meta.DeletedAt }
+func (s *Subnet) SetDeletedAt(t *time.Time)            { s.Meta.DeletedAt = t }
+func (s *Subnet) GetFinalizers() []resource.Finalizer  { return s.Meta.Finalizers }
+func (s *Subnet) SetFinalizers(f []resource.Finalizer) { s.Meta.Finalizers = f }

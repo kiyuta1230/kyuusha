@@ -2,10 +2,13 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 )
 
 func newTestService(t *testing.T, ctx context.Context) *Service {
@@ -146,7 +149,7 @@ func TestService_DeleteWithFinalizerBlocksUntilCleared(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	vm.Meta.Finalizers = []string{"acme.corp/network-acl-cleanup"}
+	vm.Meta.Finalizers = []resource.Finalizer{{Name: "acme.corp/network-acl-cleanup"}}
 	updated, err := svc.Update(ctx, vm)
 	if err != nil {
 		t.Fatalf("Update to add finalizer: %v", err)
@@ -188,5 +191,73 @@ func TestService_DeleteWithFinalizerBlocksUntilCleared(t *testing.T) {
 	}
 	if _, err := svc.Get(ctx, tenant, updated.Meta.ID); err != ErrNotFound {
 		t.Fatalf("Get after clearing the last finalizer: got %v, want ErrNotFound", err)
+	}
+}
+
+// TestService_FinalizerOwnership exercises checkFinalizerMutation through
+// Service.Update: a finalizer's AddedBy is stamped server-side from the
+// caller's propagated identity (internal/authn.ContextWithPropagatedCallerForTest
+// simulates what api-gateway's client interceptor would have attached) and
+// only that same caller, or an admin, may later remove it.
+func TestService_FinalizerOwnership(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	aliceCtx := authn.ContextWithPropagatedCallerForTest(ctx, "alice", false)
+	vm.Meta.Finalizers = []resource.Finalizer{{Name: "acme.corp/network-acl-cleanup", AddedBy: "someone-else-entirely"}}
+	added, err := svc.Update(aliceCtx, vm)
+	if err != nil {
+		t.Fatalf("Update to add finalizer as alice: %v", err)
+	}
+	if got := added.Meta.Finalizers[0].AddedBy; got != "alice" {
+		t.Fatalf("AddedBy = %q, want %q (client-supplied value must be ignored and server-stamped)", got, "alice")
+	}
+
+	bobCtx := authn.ContextWithPropagatedCallerForTest(ctx, "bob", false)
+	rejected := added
+	rejected.Meta.Finalizers = nil
+	if _, err := svc.Update(bobCtx, rejected); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Update removing alice's finalizer as bob: got %v, want ErrValidation", err)
+	}
+	// The rejected removal must not have taken effect.
+	stillThere, err := svc.Get(ctx, tenant, added.Meta.ID)
+	if err != nil {
+		t.Fatalf("Get after rejected removal: %v", err)
+	}
+	if len(stillThere.Meta.Finalizers) != 1 {
+		t.Fatalf("Finalizers = %v, want alice's entry to survive bob's rejected removal", stillThere.Meta.Finalizers)
+	}
+
+	adminCtx := authn.ContextWithPropagatedCallerForTest(ctx, "carol", true)
+	byAdmin := stillThere
+	byAdmin.Meta.Finalizers = nil
+	if _, err := svc.Update(adminCtx, byAdmin); err != nil {
+		t.Fatalf("Update removing alice's finalizer as admin: %v", err)
+	}
+	afterAdmin, err := svc.Get(ctx, tenant, added.Meta.ID)
+	if err != nil {
+		t.Fatalf("Get after admin removal: %v", err)
+	}
+	if len(afterAdmin.Meta.Finalizers) != 0 {
+		t.Fatalf("Finalizers = %v, want empty after admin removal", afterAdmin.Meta.Finalizers)
+	}
+
+	// alice can add another one and remove it herself.
+	afterAdmin.Meta.Finalizers = []resource.Finalizer{{Name: "acme.corp/again"}}
+	reAdded, err := svc.Update(aliceCtx, afterAdmin)
+	if err != nil {
+		t.Fatalf("Update to re-add finalizer as alice: %v", err)
+	}
+	reAdded.Meta.Finalizers = nil
+	if _, err := svc.Update(aliceCtx, reAdded); err != nil {
+		t.Fatalf("Update removing alice's own finalizer as alice: %v", err)
 	}
 }

@@ -339,7 +339,12 @@ grep -q PermissionDenied /tmp/kyuusha-authz-check.log && echo "    denied as exp
 
 echo "==> confirming Finalizer blocks VM deletion until cleared (see docs/specs/external-integration.md)"
 vm6_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-6 ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
-add_fin_line="$(go run ./cmd/kyuusha vm add-finalizer -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" -finalizer=acme.corp/network-acl-cleanup)"
+
+echo "==> confirming Finalizer ownership: added_by is stamped from the real propagated JWT sub (via api-gateway's PropagateCaller* interceptors, internal/authn/propagate.go), and only that sub (or admin) may remove it"
+alice_token="$(go run ./cmd/kyuusha token mint -tenant="$tenant" -sub=alice@example.com)"
+bob_token="$(go run ./cmd/kyuusha token mint -tenant="$tenant" -sub=bob@example.com)"
+
+add_fin_line="$(KYUUSHA_TOKEN="$alice_token" go run ./cmd/kyuusha vm add-finalizer -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" -finalizer=acme.corp/network-acl-cleanup)"
 echo "$add_fin_line"
 if ! echo "$add_fin_line" | grep -q 'finalizers=acme.corp/network-acl-cleanup'; then
   echo "!! finalizer did not round-trip: $add_fin_line" >&2
@@ -356,12 +361,24 @@ if ! echo "$pending_line" | grep -q 'phase=Deleting' || echo "$pending_line" | g
 fi
 echo "    confirmed: Delete did not remove the VM while its finalizer was still present"
 
-go run ./cmd/kyuusha vm remove-finalizer -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" -finalizer=acme.corp/network-acl-cleanup >/dev/null
+if KYUUSHA_TOKEN="$bob_token" go run ./cmd/kyuusha vm remove-finalizer -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" -finalizer=acme.corp/network-acl-cleanup 2>/tmp/kyuusha-finalizer-owner-check.log; then
+  echo "!! expected bob's removal of alice's finalizer to be rejected but it succeeded" >&2
+  exit 1
+fi
+grep -qi invalidargument /tmp/kyuusha-finalizer-owner-check.log && echo "    denied as expected: bob is not acme.corp/network-acl-cleanup's added_by"
+still_there_line="$(go run ./cmd/kyuusha vm get -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id")"
+if ! echo "$still_there_line" | grep -q 'finalizers=acme.corp/network-acl-cleanup'; then
+  echo "!! bob's rejected removal actually took effect: $still_there_line" >&2
+  exit 1
+fi
+echo "    confirmed: the finalizer survived bob's rejected removal"
+
+KYUUSHA_TOKEN="$alice_token" go run ./cmd/kyuusha vm remove-finalizer -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" -finalizer=acme.corp/network-acl-cleanup >/dev/null
 if go run ./cmd/kyuusha vm get -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id" 2>/tmp/kyuusha-finalizer-gone-check.log; then
   echo "!! expected NotFound but the VM still exists after its last finalizer was removed" >&2
   exit 1
 fi
-grep -q NotFound /tmp/kyuusha-finalizer-gone-check.log && echo "    confirmed: removing the last finalizer let the real deletion (and the still-running Firecracker process's teardown) proceed"
+grep -q NotFound /tmp/kyuusha-finalizer-gone-check.log && echo "    confirmed: removing the last finalizer (as alice, its added_by) let the real deletion (and the still-running Firecracker process's teardown) proceed"
 
 echo "==> creating a VM with -user-data-file (cloud-init NoCloud seed disk; no real cloud-init in this guest, so this only proves delivery -- see docs/specs/firecracker-boot.md 'UserData注入')"
 # vm-6 was just fully deleted above, freeing the quota slot this reuses.

@@ -40,17 +40,17 @@ type Volume struct {
 
 // Delegating methods so *Volume satisfies resource.Meta, letting it plug
 // into the generic resource.Store.
-func (v *Volume) GetID() string               { return v.Meta.ID }
-func (v *Volume) SetID(id string)             { v.Meta.ID = id }
-func (v *Volume) GetName() string             { return v.Meta.Name }
-func (v *Volume) SetName(name string)         { v.Meta.Name = name }
-func (v *Volume) GetTenantID() string         { return v.Meta.TenantID }
-func (v *Volume) SetTenantID(id string)       { v.Meta.TenantID = id }
-func (v *Volume) GetResourceVersion() int64   { return v.Meta.ResourceVersion }
-func (v *Volume) SetResourceVersion(rv int64) { v.Meta.ResourceVersion = rv }
-func (v *Volume) GetCreatedAt() time.Time     { return v.Meta.CreatedAt }
-func (v *Volume) SetCreatedAt(t time.Time)    { v.Meta.CreatedAt = t }
-func (v *Volume) GetDeletedAt() *time.Time    { return v.Meta.DeletedAt }
-func (v *Volume) SetDeletedAt(t *time.Time)   { v.Meta.DeletedAt = t }
-func (v *Volume) GetFinalizers() []string     { return v.Meta.Finalizers }
-func (v *Volume) SetFinalizers(f []string)    { v.Meta.Finalizers = f }
+func (v *Volume) GetID() string                        { return v.Meta.ID }
+func (v *Volume) SetID(id string)                      { v.Meta.ID = id }
+func (v *Volume) GetName() string                      { return v.Meta.Name }
+func (v *Volume) SetName(name string)                  { v.Meta.Name = name }
+func (v *Volume) GetTenantID() string                  { return v.Meta.TenantID }
+func (v *Volume) SetTenantID(id string)                { v.Meta.TenantID = id }
+func (v *Volume) GetResourceVersion() int64            { return v.Meta.ResourceVersion }
+func (v *Volume) SetResourceVersion(rv int64)          { v.Meta.ResourceVersion = rv }
+func (v *Volume) GetCreatedAt() time.Time              { return v.Meta.CreatedAt }
+func (v *Volume) SetCreatedAt(t time.Time)             { v.Meta.CreatedAt = t }
+func (v *Volume) GetDeletedAt() *time.Time             { return v.Meta.DeletedAt }
+func (v *Volume) SetDeletedAt(t *time.Time)            { v.Meta.DeletedAt = t }
+func (v *Volume) GetFinalizers() []resource.Finalizer  { return v.Meta.Finalizers }
+func (v *Volume) SetFinalizers(f []resource.Finalizer) { v.Meta.Finalizers = f }

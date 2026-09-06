@@ -77,17 +77,17 @@ type Image struct {
 
 // Delegating methods so *Image satisfies resource.Meta, letting it plug
 // into the generic resource.Store.
-func (i *Image) GetID() string               { return i.Meta.ID }
-func (i *Image) SetID(id string)             { i.Meta.ID = id }
-func (i *Image) GetName() string             { return i.Meta.Name }
-func (i *Image) SetName(name string)         { i.Meta.Name = name }
-func (i *Image) GetTenantID() string         { return i.Meta.TenantID }
-func (i *Image) SetTenantID(id string)       { i.Meta.TenantID = id }
-func (i *Image) GetResourceVersion() int64   { return i.Meta.ResourceVersion }
-func (i *Image) SetResourceVersion(rv int64) { i.Meta.ResourceVersion = rv }
-func (i *Image) GetCreatedAt() time.Time     { return i.Meta.CreatedAt }
-func (i *Image) SetCreatedAt(t time.Time)    { i.Meta.CreatedAt = t }
-func (i *Image) GetDeletedAt() *time.Time    { return i.Meta.DeletedAt }
-func (i *Image) SetDeletedAt(t *time.Time)   { i.Meta.DeletedAt = t }
-func (i *Image) GetFinalizers() []string     { return i.Meta.Finalizers }
-func (i *Image) SetFinalizers(f []string)    { i.Meta.Finalizers = f }
+func (i *Image) GetID() string                        { return i.Meta.ID }
+func (i *Image) SetID(id string)                      { i.Meta.ID = id }
+func (i *Image) GetName() string                      { return i.Meta.Name }
+func (i *Image) SetName(name string)                  { i.Meta.Name = name }
+func (i *Image) GetTenantID() string                  { return i.Meta.TenantID }
+func (i *Image) SetTenantID(id string)                { i.Meta.TenantID = id }
+func (i *Image) GetResourceVersion() int64            { return i.Meta.ResourceVersion }
+func (i *Image) SetResourceVersion(rv int64)          { i.Meta.ResourceVersion = rv }
+func (i *Image) GetCreatedAt() time.Time              { return i.Meta.CreatedAt }
+func (i *Image) SetCreatedAt(t time.Time)             { i.Meta.CreatedAt = t }
+func (i *Image) GetDeletedAt() *time.Time             { return i.Meta.DeletedAt }
+func (i *Image) SetDeletedAt(t *time.Time)            { i.Meta.DeletedAt = t }
+func (i *Image) GetFinalizers() []resource.Finalizer  { return i.Meta.Finalizers }
+func (i *Image) SetFinalizers(f []resource.Finalizer) { i.Meta.Finalizers = f }

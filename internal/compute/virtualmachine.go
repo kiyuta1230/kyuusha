@@ -85,17 +85,17 @@ type VirtualMachine struct {
 // Delegating methods so *VirtualMachine satisfies resource.Meta, letting it
 // plug into the generic resource.Store. Meta is a named (not embedded)
 // field so every existing vm.Meta.TenantID-style access keeps working.
-func (v *VirtualMachine) GetID() string               { return v.Meta.ID }
-func (v *VirtualMachine) SetID(id string)             { v.Meta.ID = id }
-func (v *VirtualMachine) GetName() string             { return v.Meta.Name }
-func (v *VirtualMachine) SetName(name string)         { v.Meta.Name = name }
-func (v *VirtualMachine) GetTenantID() string         { return v.Meta.TenantID }
-func (v *VirtualMachine) GetCreatedAt() time.Time     { return v.Meta.CreatedAt }
-func (v *VirtualMachine) SetTenantID(id string)       { v.Meta.TenantID = id }
-func (v *VirtualMachine) GetResourceVersion() int64   { return v.Meta.ResourceVersion }
-func (v *VirtualMachine) SetResourceVersion(rv int64) { v.Meta.ResourceVersion = rv }
-func (v *VirtualMachine) SetCreatedAt(t time.Time)    { v.Meta.CreatedAt = t }
-func (v *VirtualMachine) GetDeletedAt() *time.Time    { return v.Meta.DeletedAt }
-func (v *VirtualMachine) SetDeletedAt(t *time.Time)   { v.Meta.DeletedAt = t }
-func (v *VirtualMachine) GetFinalizers() []string     { return v.Meta.Finalizers }
-func (v *VirtualMachine) SetFinalizers(f []string)    { v.Meta.Finalizers = f }
+func (v *VirtualMachine) GetID() string                        { return v.Meta.ID }
+func (v *VirtualMachine) SetID(id string)                      { v.Meta.ID = id }
+func (v *VirtualMachine) GetName() string                      { return v.Meta.Name }
+func (v *VirtualMachine) SetName(name string)                  { v.Meta.Name = name }
+func (v *VirtualMachine) GetTenantID() string                  { return v.Meta.TenantID }
+func (v *VirtualMachine) GetCreatedAt() time.Time              { return v.Meta.CreatedAt }
+func (v *VirtualMachine) SetTenantID(id string)                { v.Meta.TenantID = id }
+func (v *VirtualMachine) GetResourceVersion() int64            { return v.Meta.ResourceVersion }
+func (v *VirtualMachine) SetResourceVersion(rv int64)          { v.Meta.ResourceVersion = rv }
+func (v *VirtualMachine) SetCreatedAt(t time.Time)             { v.Meta.CreatedAt = t }
+func (v *VirtualMachine) GetDeletedAt() *time.Time             { return v.Meta.DeletedAt }
+func (v *VirtualMachine) SetDeletedAt(t *time.Time)            { v.Meta.DeletedAt = t }
+func (v *VirtualMachine) GetFinalizers() []resource.Finalizer  { return v.Meta.Finalizers }
+func (v *VirtualMachine) SetFinalizers(f []resource.Finalizer) { v.Meta.Finalizers = f }

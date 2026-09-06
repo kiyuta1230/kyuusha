@@ -35,11 +35,13 @@ CMDB登録、ネットワーク台帳登録、独自バリデーション、削�
    決めておく。命名規則の強制はない（Kubernetesの`<domain>/<name>`風を推奨する
    だけ）
 2. 対象VMをWatch（またはGet）し、`meta.finalizers`に自分の識別名が無ければ
-   `Update`で追加する
+   `Update`で追加する。エントリの`added_by`はクライアントが指定しても無視され、
+   呼び出し元の実JWT `sub`がサーバー側で刻まれる（「認可」節参照）
 3. 誰かがそのVMを`Delete`すると、`meta.deleted_at`がセットされる（実削除は
    されない）。外部コントローラーはWatchでこれを検知する
 4. 後処理（外部ACLの確認・解放など）を行い、完了したら`meta.finalizers`から
-   自分の識別名だけを取り除いて`Update`を呼ぶ
+   自分の識別名だけを取り除いて`Update`を呼ぶ。追加した時と同じ`sub`（または
+   admin role）でないとこの削除は拒否される
 5. `finalizers`が空になった時点で、そのUpdate呼び出しの中で実際に削除され、
    `Deleted`イベントが出る
 
@@ -52,10 +54,11 @@ kyuusha vm add-finalizer -tenant=... -id=... -finalizer="acme.corp/network-acl-c
 kyuusha vm remove-finalizer -tenant=... -id=... -finalizer="acme.corp/network-acl-cleanup"
 ```
 
-どちらもGet→ローカルで`finalizers`を変更→Updateという素朴な実装（サーバー側に
-専用ロジックは無い）。`resource_version`の競合時にリトライはしない
-（一発実行のCLIツールであり、コントローラーループではないため、競合はそのまま
-呼び出し元に返す）。
+どちらもGet→ローカルで`finalizers`を変更→Updateという素朴な実装。ただし
+サーバー側（`compute.Service.Update`）が`added_by`のスタンプ・所有権チェックを
+行うため、単純なフィールド上書きではない（「認可」節参照）。`resource_version`の
+競合時にリトライはしない（一発実行のCLIツールであり、コントローラーループでは
+ないため、競合はそのまま呼び出し元に返す）。
 
 `kyuusha vm get`/`list`/`watch`の出力には`finalizers=...`と`deleted_at=...`が
 表示される。
@@ -77,14 +80,21 @@ Finalizer機構自体は`internal/resource.Store`（全リソース共通の汎�
   経路（CLI等）が無いため実害はないが、対応は個別に必要——**現状これらの型に
   Finalizerを使わないこと**
 
-### 既知の制限（認可）
+### 認可: 削除できるのは追加した本人かadminだけ
 
-Finalizerエントリの削除は、対象オブジェクトへのUpdate権限があれば誰でもできる。
-「このFinalizerを登録したコントローラー自身しか消せない」という細粒度認可は
-無い——現状のOPAポリシー（`tenant_id`と`role`のみを判定）では表現できないため。
-テナント自身のトークンが、外部コントローラーの意図に反してFinalizerを消して
-しまうことを技術的には妨げない。外部コントローラーは通常admin roleのトークンで
-動かす想定だが、これ自体がFinalizerを消されることへの防御にはならない。
+Finalizerエントリの削除は「追加したのと同じ呼び出し元（JWT `sub`）」または
+admin roleに限定されている（`compute.Service.Update`の`checkFinalizerMutation`）。
+追加時に刻まれる`added_by`はクライアントが指定しても無視され、api-gatewayが
+検証したJWTの`sub`がサーバー側で刻まれる——つまりテナント自身の別トークンで
+勝手に他者のFinalizerを消すことはできない。この`sub`はapi-gatewayでしか
+手に入らないため、`internal/authn/propagate.go`のgRPCクライアントインター
+セプターがapi-gateway→backend間の信頼済みメタデータとして転送する（詳細は
+`docs/architecture.md`「Finalizerの所有権」節）。
+
+例外: `added_by`が空文字列（このplumbing導入前に付いたエントリ、または
+api-gatewayを経由しない内部呼び出しから付いたエントリ）の場合は所有者不在
+として誰でも削除できる——後方互換のためであり、新規に追加するエントリが
+この状態になることは通常ない（api-gateway経由なら必ず`sub`が刻まれる）。
 
 ## ゲート系(作成側): 未実装
 

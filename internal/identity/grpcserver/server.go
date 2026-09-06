@@ -170,6 +170,22 @@ func fromStatusProto(st *identityv1.TenantStatus) identity.TenantStatus {
 	return out
 }
 
+func toFinalizersProto(fs []resource.Finalizer) []*resourcev1.Finalizer {
+	out := make([]*resourcev1.Finalizer, len(fs))
+	for i, f := range fs {
+		out[i] = &resourcev1.Finalizer{Name: f.Name, AddedBy: f.AddedBy}
+	}
+	return out
+}
+
+func fromFinalizersProto(fs []*resourcev1.Finalizer) []resource.Finalizer {
+	out := make([]resource.Finalizer, len(fs))
+	for i, f := range fs {
+		out[i] = resource.Finalizer{Name: f.GetName(), AddedBy: f.GetAddedBy()}
+	}
+	return out
+}
+
 func toTenant(tn identity.Tenant) *identityv1.Tenant {
 	meta := &resourcev1.ObjectMeta{
 		Id:              tn.Meta.ID,
@@ -177,7 +193,7 @@ func toTenant(tn identity.Tenant) *identityv1.Tenant {
 		TenantId:        tn.Meta.TenantID,
 		ResourceVersion: tn.Meta.ResourceVersion,
 		CreatedAt:       timestamppb.New(tn.Meta.CreatedAt),
-		Finalizers:      tn.Meta.Finalizers,
+		Finalizers:      toFinalizersProto(tn.Meta.Finalizers),
 	}
 	if tn.Meta.DeletedAt != nil {
 		meta.DeletedAt = timestamppb.New(*tn.Meta.DeletedAt)
@@ -198,7 +214,7 @@ func fromTenant(tn *identityv1.Tenant) identity.Tenant {
 			TenantID:        meta.GetTenantId(),
 			ResourceVersion: meta.GetResourceVersion(),
 			CreatedAt:       meta.GetCreatedAt().AsTime(),
-			Finalizers:      meta.GetFinalizers(),
+			Finalizers:      fromFinalizersProto(meta.GetFinalizers()),
 		},
 		Spec:   fromSpec(tn.GetSpec()),
 		Status: fromStatusProto(tn.GetStatus()),

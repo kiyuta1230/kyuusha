@@ -924,11 +924,30 @@ Finalizer存在時に`status.phase = Deleting`へ遷移させてからstore.Dele
 のに、プール割当だけ先に解放されてしまう整合性の穴がある。今のところこれらの型に
 Finalizerを付ける経路が無いため実害はないが、対応は個別に必要。
 
-**既知の穴（認可）**: Finalizerエントリの削除は、対象オブジェクトへのUpdate権限が
-あれば誰でもできる。Finalizer名ごとの細粒度認可（「このFinalizerは登録した
-コントローラー自身しか消せない」）は無い——現状のOPAポリシー（`tenant_id`と`role`
-のみを見る）では表現できないため、テナント自身のトークンが外部コントローラーの
-Finalizerを勝手に消してしまうことを技術的には妨げない。将来の課題。
+**Finalizerの所有権（実装済み）**: `Finalizer`は`{name, added_by}`の構造体で、
+`added_by`は追加した呼び出し者の実JWT `sub`がサーバー側で刻む値であり、クライアント
+が指定した値は常に無視される（`compute.Service.Update`の`checkFinalizerMutation`）。
+削除は「`added_by`と同じ`sub`」または「admin ロール」のみ許可し、それ以外は
+`ErrValidation`で拒否されFinalizerはそのまま残る——ただし`added_by`が空文字列
+（このplumbing導入前に付いたエントリ、あるいはapi-gatewayを経由しない内部呼び出し
+から付いたエントリ）のときは所有者不在として誰でも削除できる、後方互換のための
+例外。
+
+この`sub`は api-gateway でしか手に入らない（JWT検証はapi-gatewayだけが行う）ため、
+`internal/authn/propagate.go`のgRPC**クライアント**インターセプター
+（`PropagateCallerUnaryInterceptor`/`PropagateCallerStreamInterceptor`）が
+`authn.FromContext`で読んだ呼び出し元の`sub`・admin判定を信頼済みgRPCメタデータ
+（`x-kyuusha-caller-sub`/`x-kyuusha-caller-admin`）としてbackendへ転送する。
+`cmd/api-gateway/main.go`の5つのbackend dialすべてに1度だけ付与すればよく、
+各thin proxyのコード変更は不要——受信済みcontext（Claims付き）がそのまま
+`p.backend.XXX(ctx, req)`経由でクライアントインターセプターまで流れるため。
+backend側は`authn.CallerSubFromContext`/`CallerIsAdminFromContext`で読む。これは
+新しい認証機構ではなく、「backendはapi-gatewayを無条件に信頼する」という既存の
+境界防御モデル（[認証・認可とHypervisor登録](#認証認可とhypervisor登録)節の
+mTLS follow-upと同じ前提）の延長でしかない。
+
+現状これを使うのはVirtualMachineのFinalizer削除のみだが、`sub`/admin判定自体は
+汎用のメタデータ転送なので、将来他の細粒度認可にもそのまま使い回せる。
 
 `deleted_at`はprotoの`ObjectMeta`に元々あった「論理削除(任意)」というコメント付きの
 未使用フィールドをそのまま転用した——新しいフィールドを増やす前に、既にある

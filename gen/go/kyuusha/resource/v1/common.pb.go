@@ -37,11 +37,11 @@ type ObjectMeta struct {
 	// non-empty, the object lingers with this set until every entry is
 	// removed via Update, at which point it's actually removed.
 	DeletedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
-	// Opaque strings naming holders that must each remove their own entry
-	// (via Update) before a Delete that set deleted_at can actually take
-	// effect. Empty for almost every resource in practice today; see
-	// docs/architecture.md "Finalizer".
-	Finalizers    []string `protobuf:"bytes,7,rep,name=finalizers,proto3" json:"finalizers,omitempty"`
+	// Holders that must each remove their own entry (via Update) before a
+	// Delete that set deleted_at can actually take effect. Empty for almost
+	// every resource in practice today; see docs/architecture.md
+	// "Finalizer".
+	Finalizers    []*Finalizer `protobuf:"bytes,7,rep,name=finalizers,proto3" json:"finalizers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -118,11 +118,72 @@ func (x *ObjectMeta) GetDeletedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *ObjectMeta) GetFinalizers() []string {
+func (x *ObjectMeta) GetFinalizers() []*Finalizer {
 	if x != nil {
 		return x.Finalizers
 	}
 	return nil
+}
+
+// See docs/architecture.md "Finalizer" 「所有者チェック」.
+type Finalizer struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The caller's identity (JWT `sub`, forwarded by api-gateway as a
+	// trusted gRPC metadata key -- see internal/authn/propagate.go) at the
+	// moment this entry was added. Set by the server, not the client: any
+	// added_by a client sends is ignored for a brand new entry (stamped
+	// with the real caller instead) and immutable thereafter. Empty if the
+	// adding call carried no caller identity (e.g. an internal, non-
+	// api-gateway call) -- such an entry can then be removed by anyone,
+	// same as before this field existed.
+	AddedBy       string `protobuf:"bytes,2,opt,name=added_by,json=addedBy,proto3" json:"added_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Finalizer) Reset() {
+	*x = Finalizer{}
+	mi := &file_kyuusha_resource_v1_common_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Finalizer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Finalizer) ProtoMessage() {}
+
+func (x *Finalizer) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_resource_v1_common_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Finalizer.ProtoReflect.Descriptor instead.
+func (*Finalizer) Descriptor() ([]byte, []int) {
+	return file_kyuusha_resource_v1_common_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Finalizer) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Finalizer) GetAddedBy() string {
+	if x != nil {
+		return x.AddedBy
+	}
+	return ""
 }
 
 type Condition struct {
@@ -138,7 +199,7 @@ type Condition struct {
 
 func (x *Condition) Reset() {
 	*x = Condition{}
-	mi := &file_kyuusha_resource_v1_common_proto_msgTypes[1]
+	mi := &file_kyuusha_resource_v1_common_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -150,7 +211,7 @@ func (x *Condition) String() string {
 func (*Condition) ProtoMessage() {}
 
 func (x *Condition) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_resource_v1_common_proto_msgTypes[1]
+	mi := &file_kyuusha_resource_v1_common_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -163,7 +224,7 @@ func (x *Condition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Condition.ProtoReflect.Descriptor instead.
 func (*Condition) Descriptor() ([]byte, []int) {
-	return file_kyuusha_resource_v1_common_proto_rawDescGZIP(), []int{1}
+	return file_kyuusha_resource_v1_common_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Condition) GetType() string {
@@ -205,7 +266,7 @@ var File_kyuusha_resource_v1_common_proto protoreflect.FileDescriptor
 
 const file_kyuusha_resource_v1_common_proto_rawDesc = "" +
 	"\n" +
-	" kyuusha/resource/v1/common.proto\x12\x13kyuusha.resource.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8e\x02\n" +
+	" kyuusha/resource/v1/common.proto\x12\x13kyuusha.resource.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xae\x02\n" +
 	"\n" +
 	"ObjectMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -215,10 +276,13 @@ const file_kyuusha_resource_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"deleted_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tdeletedAt\x12\x1e\n" +
+	"deleted_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tdeletedAt\x12>\n" +
 	"\n" +
-	"finalizers\x18\a \x03(\tR\n" +
-	"finalizers\"\xb3\x01\n" +
+	"finalizers\x18\a \x03(\v2\x1e.kyuusha.resource.v1.FinalizerR\n" +
+	"finalizers\":\n" +
+	"\tFinalizer\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
+	"\badded_by\x18\x02 \x01(\tR\aaddedBy\"\xb3\x01\n" +
 	"\tCondition\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +
@@ -238,21 +302,23 @@ func file_kyuusha_resource_v1_common_proto_rawDescGZIP() []byte {
 	return file_kyuusha_resource_v1_common_proto_rawDescData
 }
 
-var file_kyuusha_resource_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_kyuusha_resource_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_kyuusha_resource_v1_common_proto_goTypes = []any{
 	(*ObjectMeta)(nil),            // 0: kyuusha.resource.v1.ObjectMeta
-	(*Condition)(nil),             // 1: kyuusha.resource.v1.Condition
-	(*timestamppb.Timestamp)(nil), // 2: google.protobuf.Timestamp
+	(*Finalizer)(nil),             // 1: kyuusha.resource.v1.Finalizer
+	(*Condition)(nil),             // 2: kyuusha.resource.v1.Condition
+	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
 }
 var file_kyuusha_resource_v1_common_proto_depIdxs = []int32{
-	2, // 0: kyuusha.resource.v1.ObjectMeta.created_at:type_name -> google.protobuf.Timestamp
-	2, // 1: kyuusha.resource.v1.ObjectMeta.deleted_at:type_name -> google.protobuf.Timestamp
-	2, // 2: kyuusha.resource.v1.Condition.last_transition_at:type_name -> google.protobuf.Timestamp
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 0: kyuusha.resource.v1.ObjectMeta.created_at:type_name -> google.protobuf.Timestamp
+	3, // 1: kyuusha.resource.v1.ObjectMeta.deleted_at:type_name -> google.protobuf.Timestamp
+	1, // 2: kyuusha.resource.v1.ObjectMeta.finalizers:type_name -> kyuusha.resource.v1.Finalizer
+	3, // 3: kyuusha.resource.v1.Condition.last_transition_at:type_name -> google.protobuf.Timestamp
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_resource_v1_common_proto_init() }
@@ -266,7 +332,7 @@ func file_kyuusha_resource_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_resource_v1_common_proto_rawDesc), len(file_kyuusha_resource_v1_common_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

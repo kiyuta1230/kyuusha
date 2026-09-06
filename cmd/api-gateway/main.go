@@ -108,6 +108,8 @@ func main() {
 	computeConn, err := grpc.NewClient(*computeAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithChainUnaryInterceptor(authn.PropagateCallerUnaryInterceptor()),
+		grpc.WithChainStreamInterceptor(authn.PropagateCallerStreamInterceptor()),
 	)
 	if err != nil {
 		slog.Error("dial compute", "addr", *computeAddr, "err", err)
@@ -120,6 +122,8 @@ func main() {
 	identityConn, err := grpc.NewClient(*identityAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithChainUnaryInterceptor(authn.PropagateCallerUnaryInterceptor()),
+		grpc.WithChainStreamInterceptor(authn.PropagateCallerStreamInterceptor()),
 	)
 	if err != nil {
 		slog.Error("dial identity", "addr", *identityAddr, "err", err)
@@ -131,6 +135,8 @@ func main() {
 	imageConn, err := grpc.NewClient(*imageAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithChainUnaryInterceptor(authn.PropagateCallerUnaryInterceptor()),
+		grpc.WithChainStreamInterceptor(authn.PropagateCallerStreamInterceptor()),
 	)
 	if err != nil {
 		slog.Error("dial image", "addr", *imageAddr, "err", err)
@@ -142,6 +148,8 @@ func main() {
 	networkConn, err := grpc.NewClient(*networkAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithChainUnaryInterceptor(authn.PropagateCallerUnaryInterceptor()),
+		grpc.WithChainStreamInterceptor(authn.PropagateCallerStreamInterceptor()),
 	)
 	if err != nil {
 		slog.Error("dial network", "addr", *networkAddr, "err", err)
@@ -154,6 +162,8 @@ func main() {
 	blockStorageConn, err := grpc.NewClient(*blockStorageAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpc.WithChainUnaryInterceptor(authn.PropagateCallerUnaryInterceptor()),
+		grpc.WithChainStreamInterceptor(authn.PropagateCallerStreamInterceptor()),
 	)
 	if err != nil {
 		slog.Error("dial block-storage", "addr", *blockStorageAddr, "err", err)

@@ -46,17 +46,17 @@ type NetworkInterface struct {
 
 // Delegating methods so *NetworkInterface satisfies resource.Meta, letting
 // it plug into the generic resource.Store.
-func (n *NetworkInterface) GetID() string               { return n.Meta.ID }
-func (n *NetworkInterface) SetID(id string)             { n.Meta.ID = id }
-func (n *NetworkInterface) GetName() string             { return n.Meta.Name }
-func (n *NetworkInterface) SetName(name string)         { n.Meta.Name = name }
-func (n *NetworkInterface) GetTenantID() string         { return n.Meta.TenantID }
-func (n *NetworkInterface) SetTenantID(id string)       { n.Meta.TenantID = id }
-func (n *NetworkInterface) GetResourceVersion() int64   { return n.Meta.ResourceVersion }
-func (n *NetworkInterface) SetResourceVersion(rv int64) { n.Meta.ResourceVersion = rv }
-func (n *NetworkInterface) GetCreatedAt() time.Time     { return n.Meta.CreatedAt }
-func (n *NetworkInterface) SetCreatedAt(t time.Time)    { n.Meta.CreatedAt = t }
-func (n *NetworkInterface) GetDeletedAt() *time.Time    { return n.Meta.DeletedAt }
-func (n *NetworkInterface) SetDeletedAt(t *time.Time)   { n.Meta.DeletedAt = t }
-func (n *NetworkInterface) GetFinalizers() []string     { return n.Meta.Finalizers }
-func (n *NetworkInterface) SetFinalizers(f []string)    { n.Meta.Finalizers = f }
+func (n *NetworkInterface) GetID() string                        { return n.Meta.ID }
+func (n *NetworkInterface) SetID(id string)                      { n.Meta.ID = id }
+func (n *NetworkInterface) GetName() string                      { return n.Meta.Name }
+func (n *NetworkInterface) SetName(name string)                  { n.Meta.Name = name }
+func (n *NetworkInterface) GetTenantID() string                  { return n.Meta.TenantID }
+func (n *NetworkInterface) SetTenantID(id string)                { n.Meta.TenantID = id }
+func (n *NetworkInterface) GetResourceVersion() int64            { return n.Meta.ResourceVersion }
+func (n *NetworkInterface) SetResourceVersion(rv int64)          { n.Meta.ResourceVersion = rv }
+func (n *NetworkInterface) GetCreatedAt() time.Time              { return n.Meta.CreatedAt }
+func (n *NetworkInterface) SetCreatedAt(t time.Time)             { n.Meta.CreatedAt = t }
+func (n *NetworkInterface) GetDeletedAt() *time.Time             { return n.Meta.DeletedAt }
+func (n *NetworkInterface) SetDeletedAt(t *time.Time)            { n.Meta.DeletedAt = t }
+func (n *NetworkInterface) GetFinalizers() []resource.Finalizer  { return n.Meta.Finalizers }
+func (n *NetworkInterface) SetFinalizers(f []resource.Finalizer) { n.Meta.Finalizers = f }

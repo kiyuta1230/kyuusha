@@ -149,6 +149,14 @@ func toConditionProto(c resource.Condition) *resourcev1.Condition {
 	}
 }
 
+func toFinalizersProto(fs []resource.Finalizer) []*resourcev1.Finalizer {
+	out := make([]*resourcev1.Finalizer, len(fs))
+	for i, f := range fs {
+		out[i] = &resourcev1.Finalizer{Name: f.Name, AddedBy: f.AddedBy}
+	}
+	return out
+}
+
 func toMetaProto(m resource.ObjectMeta) *resourcev1.ObjectMeta {
 	out := &resourcev1.ObjectMeta{
 		Id:              m.ID,
@@ -156,7 +164,7 @@ func toMetaProto(m resource.ObjectMeta) *resourcev1.ObjectMeta {
 		TenantId:        m.TenantID,
 		ResourceVersion: m.ResourceVersion,
 		CreatedAt:       timestamppb.New(m.CreatedAt),
-		Finalizers:      m.Finalizers,
+		Finalizers:      toFinalizersProto(m.Finalizers),
 	}
 	if m.DeletedAt != nil {
 		out.DeletedAt = timestamppb.New(*m.DeletedAt)

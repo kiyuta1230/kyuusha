@@ -54,17 +54,17 @@ type Hypervisor struct {
 
 // Delegating methods so *Hypervisor satisfies resource.Meta, letting it
 // plug into the generic resource.Store.
-func (h *Hypervisor) GetID() string               { return h.Meta.ID }
-func (h *Hypervisor) SetID(id string)             { h.Meta.ID = id }
-func (h *Hypervisor) GetName() string             { return h.Meta.Name }
-func (h *Hypervisor) SetName(name string)         { h.Meta.Name = name }
-func (h *Hypervisor) GetTenantID() string         { return h.Meta.TenantID }
-func (h *Hypervisor) SetTenantID(id string)       { h.Meta.TenantID = id }
-func (h *Hypervisor) GetResourceVersion() int64   { return h.Meta.ResourceVersion }
-func (h *Hypervisor) SetResourceVersion(rv int64) { h.Meta.ResourceVersion = rv }
-func (h *Hypervisor) GetCreatedAt() time.Time     { return h.Meta.CreatedAt }
-func (h *Hypervisor) SetCreatedAt(t time.Time)    { h.Meta.CreatedAt = t }
-func (h *Hypervisor) GetDeletedAt() *time.Time    { return h.Meta.DeletedAt }
-func (h *Hypervisor) SetDeletedAt(t *time.Time)   { h.Meta.DeletedAt = t }
-func (h *Hypervisor) GetFinalizers() []string     { return h.Meta.Finalizers }
-func (h *Hypervisor) SetFinalizers(f []string)    { h.Meta.Finalizers = f }
+func (h *Hypervisor) GetID() string                        { return h.Meta.ID }
+func (h *Hypervisor) SetID(id string)                      { h.Meta.ID = id }
+func (h *Hypervisor) GetName() string                      { return h.Meta.Name }
+func (h *Hypervisor) SetName(name string)                  { h.Meta.Name = name }
+func (h *Hypervisor) GetTenantID() string                  { return h.Meta.TenantID }
+func (h *Hypervisor) SetTenantID(id string)                { h.Meta.TenantID = id }
+func (h *Hypervisor) GetResourceVersion() int64            { return h.Meta.ResourceVersion }
+func (h *Hypervisor) SetResourceVersion(rv int64)          { h.Meta.ResourceVersion = rv }
+func (h *Hypervisor) GetCreatedAt() time.Time              { return h.Meta.CreatedAt }
+func (h *Hypervisor) SetCreatedAt(t time.Time)             { h.Meta.CreatedAt = t }
+func (h *Hypervisor) GetDeletedAt() *time.Time             { return h.Meta.DeletedAt }
+func (h *Hypervisor) SetDeletedAt(t *time.Time)            { h.Meta.DeletedAt = t }
+func (h *Hypervisor) GetFinalizers() []resource.Finalizer  { return h.Meta.Finalizers }
+func (h *Hypervisor) SetFinalizers(f []resource.Finalizer) { h.Meta.Finalizers = f }

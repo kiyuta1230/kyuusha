@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/image"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
 	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
@@ -191,6 +192,14 @@ func toStatusProto(st image.Status) *imagev1.ImageStatus {
 	return out
 }
 
+func toFinalizersProto(fs []resource.Finalizer) []*resourcev1.Finalizer {
+	out := make([]*resourcev1.Finalizer, len(fs))
+	for i, f := range fs {
+		out[i] = &resourcev1.Finalizer{Name: f.Name, AddedBy: f.AddedBy}
+	}
+	return out
+}
+
 func toImage(img image.Image) *imagev1.Image {
 	meta := &resourcev1.ObjectMeta{
 		Id:              img.Meta.ID,
@@ -198,7 +207,7 @@ func toImage(img image.Image) *imagev1.Image {
 		TenantId:        img.Meta.TenantID,
 		ResourceVersion: img.Meta.ResourceVersion,
 		CreatedAt:       timestamppb.New(img.Meta.CreatedAt),
-		Finalizers:      img.Meta.Finalizers,
+		Finalizers:      toFinalizersProto(img.Meta.Finalizers),
 	}
 	if img.Meta.DeletedAt != nil {
 		meta.DeletedAt = timestamppb.New(*img.Meta.DeletedAt)

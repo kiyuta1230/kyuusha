@@ -20,6 +20,7 @@ import (
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 func main() {
@@ -369,11 +370,15 @@ func vmConsole(args []string) {
 }
 
 func printVM(vm *computev1.VirtualMachine) {
+	finalizerNames := make([]string, len(vm.GetMeta().GetFinalizers()))
+	for i, f := range vm.GetMeta().GetFinalizers() {
+		finalizerNames[i] = f.GetName()
+	}
 	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s finalizers=%s deleted_at=%s rv=%d\n",
 		vm.GetMeta().GetId(), vm.GetMeta().GetName(), vm.GetMeta().GetTenantId(),
 		vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(),
 		strings.Join(vm.GetStatus().GetInterfaceRefs(), ","),
-		strings.Join(vm.GetMeta().GetFinalizers(), ","), deletedAtString(vm.GetMeta().GetDeletedAt()),
+		strings.Join(finalizerNames, ","), deletedAtString(vm.GetMeta().GetDeletedAt()),
 		vm.GetMeta().GetResourceVersion())
 }
 
@@ -412,12 +417,12 @@ func vmAddFinalizer(args []string) {
 		fatal("get: %v", err)
 	}
 	for _, f := range vm.GetMeta().GetFinalizers() {
-		if f == *finalizer {
+		if f.GetName() == *finalizer {
 			printVM(vm) // already present: idempotent no-op
 			return
 		}
 	}
-	vm.Meta.Finalizers = append(vm.Meta.Finalizers, *finalizer)
+	vm.Meta.Finalizers = append(vm.Meta.Finalizers, &resourcev1.Finalizer{Name: *finalizer})
 	updated, err := client.Update(ctx, &computev1.UpdateVirtualMachineRequest{TenantId: *tenant, Vm: vm})
 	if err != nil {
 		fatal("update: %v", err)
@@ -446,7 +451,7 @@ func vmRemoveFinalizer(args []string) {
 	}
 	kept := vm.Meta.Finalizers[:0]
 	for _, f := range vm.GetMeta().GetFinalizers() {
-		if f != *finalizer {
+		if f.GetName() != *finalizer {
 			kept = append(kept, f)
 		}
 	}

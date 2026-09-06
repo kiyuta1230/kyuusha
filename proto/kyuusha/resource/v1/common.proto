@@ -20,11 +20,25 @@ message ObjectMeta {
   // non-empty, the object lingers with this set until every entry is
   // removed via Update, at which point it's actually removed.
   google.protobuf.Timestamp deleted_at = 6;
-  // Opaque strings naming holders that must each remove their own entry
-  // (via Update) before a Delete that set deleted_at can actually take
-  // effect. Empty for almost every resource in practice today; see
-  // docs/architecture.md "Finalizer".
-  repeated string finalizers = 7;
+  // Holders that must each remove their own entry (via Update) before a
+  // Delete that set deleted_at can actually take effect. Empty for almost
+  // every resource in practice today; see docs/architecture.md
+  // "Finalizer".
+  repeated Finalizer finalizers = 7;
+}
+
+// See docs/architecture.md "Finalizer" 「所有者チェック」.
+message Finalizer {
+  string name = 1;
+  // The caller's identity (JWT `sub`, forwarded by api-gateway as a
+  // trusted gRPC metadata key -- see internal/authn/propagate.go) at the
+  // moment this entry was added. Set by the server, not the client: any
+  // added_by a client sends is ignored for a brand new entry (stamped
+  // with the real caller instead) and immutable thereafter. Empty if the
+  // adding call carried no caller identity (e.g. an internal, non-
+  // api-gateway call) -- such an entry can then be removed by anyone,
+  // same as before this field existed.
+  string added_by = 2;
 }
 
 message Condition {

@@ -235,6 +235,22 @@ func fromStatusProto(st *computev1.VirtualMachineStatus) compute.VirtualMachineS
 	return out
 }
 
+func toFinalizersProto(fs []resource.Finalizer) []*resourcev1.Finalizer {
+	out := make([]*resourcev1.Finalizer, len(fs))
+	for i, f := range fs {
+		out[i] = &resourcev1.Finalizer{Name: f.Name, AddedBy: f.AddedBy}
+	}
+	return out
+}
+
+func fromFinalizersProto(fs []*resourcev1.Finalizer) []resource.Finalizer {
+	out := make([]resource.Finalizer, len(fs))
+	for i, f := range fs {
+		out[i] = resource.Finalizer{Name: f.GetName(), AddedBy: f.GetAddedBy()}
+	}
+	return out
+}
+
 func toVM(vm compute.VirtualMachine) *computev1.VirtualMachine {
 	meta := &resourcev1.ObjectMeta{
 		Id:              vm.Meta.ID,
@@ -242,7 +258,7 @@ func toVM(vm compute.VirtualMachine) *computev1.VirtualMachine {
 		TenantId:        vm.Meta.TenantID,
 		ResourceVersion: vm.Meta.ResourceVersion,
 		CreatedAt:       timestamppb.New(vm.Meta.CreatedAt),
-		Finalizers:      vm.Meta.Finalizers,
+		Finalizers:      toFinalizersProto(vm.Meta.Finalizers),
 	}
 	if vm.Meta.DeletedAt != nil {
 		meta.DeletedAt = timestamppb.New(*vm.Meta.DeletedAt)
@@ -263,7 +279,7 @@ func fromVM(vm *computev1.VirtualMachine) compute.VirtualMachine {
 			TenantID:        meta.GetTenantId(),
 			ResourceVersion: meta.GetResourceVersion(),
 			CreatedAt:       meta.GetCreatedAt().AsTime(),
-			Finalizers:      meta.GetFinalizers(),
+			Finalizers:      fromFinalizersProto(meta.GetFinalizers()),
 		},
 		Spec:   fromSpec(vm.GetSpec()),
 		Status: fromStatusProto(vm.GetStatus()),
