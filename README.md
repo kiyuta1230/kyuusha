@@ -1,0 +1,67 @@
+# kyuusha
+
+KaaS(Kubernetes as a Service)の足回りに特化した小さいIaaS。VMを最終利用者が長期間使う
+「ペット」として扱う前提を捨て、KaaSクラスタへハイパーバイザーを供給することに機能を絞った
+OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプト。
+
+想定ユーザーは「OpenStackを導入するには大きすぎる（運用チームを抱えられない）が、VMwareは
+一定規模からライセンスコストが厳しくなる」という間に落ちる企業。想定スケールはハイパーバイザー
+〜500台・VM〜1〜2万台・テナント(KaaSクラスタ)〜500。詳しい設計判断の経緯は
+[docs/architecture.md](docs/architecture.md)を参照。
+
+> **ステータス**: 開発中。ストレージ以外の主要機能（VM/Hypervisor/Image/Network/CLI/認証認可）は
+> playground環境で一通り動作確認済みだが、東西通信のmTLS等いくつかの既知のギャップが残る
+> （詳細は各仕様書の「既知の穴」節を参照）。実ブロックストレージバックエンド（ZFS/NVMe-oF等）は
+> 未実装で、Volumeは現状Quotaチェック→即Readyのみ。
+
+## 構成
+
+| コンポーネント | 役割 |
+|---|---|
+| `api-gateway` | clientが到達できる唯一の公開エンドポイント。JWT検証＋OPA認可 |
+| `identity` | Tenant（テナント・Quota上限値）管理 |
+| `compute` | VirtualMachine・Hypervisor管理。スケジューラ、Quota強制、Image/Network検証 |
+| `compute-agent` | 各ハイパーバイザー上で動くagent。実Firecracker microVMを起動する |
+| `image` | Image（外部URL参照+digest）管理。テナント間共有（PUBLIC/PRIVATE）対応 |
+| `network` | Subnet・NetworkInterface管理。VLAN/IPアドレス払い出し(IPAM) |
+| `block-storage` | Volume・VolumeAttachment管理（実バックエンドはまだ無い） |
+| `kyuusha`（CLI） | 上記すべてをapi-gateway経由で操作するクライアント |
+
+詳細は[システム構成仕様](docs/specs/system-overview.md)を参照。
+
+## クイックスタート（playground）
+
+`/dev/kvm`があれば実Firecracker microVMまで起動する、multi-hypervisorのローカル環境。
+
+```sh
+docker compose -f playground/docker-compose.yml up -d --build
+./playground/scenario.sh
+```
+
+`scenario.sh`がTenant/Image/VM作成からスケジューリング・Quota強制・認可拒否まで一通り確認する。
+CLIを直接使う場合:
+
+```sh
+export KYUUSHA_TOKEN="$(go run ./cmd/kyuusha token mint -tenant=<tenant-id>)"
+go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant=<tenant-id>
+```
+
+Observability UI（Jaeger/Prometheus/Grafana）や後片付け手順は
+[playground/README.md](playground/README.md)を参照。
+
+## 開発
+
+```sh
+go build ./...
+go test ./...
+buf lint && buf generate   # proto/ 配下を変更した場合
+```
+
+protoの生成コードは`gen/go/`にコミット済み（`buf generate`の再実行が必要なのはprotoを
+変更したときのみ）。
+
+## ドキュメント
+
+- [docs/architecture.md](docs/architecture.md) — 設計判断の経緯・議論・トレードオフ
+- [docs/specs/](docs/specs/README.md) — 完成した機能単位の現状仕様
+- [docs/open-questions.md](docs/open-questions.md) — 未決事項
