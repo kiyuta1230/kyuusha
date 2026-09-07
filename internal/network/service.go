@@ -227,7 +227,7 @@ func (s *Service) DeleteSubnet(ctx context.Context, tenantID, id string) error {
 }
 
 func (s *Service) WatchSubnets(ctx context.Context, tenantID string, sinceRV int64) (<-chan SubnetEvent, error) {
-	return s.subnets.Watch(ctx, tenantID, sinceRV)
+	return s.subnets.Watch(ctx, tenantID, sinceRV, nil)
 }
 
 // CreateNetworkInterface validates spec.subnet_id against an existing,
@@ -332,7 +332,7 @@ func (s *Service) DeleteNetworkInterface(ctx context.Context, tenantID, id strin
 }
 
 func (s *Service) WatchNetworkInterfaces(ctx context.Context, tenantID string, sinceRV int64) (<-chan NetworkInterfaceEvent, error) {
-	return s.interfaces.Watch(ctx, tenantID, sinceRV)
+	return s.interfaces.Watch(ctx, tenantID, sinceRV, nil)
 }
 
 // upsertCondition mirrors compute/reconciler.go's identical helper:

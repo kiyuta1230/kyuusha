@@ -94,5 +94,5 @@ func (s *Service) Delete(ctx context.Context, tenantID string) error {
 // then streams live events, scoped to tenantID (empty = all tenants,
 // admin-only in practice). The returned channel is closed when ctx is done.
 func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-chan Event, error) {
-	return s.store.Watch(ctx, tenantID, sinceRV)
+	return s.store.Watch(ctx, tenantID, sinceRV, nil)
 }

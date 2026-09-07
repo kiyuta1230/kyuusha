@@ -203,7 +203,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 // always pass their own tenant_id. The returned channel is closed when ctx
 // is done.
 func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-chan Event, error) {
-	upstream, err := s.store.Watch(ctx, "", sinceRV)
+	upstream, err := s.store.Watch(ctx, "", sinceRV, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-
 // Run blocks, watching for newly-Created (Pending) Images and checking
 // their artifact URL(s) for reachability, until ctx is done.
 func (s *Service) Run(ctx context.Context) error {
-	events, err := s.store.Watch(ctx, "", 0) // all tenants: internal use only
+	events, err := s.store.Watch(ctx, "", 0, nil) // all tenants: internal use only
 	if err != nil {
 		return fmt.Errorf("watch images: %w", err)
 	}

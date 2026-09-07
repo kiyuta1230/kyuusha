@@ -288,9 +288,14 @@ func (s *Store[T, PT]) removeLocked(p PT) {
 // Watch replays history newer than sinceRV (0 for "from the start") and
 // then streams live events, both scoped to tenantID. An empty tenantID
 // watches across all tenants, for internal use by a reconciler; external
-// callers must always pass their own tenant_id. The returned channel is
-// closed when ctx is done.
-func (s *Store[T, PT]) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-chan Event[T], error) {
+// callers must always pass their own tenant_id. matches, if non-nil,
+// additionally filters both the replay and the live stream to only objects
+// for which it returns true -- e.g. compute.Service.Watch uses this to let
+// an external Finalizer holder watch only VMs currently carrying its own
+// finalizer name, instead of every VM in the tenant (see
+// docs/architecture.md "Finalizer" 's discussion of watching at scale). The
+// returned channel is closed when ctx is done.
+func (s *Store[T, PT]) Watch(ctx context.Context, tenantID string, sinceRV int64, matches func(T) bool) (<-chan Event[T], error) {
 	s.mu.Lock()
 	if sinceRV > 0 && len(s.history) > 0 && sinceRV < s.history[0].ResourceVersion-1 {
 		s.mu.Unlock()
@@ -300,7 +305,7 @@ func (s *Store[T, PT]) Watch(ctx context.Context, tenantID string, sinceRV int64
 	var backlog []Event[T]
 	for _, e := range s.history {
 		obj := e.Object
-		if e.ResourceVersion > sinceRV && (tenantID == "" || PT(&obj).GetTenantID() == tenantID) {
+		if e.ResourceVersion > sinceRV && (tenantID == "" || PT(&obj).GetTenantID() == tenantID) && (matches == nil || matches(obj)) {
 			backlog = append(backlog, e)
 		}
 	}
@@ -332,6 +337,9 @@ func (s *Store[T, PT]) Watch(ctx context.Context, tenantID string, sinceRV int64
 				}
 				obj := e.Object
 				if tenantID != "" && PT(&obj).GetTenantID() != tenantID {
+					continue
+				}
+				if matches != nil && !matches(obj) {
 					continue
 				}
 				select {

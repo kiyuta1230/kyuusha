@@ -351,6 +351,14 @@ if ! echo "$add_fin_line" | grep -q 'finalizers=acme.corp/network-acl-cleanup'; 
   exit 1
 fi
 
+echo "==> confirming the finalizer_name Watch filter only surfaces VMs currently holding that finalizer (see docs/specs/external-integration.md '大量Watch対策')"
+watch_log="$(mktemp)"
+go run ./cmd/kyuusha vm watch -addr=localhost:8080 -tenant="$tenant" -finalizer-name=acme.corp/network-acl-cleanup > "$watch_log" 2>&1 &
+watch_pid=$!
+
+vm5_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-5 ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
+go run ./cmd/kyuusha vm add-finalizer -addr=localhost:8080 -tenant="$tenant" -id="$vm5_id" -finalizer=acme.corp/unrelated >/dev/null
+
 go run ./cmd/kyuusha vm delete -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id"
 
 pending_line="$(go run ./cmd/kyuusha vm get -addr=localhost:8080 -tenant="$tenant" -id="$vm6_id")"
@@ -379,6 +387,22 @@ if go run ./cmd/kyuusha vm get -addr=localhost:8080 -tenant="$tenant" -id="$vm6_
   exit 1
 fi
 grep -q NotFound /tmp/kyuusha-finalizer-gone-check.log && echo "    confirmed: removing the last finalizer (as alice, its added_by) let the real deletion (and the still-running Firecracker process's teardown) proceed"
+
+for _ in $(seq 1 15); do
+  grep -q "$vm6_id" "$watch_log" 2>/dev/null && break
+  sleep 1
+done
+kill "$watch_pid" 2>/dev/null || true
+wait "$watch_pid" 2>/dev/null || true
+if ! grep -q "$vm6_id" "$watch_log"; then
+  echo "!! -finalizer-name filtered watch never saw vm-6's events: $(cat "$watch_log")" >&2
+  exit 1
+fi
+if grep -q "$vm5_id" "$watch_log"; then
+  echo "!! -finalizer-name filtered watch leaked vm-5's unrelated finalizer event: $(cat "$watch_log")" >&2
+  exit 1
+fi
+echo "    confirmed: -finalizer-name filtered the Watch stream to vm-6 (held the matching finalizer) only, excluding vm-5's unrelated one"
 
 echo "==> creating a VM with -user-data-file (cloud-init NoCloud seed disk; no real cloud-init in this guest, so this only proves delivery -- see docs/specs/firecracker-boot.md 'UserData注入')"
 # vm-6 was just fully deleted above, freeing the quota slot this reuses.

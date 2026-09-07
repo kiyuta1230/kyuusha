@@ -935,8 +935,15 @@ type WatchVirtualMachinesRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	TenantId             string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	SinceResourceVersion int64                  `protobuf:"varint,2,opt,name=since_resource_version,json=sinceResourceVersion,proto3" json:"since_resource_version,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Optional: if set, only replay/stream events for VMs whose
+	// meta.finalizers currently contains an entry with this name -- see
+	// docs/architecture.md "Finalizer" 's discussion of external controllers
+	// watching at scale. An external controller that only cares about VMs it
+	// has itself placed a finalizer on should set this instead of watching
+	// every VM in the tenant.
+	FinalizerName string `protobuf:"bytes,3,opt,name=finalizer_name,json=finalizerName,proto3" json:"finalizer_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WatchVirtualMachinesRequest) Reset() {
@@ -981,6 +988,13 @@ func (x *WatchVirtualMachinesRequest) GetSinceResourceVersion() int64 {
 		return x.SinceResourceVersion
 	}
 	return 0
+}
+
+func (x *WatchVirtualMachinesRequest) GetFinalizerName() string {
+	if x != nil {
+		return x.FinalizerName
+	}
+	return ""
 }
 
 type VirtualMachineEvent struct {
@@ -1219,10 +1233,11 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x1bDeleteVirtualMachineRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x17\n" +
-	"\adry_run\x18\x03 \x01(\bR\x06dryRun\"p\n" +
+	"\adry_run\x18\x03 \x01(\bR\x06dryRun\"\x97\x01\n" +
 	"\x1bWatchVirtualMachinesRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x124\n" +
-	"\x16since_resource_version\x18\x02 \x01(\x03R\x14sinceResourceVersion\"\x88\x02\n" +
+	"\x16since_resource_version\x18\x02 \x01(\x03R\x14sinceResourceVersion\x12%\n" +
+	"\x0efinalizer_name\x18\x03 \x01(\tR\rfinalizerName\"\x88\x02\n" +
 	"\x13VirtualMachineEvent\x12@\n" +
 	"\x04type\x18\x01 \x01(\x0e2,.kyuusha.compute.v1.VirtualMachineEvent.TypeR\x04type\x122\n" +
 	"\x02vm\x18\x02 \x01(\v2\".kyuusha.compute.v1.VirtualMachineR\x02vm\x12)\n" +

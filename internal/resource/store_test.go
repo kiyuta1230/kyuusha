@@ -72,7 +72,7 @@ func TestStore_DeleteWithFinalizersMarksAndWaits(t *testing.T) {
 		t.Fatalf("Update to add finalizer: %v", err)
 	}
 
-	events, err := s.Watch(ctx, "tenant-a", out.Meta.ResourceVersion)
+	events, err := s.Watch(ctx, "tenant-a", out.Meta.ResourceVersion, nil)
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -174,4 +174,52 @@ func TestStore_UpdateCannotResurrectAPendingDeletion(t *testing.T) {
 	if updated.Meta.DeletedAt == nil {
 		t.Fatal("DeletedAt was cleared by a client-supplied Update -- deletion must be one-way")
 	}
+}
+
+// TestStore_WatchMatchesFilter exercises Watch's optional matches filter
+// (compute.Service.Watch builds one from a finalizer_name to let external
+// controllers watch only VMs they've placed a finalizer on -- see
+// docs/architecture.md "Finalizer"): both the replay backlog and the live
+// stream must skip objects the filter rejects.
+func TestStore_WatchMatchesFilter(t *testing.T) {
+	ctx := context.Background()
+	s := newThingStore()
+
+	matchesWanted := func(th thing) bool { return th.Name == "wanted" }
+
+	if _, err := s.Create(ctx, "tenant-a", "unwanted", thing{Name: "unwanted"}); err != nil {
+		t.Fatalf("Create unwanted: %v", err)
+	}
+
+	events, err := s.Watch(ctx, "tenant-a", 0, matchesWanted)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	wanted, err := s.Create(ctx, "tenant-a", "wanted", thing{Name: "wanted"})
+	if err != nil {
+		t.Fatalf("Create wanted: %v", err)
+	}
+	if _, err := s.Create(ctx, "tenant-a", "unwanted-2", thing{Name: "unwanted"}); err != nil {
+		t.Fatalf("Create unwanted-2: %v", err)
+	}
+
+	select {
+	case e := <-events:
+		if e.Object.Meta.ID != wanted.Meta.ID {
+			t.Fatalf("filtered Watch surfaced %v, want only the object matching the filter", e.Object)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the matching object's event")
+	}
+
+	select {
+	case e := <-events:
+		t.Fatalf("unexpected event for a non-matching object: %+v", e)
+	case <-time.After(200 * time.Millisecond):
+	}
+	// The first "unwanted" object was created before Watch was even called,
+	// so it must never have appeared in the replay backlog either --
+	// confirmed implicitly above since the only event received was for
+	// wanted, not unwanted.
 }

@@ -297,6 +297,7 @@ func vmWatch(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
+	finalizerName := fs.String("finalizer-name", "", "only watch VMs whose finalizers currently include this name, instead of every VM in the tenant (see docs/specs/external-integration.md)")
 	fs.Parse(args)
 
 	if *tenant == "" {
@@ -307,6 +308,7 @@ func vmWatch(args []string) {
 	stream, err := client.Watch(ctx, &computev1.WatchVirtualMachinesRequest{
 		TenantId:             *tenant,
 		SinceResourceVersion: *since,
+		FinalizerName:        *finalizerName,
 	})
 	if err != nil {
 		fatal("watch: %v", err)

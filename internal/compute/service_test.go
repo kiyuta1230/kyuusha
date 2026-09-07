@@ -31,7 +31,7 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 	svc := newTestService(t, ctx)
 	const tenant = "tenant-a"
 
-	events, err := svc.Watch(ctx, tenant, 0)
+	events, err := svc.Watch(ctx, tenant, 0, "")
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 	// A fresh Watch resumed from the last known resource_version should see
 	// nothing new (no relist error, empty backlog) since we're caught up.
 	lastRV := updated.Meta.ResourceVersion + 1 // +1 for the Delete event
-	resumed, err := svc.Watch(ctx, tenant, lastRV)
+	resumed, err := svc.Watch(ctx, tenant, lastRV, "")
 	if err != nil {
 		t.Fatalf("resumed Watch: %v", err)
 	}
@@ -259,5 +259,64 @@ func TestService_FinalizerOwnership(t *testing.T) {
 	reAdded.Meta.Finalizers = nil
 	if _, err := svc.Update(aliceCtx, reAdded); err != nil {
 		t.Fatalf("Update removing alice's own finalizer as alice: %v", err)
+	}
+}
+
+// TestService_WatchFilterByFinalizerName exercises the finalizer_name Watch
+// filter (docs/architecture.md "Finalizer" 's "外部システムが大量にWatch
+// する" concern): an external controller that only cares about VMs it has
+// placed its own finalizer on should be able to Watch just those, not every
+// VM in the tenant.
+func TestService_WatchFilterByFinalizerName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vmA, err := svc.Create(ctx, tenant, "vm-a", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+	})
+	if err != nil {
+		t.Fatalf("Create vm-a: %v", err)
+	}
+	vmB, err := svc.Create(ctx, tenant, "vm-b", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+	})
+	if err != nil {
+		t.Fatalf("Create vm-b: %v", err)
+	}
+
+	events, err := svc.Watch(ctx, tenant, 0, "acme.corp/only-vm-a")
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	vmA.Meta.Finalizers = []resource.Finalizer{{Name: "acme.corp/only-vm-a"}}
+	if _, err := svc.Update(ctx, vmA); err != nil {
+		t.Fatalf("Update vm-a to add finalizer: %v", err)
+	}
+	vmB.Meta.Finalizers = []resource.Finalizer{{Name: "acme.corp/only-vm-b"}}
+	if _, err := svc.Update(ctx, vmB); err != nil {
+		t.Fatalf("Update vm-b to add finalizer: %v", err)
+	}
+
+	select {
+	case e := <-events:
+		if e.Object.Meta.ID != vmA.Meta.ID {
+			t.Fatalf("filtered Watch surfaced vm %s, want only vm-a (%s)", e.Object.Meta.ID, vmA.Meta.ID)
+		}
+		if e.Type != EventModified {
+			t.Fatalf("event type = %s, want Modified", e.Type)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for vm-a's finalizer-add event")
+	}
+
+	// vm-b's update (a different finalizer name) must never reach this
+	// filtered watch.
+	select {
+	case e := <-events:
+		t.Fatalf("unexpected event for a non-matching VM: %+v", e)
+	case <-time.After(300 * time.Millisecond):
 	}
 }

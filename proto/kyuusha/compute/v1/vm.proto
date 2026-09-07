@@ -105,6 +105,13 @@ message DeleteVirtualMachineRequest {
 message WatchVirtualMachinesRequest {
   string tenant_id = 1;
   int64 since_resource_version = 2;
+  // Optional: if set, only replay/stream events for VMs whose
+  // meta.finalizers currently contains an entry with this name -- see
+  // docs/architecture.md "Finalizer" 's discussion of external controllers
+  // watching at scale. An external controller that only cares about VMs it
+  // has itself placed a finalizer on should set this instead of watching
+  // every VM in the tenant.
+  string finalizer_name = 3;
 }
 
 message VirtualMachineEvent {

@@ -57,7 +57,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	go r.svc.runHealthSweep(ctx)
 	go r.runPendingSweep(ctx)
 
-	events, err := r.svc.Watch(ctx, "", 0) // all tenants: internal use only
+	events, err := r.svc.Watch(ctx, "", 0, "") // all tenants, unfiltered: internal use only
 	if err != nil {
 		return fmt.Errorf("watch vms: %w", err)
 	}

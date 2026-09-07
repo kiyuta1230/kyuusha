@@ -47,6 +47,24 @@ CMDB登録、ネットワーク台帳登録、独自バリデーション、削�
 
 新しいRPCは無い——既存の`Get`/`Update`/`Watch`だけで完結する。
 
+### 大量Watch対策: finalizer_name
+
+外部コントローラーが自分のFinalizerの状態を知りたいだけなのに、テナント内の
+全VMをWatchして自分のFinalizer名が含まれるかを毎回自分でフィルタするのは、
+500テナント・2万VM規模では無駄が大きい。`WatchVirtualMachinesRequest`に
+`finalizer_name`（省略可）を渡すと、サーバー側で「現在`meta.finalizers`に
+その名前を含むVMだけ」に絞り込んだリプレイ+ライブストリームになる
+（`kyuusha vm watch -tenant=... -finalizer-name="acme.corp/network-acl-cleanup"`）。
+
+**評価タイミングに注意**: フィルタは「そのイベントのVMスナップショットが今
+その名前を含むか」で判定される。自分がFinalizerを追加してから、`deleted_at`
+セット→自分がFinalizerを取り除くまでの一連のイベントはすべて見えるが、
+自分がFinalizerを取り除いた（＝その名前が消えた）Update自体の結果や、それ以降の
+イベントはフィルタの対象から外れる——ただしこれは自分の操作の結果であり、
+その`Update`呼び出し自体の戻り値で分かるので実害はない。一方、admin role
+または`added_by`が空文字列の後方互換経路で**自分の知らないところ**でFinalizerを
+外された場合は、このフィルタでは検知できない（単に何も届かなくなるだけ）。
+
 ### CLI
 
 ```sh

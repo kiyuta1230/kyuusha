@@ -949,6 +949,23 @@ mTLS follow-upと同じ前提）の延長でしかない。
 現状これを使うのはVirtualMachineのFinalizer削除のみだが、`sub`/admin判定自体は
 汎用のメタデータ転送なので、将来他の細粒度認可にもそのまま使い回せる。
 
+**大規模Watchへの対応（実装済み）**: 外部コントローラーが自分のFinalizerを
+確認するためだけに、テナント内の全VMをWatchして自前でフィルタするのは
+スケールしない（500テナント・2万VM規模を想定すると特に）。`internal/resource.Store.Watch`
+に汎用の`matches func(T) bool`フィルタ引数を追加し（リプレイ分・ライブ分の両方に
+適用）、`compute.Service.Watch`はこれを使って`finalizer_name`が空でなければ
+「現在の`meta.finalizers`にその名前を含むVMだけ」に絞り込む
+（`WatchVirtualMachinesRequest.finalizer_name`、`kyuusha vm watch -finalizer-name=...`）。
+
+このフィルタは「今まさにその名前のFinalizerを持っているか」で評価されるため、
+自分がFinalizerを追加してから、削除がリクエストされて`deleted_at`が付き、
+自分がFinalizerを外すまでの一連の変化はすべて観測できる——ただし自分が
+最後にFinalizerを外した瞬間（またはadmin/`added_by`空文字列の後方互換経路で
+他者に外された瞬間）以降のイベントはフィルタ対象から外れる。前者は呼び出し元
+自身の操作の結果なので同期的なUpdateの戻り値で分かるため実害はないが、後者
+（自分の知らないところで外された）はこのフィルタでは検知できない、という
+既知の限界がある。
+
 `deleted_at`はprotoの`ObjectMeta`に元々あった「論理削除(任意)」というコメント付きの
 未使用フィールドをそのまま転用した——新しいフィールドを増やす前に、既にある
 休眠フィールドの意図を確認して再利用する形にした。

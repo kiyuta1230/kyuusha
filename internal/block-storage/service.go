@@ -206,7 +206,7 @@ func (s *Service) DeleteVolume(ctx context.Context, tenantID, id string) error {
 }
 
 func (s *Service) WatchVolumes(ctx context.Context, tenantID string, sinceRV int64) (<-chan VolumeEvent, error) {
-	return s.volumes.Watch(ctx, tenantID, sinceRV)
+	return s.volumes.Watch(ctx, tenantID, sinceRV, nil)
 }
 
 // CreateVolumeAttachment validates spec.volume_id against an existing,
@@ -322,7 +322,7 @@ func (s *Service) DeleteVolumeAttachment(ctx context.Context, tenantID, id strin
 }
 
 func (s *Service) WatchVolumeAttachments(ctx context.Context, tenantID string, sinceRV int64) (<-chan VolumeAttachmentEvent, error) {
-	return s.attachments.Watch(ctx, tenantID, sinceRV)
+	return s.attachments.Watch(ctx, tenantID, sinceRV, nil)
 }
 
 // upsertCondition mirrors network/reconciler.go's identical helper:

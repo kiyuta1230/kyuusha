@@ -96,7 +96,7 @@ func (s *Service) ListHypervisors(ctx context.Context) ([]Hypervisor, error) {
 }
 
 func (s *Service) WatchHypervisors(ctx context.Context, sinceRV int64) (<-chan HypervisorEvent, error) {
-	return s.hypervisors.Watch(ctx, "", sinceRV)
+	return s.hypervisors.Watch(ctx, "", sinceRV, nil)
 }
 
 // Heartbeat records a compute-agent liveness signal, reviving the

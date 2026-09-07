@@ -16,7 +16,7 @@
 | `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-recovery-policy`(`none`\|`self-heal`、既定`none`) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[Firecracker起動仕様](firecracker-boot.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
-| `watch` | `-tenant`(必須) `-since-resource-version` |
+| `watch` | `-tenant`(必須) `-since-resource-version` `-finalizer-name`(指定すると`meta.finalizers`にその名前を含むVMだけに絞り込む。[外部システム連携仕様](external-integration.md)「大量Watch対策」参照) |
 | `console` | `-tenant`(必須) `-id`(必須) `-tail-bytes`(既定0=サーバ既定値~64KiB、負値で全量) `-follow`(`tail -f`同様に新規出力を流し続ける) |
 | `delete` | `-tenant`(必須) `-id`(必須)。`meta.finalizers`が残っていれば実削除されず`deleted_at`がセットされるだけになる（[外部システム連携仕様](external-integration.md)参照） |
 | `add-finalizer` | `-tenant`(必須) `-id`(必須) `-finalizer`(必須、例`acme.corp/network-acl-cleanup`) |

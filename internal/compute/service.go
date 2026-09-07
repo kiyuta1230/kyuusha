@@ -294,8 +294,25 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 // Watch replays history newer than sinceRV (0 for "from the start") and then
 // streams live events, both scoped to tenantID. An empty tenantID watches
 // across all tenants, for internal use by the reconciler; external callers
-// must always pass their own tenant_id. The returned channel is closed when
-// ctx is done.
-func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64) (<-chan Event, error) {
-	return s.store.Watch(ctx, tenantID, sinceRV)
+// must always pass their own tenant_id. An empty finalizerName streams
+// every VM as before; a non-empty one restricts the replay and live stream
+// to VMs whose meta.finalizers currently contains an entry with that name
+// -- see docs/architecture.md "Finalizer" 's discussion of external
+// controllers watching at scale: a controller that only cares about VMs it
+// has itself placed a finalizer on should pass its own name here instead of
+// watching (and filtering client-side) every VM in the tenant. The
+// returned channel is closed when ctx is done.
+func (s *Service) Watch(ctx context.Context, tenantID string, sinceRV int64, finalizerName string) (<-chan Event, error) {
+	var matches func(VirtualMachine) bool
+	if finalizerName != "" {
+		matches = func(vm VirtualMachine) bool {
+			for _, f := range vm.Meta.Finalizers {
+				if f.Name == finalizerName {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return s.store.Watch(ctx, tenantID, sinceRV, matches)
 }
