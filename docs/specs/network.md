@@ -160,14 +160,13 @@ compute-agentがそこから実際のtapデバイスを作る。
 いることを、2台目のVMを用意しなくても1台のコンソール出力だけで確認できるようにする
 ための自己診断。
 
-**`docs/architecture.md`のcloud-init(NoCloud seed disk)設計とは別物**: `user_data`
-全体（cloud-init user-data）をゲストへ注入する仕組みは`docs/architecture.md`「IP設定も
-このseed diskに相乗りさせる」節でcloud-initベースとして設計されているが、これは今も
-未実装（seed disk生成コード自体が存在しない）。ここで説明したカーネルコマンドライン
-規約は、そのcloud-init機構を先取りしたものではなく、tap配線のIP設定だけを通すための
-狭い独自方式——cloud-initはうちの最小限自作Alpine rootfsに入っていないため、
-意図的にcloud-init非依存にしてある。両者が将来どう統合される（あるいはされない）かは
-未検討。
+**`user_data`注入(cloud-init NoCloud seed disk)とは別物**: `spec.user_data`全体を
+ゲストへ注入する仕組みは実装済み（[Firecracker起動仕様](firecracker-boot.md)
+「UserData注入」参照、`internal/compute-agent/fcvmm/seed.go`）だが、ここで説明した
+tap配線のIP設定用カーネルコマンドライン規約とは独立した別経路——うちの最小限自作
+Alpine rootfsにはcloud-init自体が入っておらず、`/init`（`docker/fc-guest-init.sh`）は
+seed diskの中身をコンソールへ書き出すだけで実際には解釈しない。tap配線のIP設定は
+今後もこのカーネルコマンドライン規約のまま独立させる想定で、両者を統合する予定はない。
 
 tapデバイスの生成にはbusybox `ip`にない`tuntap add`ではなく、`/dev/net/tun`への
 `TUNSETIFF`/`TUNSETPERSIST` ioctl（`golang.org/x/sys/unix`）を直接使っている——
