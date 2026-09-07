@@ -56,13 +56,13 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   kyuusha vm <create|get|list|watch|console|delete|add-finalizer|remove-finalizer> [flags]
-  kyuusha tenant <create|get|list|watch> [flags]
+  kyuusha tenant <create|get|list|watch|update|delete> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
-  kyuusha image <create|get|list|watch> [flags]
-  kyuusha subnet <create|get|list|watch> [flags]
-  kyuusha netif <create|get|list|watch> [flags]
-  kyuusha volume <create|get|list|watch> [flags]
-  kyuusha volattach <create|get|list|watch> [flags]
+  kyuusha image <create|get|list|watch|share|delete> [flags]
+  kyuusha subnet <create|get|list|watch|delete> [flags]
+  kyuusha netif <create|get|list|watch|delete> [flags]
+  kyuusha volume <create|get|list|watch|delete> [flags]
+  kyuusha volattach <create|get|list|watch|delete> [flags]
   kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 

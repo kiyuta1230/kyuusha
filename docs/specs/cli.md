@@ -33,10 +33,13 @@
 `update`はgRPC APIとして存在し、上記2つのCLIコマンドが内部で使っている。汎用の
 `kyuusha vm update`コマンド自体は無い。
 
-## `kyuusha tenant <create|get|list|watch>`
+## `kyuusha tenant <create|get|list|watch|update|delete>`
 
 identity向け。`create`は`tenant_id`を持たないリクエストのため**admin-only**
-（[認証・認可仕様](authn-authz.md)）。
+（[認証・認可仕様](authn-authz.md)）。`update`/`delete`はリクエストが`tenant_id`
+（対象テナント自身のID）を持つため、対象テナント自身のトークンでも呼べる（自己申告
+`tenant_id`＝自分のID、という`identity.Tenant`のself-referentialな構造による。
+「Finalizerの所有権」節と同様、adminは常に許可）。
 
 | サブコマンド | フラグ |
 |---|---|
@@ -44,6 +47,8 @@ identity向け。`create`は`tenant_id`を持たないリクエストのため**
 | `get` | `-id`(必須) |
 | `list` | `-id`(空なら全テナント、admin-only) |
 | `watch` | `-id` `-since-resource-version` |
+| `update` | `-id`(必須) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm`。明示的に指定したフラグだけがGet→Updateで上書きされ、省略したフィールドは既存値のまま |
+| `delete` | `-id`(必須) |
 
 ## `kyuusha hypervisor <get|list|watch|set-schedulable>`
 
@@ -57,7 +62,7 @@ compute向け。全サブコマンドが**admin-only**（`tenant_id`を持たな
 | `watch` | `-since-resource-version` |
 | `set-schedulable` | `-id`(必須) `-schedulable`(既定`true`) |
 
-## `kyuusha image <create|get|list|watch|share>`
+## `kyuusha image <create|get|list|watch|share|delete>`
 
 image向け。`create`は`-tenant`を持つためadmin-onlyではない（テナント自身が自分のImageを作れる）。
 
@@ -68,12 +73,12 @@ image向け。`create`は`-tenant`を持つためadmin-onlyではない（テナ
 | `list` | `-tenant`(必須)。自分のImage + 見えるPUBLIC/共有Image |
 | `watch` | `-tenant`(必須) `-since-resource-version`。同上 |
 | `share` | `-tenant`(必須、所有テナントである必要あり) `-id`(必須) `-visibility`(既定`private`) `-shared-with-tenant-ids`(既存の一覧を丸ごと置き換える) |
+| `delete` | `-tenant`(必須、所有テナントである必要あり) `-id`(必須) |
 
-`delete`はgRPC APIとしては存在するがCLIには未実装。`share`が呼ぶ`SetVisibility`は
-[Image仕様](image.md)「マルチテナント対応（可視性/共有）」参照——kernel/rootfs/disk自体を
-変える汎用`update`は存在しない（意図的に無い）。
+`share`が呼ぶ`SetVisibility`は[Image仕様](image.md)「マルチテナント対応（可視性/共有）」
+参照——kernel/rootfs/disk自体を変える汎用`update`は存在しない（意図的に無い）。
 
-## `kyuusha subnet <create|get|list|watch>`
+## `kyuusha subnet <create|get|list|watch|delete>`
 
 network向け（[network仕様](network.md)参照）。`create`は`-tenant`を持つためadmin-onlyでは
 ない。`vlan_id`/`ip_address`はIPAMにより実際に払い出される（プール枯渇時はエラーではなく
@@ -85,10 +90,12 @@ network向け（[network仕様](network.md)参照）。`create`は`-tenant`を�
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
+| `delete` | `-tenant`(必須) `-id`(必須) |
 
-`update`/`delete`はgRPC APIとしては存在するがCLIには未実装。
+`update`はgRPC APIとしては存在するがCLIには未実装（CIDR/zone等をCreate後に変える
+実運用上のユースケースが今のところ無いため）。
 
-## `kyuusha netif <create|get|list|watch>`
+## `kyuusha netif <create|get|list|watch|delete>`
 
 network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`のCLI名は
 `netif`（プロト上のメッセージ名は`NetworkInterface`）。`ip_address`/`mac_address`は
@@ -101,10 +108,11 @@ network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
+| `delete` | `-tenant`(必須) `-id`(必須) |
 
-`update`/`delete`はgRPC APIとしては存在するがCLIには未実装。
+`update`はgRPC APIとしては存在するがCLIには未実装（同上の理由）。
 
-## `kyuusha volume <create|get|list|watch>`
+## `kyuusha volume <create|get|list|watch|delete>`
 
 block-storage向け（[Volume仕様](volume.md)参照）。`create`は`-tenant`を持つため
 admin-onlyではない。実バックエンドがまだ無いため`size_gb`のQuotaチェックさえ通れば
@@ -116,11 +124,11 @@ admin-onlyではない。実バックエンドがまだ無いため`size_gb`のQ
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
+| `delete` | `-tenant`(必須) `-id`(必須) |
 
-`delete`はgRPC APIとしては存在するがCLIには未実装。`update`（リサイズ等）自体が存在しない
-（[Volume仕様](volume.md)参照）。
+`update`（リサイズ等）自体が存在しない（[Volume仕様](volume.md)参照）。
 
-## `kyuusha volattach <create|get|list|watch>`
+## `kyuusha volattach <create|get|list|watch|delete>`
 
 block-storage向け（[Volume仕様](volume.md)参照）。`VolumeAttachmentService`のCLI名は
 `volattach`。同一`volume_id`について非`Deleting`なVolumeAttachmentは同時に1つまで
@@ -134,8 +142,7 @@ block-storage向け（[Volume仕様](volume.md)参照）。`VolumeAttachmentServ
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
-
-`delete`はgRPC APIとしては存在するがCLIには未実装。
+| `delete` | `-tenant`(必須) `-id`(必須) |
 
 ## `kyuusha token mint`
 

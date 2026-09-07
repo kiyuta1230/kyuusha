@@ -38,6 +38,8 @@ func imageCmd(args []string) {
 		imageWatch(args[1:])
 	case "share":
 		imageShare(args[1:])
+	case "delete":
+		imageDelete(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -196,6 +198,24 @@ func imageShare(args []string) {
 		fatal("share: %v", err)
 	}
 	printImage(img)
+}
+
+func imageDelete(args []string) {
+	fs := flag.NewFlagSet("image delete", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN); must be the owning tenant")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "image ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dialImages(*addr)
+	ctx := authedContext(context.Background(), *token)
+	if _, err := client.Delete(ctx, &imagev1.DeleteImageRequest{TenantId: *tenant, Id: *id}); err != nil {
+		fatal("delete: %v", err)
+	}
 }
 
 func printImage(img *imagev1.Image) {

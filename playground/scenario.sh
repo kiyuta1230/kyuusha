@@ -304,8 +304,8 @@ else
 fi
 # (retrying the Pending second attachment once the first is deleted is unit-
 # tested -- TestService_ExclusiveAttachBlocksSecondAttachmentThenRetrySucceeds
-# -- since VolumeAttachmentService.Delete has no CLI yet, matching Subnet/
-# NetworkInterface/Image's identical "delete exists over gRPC, not the CLI" state)
+# -- `volattach delete` itself is exercised for real further down, once
+# vm-1's other resources are no longer needed by anything later in this script)
 
 echo "==> confirming Volume Create enforces max_volume_gb quota"
 if go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume-over-quota -size-gb=99999 2>/tmp/kyuusha-volume-quota-check.log; then
@@ -434,5 +434,71 @@ else
   fi
   echo "    confirmed: the cloud-init NoCloud seed disk was built, attached, and its user-data read back correctly by the guest"
 fi
+
+echo "==> confirming delete now exists in the CLI for netif/volattach/volume/subnet/image (previously gRPC-only; docs/specs/cli.md)"
+
+netif_id="$(echo "$netif_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+go run ./cmd/kyuusha netif delete -addr=localhost:8080 -tenant="$tenant" -id="$netif_id"
+if go run ./cmd/kyuusha netif get -addr=localhost:8080 -tenant="$tenant" -id="$netif_id" 2>/tmp/kyuusha-netif-delete-check.log; then
+  echo "!! netif delete did not actually remove the NetworkInterface" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-netif-delete-check.log && echo "    confirmed: netif delete removed the NetworkInterface"
+
+attach1_id="$(echo "$first_attach_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+attach2_id="$(echo "$second_attach_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+go run ./cmd/kyuusha volattach delete -addr=localhost:8080 -tenant="$tenant" -id="$attach1_id"
+go run ./cmd/kyuusha volattach delete -addr=localhost:8080 -tenant="$tenant" -id="$attach2_id"
+if go run ./cmd/kyuusha volattach get -addr=localhost:8080 -tenant="$tenant" -id="$attach1_id" 2>/tmp/kyuusha-volattach-delete-check.log; then
+  echo "!! volattach delete did not actually remove the VolumeAttachment" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-volattach-delete-check.log && echo "    confirmed: volattach delete removed the VolumeAttachment"
+
+go run ./cmd/kyuusha volume delete -addr=localhost:8080 -tenant="$tenant" -id="$volume"
+if go run ./cmd/kyuusha volume get -addr=localhost:8080 -tenant="$tenant" -id="$volume" 2>/tmp/kyuusha-volume-delete-check.log; then
+  echo "!! volume delete did not actually remove the Volume" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-volume-delete-check.log && echo "    confirmed: volume delete removed the Volume"
+
+go run ./cmd/kyuusha subnet delete -addr=localhost:8080 -tenant="$tenant" -id="$subnet"
+if go run ./cmd/kyuusha subnet get -addr=localhost:8080 -tenant="$tenant" -id="$subnet" 2>/tmp/kyuusha-subnet-delete-check.log; then
+  echo "!! subnet delete did not actually remove the Subnet" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-subnet-delete-check.log && echo "    confirmed: subnet delete removed the Subnet"
+
+go run ./cmd/kyuusha image delete -addr=localhost:8080 -tenant="$tenant" -id="$image"
+if go run ./cmd/kyuusha image get -addr=localhost:8080 -tenant="$tenant" -id="$image" 2>/tmp/kyuusha-image-delete-check.log; then
+  echo "!! image delete did not actually remove the Image" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-image-delete-check.log && echo "    confirmed: image delete removed the Image"
+
+echo "==> confirming tenant update/delete now exist in the CLI (previously gRPC-only)"
+throwaway_tenant_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 \
+  -name="scenario-throwaway-$(date +%s)" -max-vcpu=1 -max-memory-mb=512 -max-volume-gb=1 -max-vms=1 -max-vcpu-per-vm=1 -max-memory-mb-per-vm=512)"
+throwaway_tenant="$(echo "$throwaway_tenant_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+throwaway_token="$(go run ./cmd/kyuusha token mint -tenant="$throwaway_tenant")"
+
+updated_line="$(KYUUSHA_TOKEN="$throwaway_token" go run ./cmd/kyuusha tenant update -addr=localhost:8080 -id="$throwaway_tenant" -display-name="updated via CLI")"
+echo "$updated_line"
+if ! echo "$updated_line" | grep -q 'display_name="updated via CLI"'; then
+  echo "!! tenant update did not change display_name: $updated_line" >&2
+  exit 1
+fi
+if ! echo "$updated_line" | grep -q 'vms=1'; then
+  echo "!! tenant update changed max_vms even though -max-vms was not passed: $updated_line" >&2
+  exit 1
+fi
+echo "    confirmed: tenant update only overwrote the flag actually passed (display_name), left quota untouched"
+
+KYUUSHA_TOKEN="$throwaway_token" go run ./cmd/kyuusha tenant delete -addr=localhost:8080 -id="$throwaway_tenant"
+if KYUUSHA_TOKEN="$throwaway_token" go run ./cmd/kyuusha tenant get -addr=localhost:8080 -id="$throwaway_tenant" 2>/tmp/kyuusha-tenant-delete-check.log; then
+  echo "!! tenant delete did not actually remove the Tenant" >&2
+  exit 1
+fi
+grep -q NotFound /tmp/kyuusha-tenant-delete-check.log && echo "    confirmed: tenant delete removed the Tenant"
 
 echo "==> stack left running; run 'docker compose down' when done"

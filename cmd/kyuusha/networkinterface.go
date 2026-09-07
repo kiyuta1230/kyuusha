@@ -35,6 +35,8 @@ func netifCmd(args []string) {
 		netifList(args[1:])
 	case "watch":
 		netifWatch(args[1:])
+	case "delete":
+		netifDelete(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -148,6 +150,24 @@ func netifWatch(args []string) {
 		n := ev.GetNetworkInterface()
 		fmt.Printf("%-10s %-24s phase=%-10s ip=%s rv=%d\n",
 			ev.GetType(), n.GetMeta().GetId(), n.GetStatus().GetPhase(), n.GetStatus().GetIpAddress(), ev.GetResourceVersion())
+	}
+}
+
+func netifDelete(args []string) {
+	fs := flag.NewFlagSet("netif delete", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "network interface ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dialNetworkInterfaces(*addr)
+	ctx := authedContext(context.Background(), *token)
+	if _, err := client.Delete(ctx, &networkv1.DeleteNetworkInterfaceRequest{TenantId: *tenant, Id: *id}); err != nil {
+		fatal("delete: %v", err)
 	}
 }
 

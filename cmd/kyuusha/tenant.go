@@ -24,6 +24,10 @@ func tenantCmd(args []string) {
 		tenantList(args[1:])
 	case "watch":
 		tenantWatch(args[1:])
+	case "update":
+		tenantUpdate(args[1:])
+	case "delete":
+		tenantDelete(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -146,6 +150,84 @@ func tenantWatch(args []string) {
 		tn := ev.GetTenant()
 		fmt.Printf("%-10s %-24s phase=%-10s rv=%d\n",
 			ev.GetType(), tn.GetMeta().GetId(), tn.GetStatus().GetPhase(), ev.GetResourceVersion())
+	}
+}
+
+// tenantUpdate is a Get-then-merge-then-Update: only the flags actually
+// passed on the command line (tracked via fs.Visit) overwrite the
+// corresponding field, so omitting a quota flag leaves its current value
+// untouched instead of resetting it to 0.
+func tenantUpdate(args []string) {
+	fs := flag.NewFlagSet("tenant update", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	id := fs.String("id", "", "tenant ID (required)")
+	displayName := fs.String("display-name", "", "human-readable display name")
+	maxVCPU := fs.Int("max-vcpu", 0, "quota: tenant-total vCPU")
+	maxMemoryMB := fs.Int64("max-memory-mb", 0, "quota: tenant-total memory in MB")
+	maxVolumeGB := fs.Int64("max-volume-gb", 0, "quota: tenant-total volume storage in GB")
+	maxVMs := fs.Int("max-vms", 0, "quota: tenant-total VM count")
+	maxVCPUPerVM := fs.Int("max-vcpu-per-vm", 0, "quota: per-VM vCPU cap")
+	maxMemoryMBPerVM := fs.Int64("max-memory-mb-per-vm", 0, "quota: per-VM memory cap in MB")
+	fs.Parse(args)
+
+	if *id == "" {
+		fatal("-id is required")
+	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
+	client := dialIdentity(*addr)
+	ctx := authedContext(context.Background(), *token)
+
+	tn, err := client.Get(ctx, &identityv1.GetTenantRequest{TenantId: *id})
+	if err != nil {
+		fatal("get: %v", err)
+	}
+	if set["display-name"] {
+		tn.Spec.DisplayName = *displayName
+	}
+	q := tn.Spec.Quota
+	if set["max-vcpu"] {
+		q.MaxVcpu = int32(*maxVCPU)
+	}
+	if set["max-memory-mb"] {
+		q.MaxMemoryMb = *maxMemoryMB
+	}
+	if set["max-volume-gb"] {
+		q.MaxVolumeGb = *maxVolumeGB
+	}
+	if set["max-vms"] {
+		q.MaxVms = int32(*maxVMs)
+	}
+	if set["max-vcpu-per-vm"] {
+		q.MaxVcpuPerVm = int32(*maxVCPUPerVM)
+	}
+	if set["max-memory-mb-per-vm"] {
+		q.MaxMemoryMbPerVm = *maxMemoryMBPerVM
+	}
+
+	updated, err := client.Update(ctx, &identityv1.UpdateTenantRequest{TenantId: *id, Tenant: tn})
+	if err != nil {
+		fatal("update: %v", err)
+	}
+	printTenant(updated)
+}
+
+func tenantDelete(args []string) {
+	fs := flag.NewFlagSet("tenant delete", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	id := fs.String("id", "", "tenant ID (required)")
+	fs.Parse(args)
+
+	if *id == "" {
+		fatal("-id is required")
+	}
+	client := dialIdentity(*addr)
+	ctx := authedContext(context.Background(), *token)
+	if _, err := client.Delete(ctx, &identityv1.DeleteTenantRequest{TenantId: *id}); err != nil {
+		fatal("delete: %v", err)
 	}
 }
 

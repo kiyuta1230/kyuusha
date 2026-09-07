@@ -36,6 +36,8 @@ func subnetCmd(args []string) {
 		subnetList(args[1:])
 	case "watch":
 		subnetWatch(args[1:])
+	case "delete":
+		subnetDelete(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -165,6 +167,24 @@ func subnetWatch(args []string) {
 		sn := ev.GetSubnet()
 		fmt.Printf("%-10s %-24s phase=%-10s vlan_id=%d rv=%d\n",
 			ev.GetType(), sn.GetMeta().GetId(), sn.GetStatus().GetPhase(), sn.GetStatus().GetVlanId(), ev.GetResourceVersion())
+	}
+}
+
+func subnetDelete(args []string) {
+	fs := flag.NewFlagSet("subnet delete", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "subnet ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dialSubnets(*addr)
+	ctx := authedContext(context.Background(), *token)
+	if _, err := client.Delete(ctx, &networkv1.DeleteSubnetRequest{TenantId: *tenant, Id: *id}); err != nil {
+		fatal("delete: %v", err)
 	}
 }
 

@@ -35,6 +35,8 @@ func volumeCmd(args []string) {
 		volumeList(args[1:])
 	case "watch":
 		volumeWatch(args[1:])
+	case "delete":
+		volumeDelete(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -144,6 +146,24 @@ func volumeWatch(args []string) {
 		vol := ev.GetVolume()
 		fmt.Printf("%-10s %-24s phase=%-10s rv=%d\n",
 			ev.GetType(), vol.GetMeta().GetId(), vol.GetStatus().GetPhase(), ev.GetResourceVersion())
+	}
+}
+
+func volumeDelete(args []string) {
+	fs := flag.NewFlagSet("volume delete", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "volume ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dialVolumes(*addr)
+	ctx := authedContext(context.Background(), *token)
+	if _, err := client.Delete(ctx, &blockstoragev1.DeleteVolumeRequest{TenantId: *tenant, Id: *id}); err != nil {
+		fatal("delete: %v", err)
 	}
 }
 

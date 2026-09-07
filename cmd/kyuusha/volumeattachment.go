@@ -35,6 +35,8 @@ func volattachCmd(args []string) {
 		volattachList(args[1:])
 	case "watch":
 		volattachWatch(args[1:])
+	case "delete":
+		volattachDelete(args[1:])
 	default:
 		usage()
 		os.Exit(2)
@@ -150,6 +152,24 @@ func volattachWatch(args []string) {
 		a := ev.GetVolumeAttachment()
 		fmt.Printf("%-10s %-24s phase=%-10s rv=%d\n",
 			ev.GetType(), a.GetMeta().GetId(), a.GetStatus().GetPhase(), ev.GetResourceVersion())
+	}
+}
+
+func volattachDelete(args []string) {
+	fs := flag.NewFlagSet("volattach delete", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "volume attachment ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dialVolumeAttachments(*addr)
+	ctx := authedContext(context.Background(), *token)
+	if _, err := client.Delete(ctx, &blockstoragev1.DeleteVolumeAttachmentRequest{TenantId: *tenant, Id: *id}); err != nil {
+		fatal("delete: %v", err)
 	}
 }
 
