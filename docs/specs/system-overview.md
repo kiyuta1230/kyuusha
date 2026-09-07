@@ -26,18 +26,18 @@ kyuusha自体の構成要素ではない。それらのエンドポイント・d
 ```mermaid
 flowchart LR
     CLI["kyuusha CLI"] -->|gRPC + JWT| GW["api-gateway :8080"]
-    GW -->|gRPC 平文| ID["identity :8082"]
-    GW -->|gRPC 平文| CO["compute :8081"]
-    GW -->|gRPC 平文| IMG["image :8083"]
-    GW -->|gRPC 平文| NET["network :8084"]
-    GW -->|gRPC 平文| BS["block-storage :8085"]
-    CO -->|gRPC 平文\nQuota参照| ID
-    CO -->|gRPC 平文\nImage検証| IMG
-    CO -->|gRPC 平文\nNetworkInterface検証/作成| NET
-    BS -->|gRPC 平文\nQuota参照| ID
-    CA1["compute-agent (hypervisor-1)"] -->|gRPC 平文\n自己登録| CO
-    CA2["compute-agent (hypervisor-2)"] -->|gRPC 平文\n自己登録| CO
-    CA3["compute-agent (hypervisor-3)"] -->|gRPC 平文\n自己登録| CO
+    GW -->|gRPC mTLS| ID["identity :8082"]
+    GW -->|gRPC mTLS| CO["compute :8081"]
+    GW -->|gRPC mTLS| IMG["image :8083"]
+    GW -->|gRPC mTLS| NET["network :8084"]
+    GW -->|gRPC mTLS| BS["block-storage :8085"]
+    CO -->|gRPC mTLS\nQuota参照| ID
+    CO -->|gRPC mTLS\nImage検証| IMG
+    CO -->|gRPC mTLS\nNetworkInterface検証/作成| NET
+    BS -->|gRPC mTLS\nQuota参照| ID
+    CA1["compute-agent (hypervisor-1)"] -->|gRPC mTLS\n自己登録| CO
+    CA2["compute-agent (hypervisor-2)"] -->|gRPC mTLS\n自己登録| CO
+    CA3["compute-agent (hypervisor-3)"] -->|gRPC mTLS\n自己登録| CO
     CO <-->|NATS JetStream\nコマンド/イベント| NATS["NATS :4222"]
     CA1 <--> NATS
     CA2 <--> NATS
@@ -53,7 +53,8 @@ flowchart LR
   直接gRPC呼び出し（同じく東西通信）。`block-storage` → `identity`（Quota参照）も同様。
   `compute` → `block-storage`の直接呼び出しはまだない（VM作成時にVolumeAttachmentを作る/
   参照する連携は未統合。[Volume仕様](volume.md)参照）
-- 現状すべての通信は平文（mTLS未実装）
+- 東西通信（上記すべて）は`internal/mtls`による相互TLS認証済み（[認証・認可仕様](authn-authz.md)
+  「適用範囲・既知のギャップ」参照）。南北（clientとapi-gateway間）はJWT認証のみで、mTLSではない
 
 ## エンドポイント一覧
 

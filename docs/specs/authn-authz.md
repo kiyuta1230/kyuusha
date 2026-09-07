@@ -86,7 +86,13 @@ allow if {
 ## 適用範囲・既知のギャップ
 
 - api-gatewayで集約検証されるのは南北（client→api-gateway）のみ
-- 東西（compute↔identity、compute-agent↔compute）はmTLS設計だが未実装。現状は平文・無認証
+- 東西（api-gateway→backend各サービス、compute→identity/image/network、block-storage→identity、
+  compute-agent→compute）は`internal/mtls`による相互TLS認証を実装済み（`-tls-cert`/`-tls-key`/`-tls-ca`、
+  既定値はdev用の共有証明書`hack/devcerts/`）。これが保証するのは「呼び出し元が何らかの正規の
+  kyuushaサービスであること」だけで、「どのサービスがどのRPCを呼べるか」という内部最小権限は
+  別軸のまま未実装（`docs/architecture.md`「認可の粒度」参照）。`compute-agent`の`Register`は
+  mTLSで認証されるようになったが、「どのzoneのどのhypervisorか」を検証するbootstrapトークンは
+  まだ無い（[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)参照）
 - `UpdateVirtualMachineRequest`/`UpdateTenantRequest`は`vm.meta.tenant_id`/`tenant.meta.tenant_id`と別に、認可用の`tenant_id`をトップレベルに持つ。gRPCサーバー側でこの2つの一致を検証し、不一致は`InvalidArgument`で拒否する
 
 ## 将来の拡張: テナント内ロール/細粒度認可の設計方針（未実装）

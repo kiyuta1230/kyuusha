@@ -19,10 +19,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/fcvmm"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
@@ -42,6 +42,9 @@ func main() {
 	fcBin := flag.String("firecracker-bin", "firecracker", "firecracker binary to exec for driver_hint=FIRECRACKER VMs")
 	fcCacheDir := flag.String("fc-cache-dir", "/var/lib/kyuusha/fc-cache", "directory caching downloaded kernel/rootfs artifacts, shared across VMs")
 	fcRunDir := flag.String("fc-run-dir", "/var/lib/kyuusha/fc-run", "directory holding each running VM's writable rootfs copy, API socket, and console log")
+	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented when dialing compute (see internal/mtls)")
+	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
+	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -96,12 +99,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// compute-agent -> compute is plaintext for now; see api-gateway's
-	// identical note on the mTLS follow-up. Also unauthenticated: the real
-	// design verifies a zone-scoped bootstrap token here (see
-	// docs/architecture.md and docs/open-questions.md).
+	// compute-agent -> compute is mTLS-authenticated (proves "this is some
+	// kyuusha service") but not yet authorized as a specific hypervisor: the
+	// real design also verifies a zone-scoped bootstrap token here (see
+	// docs/architecture.md and docs/open-questions.md) -- that's a separate,
+	// still-undone follow-up.
+	clientCreds, err := mtls.ClientCredentials(*tlsCert, *tlsKey, *tlsCA)
+	if err != nil {
+		slog.Error("load mTLS client credentials", "err", err)
+		os.Exit(1)
+	}
 	computeConn, err := grpc.NewClient(*computeAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(clientCreds),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {

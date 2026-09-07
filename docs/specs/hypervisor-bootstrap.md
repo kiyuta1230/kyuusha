@@ -76,4 +76,7 @@ stateDiagram-v2
 
 ## 既知の未実装事項
 
-- `Register`は無認証・平文gRPC。設計上はzoneスコープ付きbootstrapトークンの検証とmTLSクライアント証明書の発行を伴うが未実装
+- `Register`はmTLSで暗号化・相互認証される（`internal/mtls`、[認証・認可仕様](authn-authz.md)参照）ようになったが、
+  それが証明するのは「呼び出し元が何らかの正規のkyuushaサービスであること」だけ。設計上のzoneスコープ付き
+  bootstrapトークン検証（「どのzoneのどのhypervisorか」を確認するもの）はまだ無く、mTLSを通過した任意の
+  compute-agentが任意のzone/hypervisor名を名乗って自己登録できてしまう

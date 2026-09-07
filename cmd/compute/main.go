@@ -18,10 +18,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute/grpcserver"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
@@ -38,6 +38,9 @@ func main() {
 	networkAddr := flag.String("network-addr", "localhost:8084", "network service address, for Create-time NetworkInterface validation/creation")
 	metricsAddr := flag.String("metrics-addr", ":9092", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
+	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers and used when dialing other services (see internal/mtls)")
+	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
+	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA both callers' and dialed services' certificates must chain to")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -87,10 +90,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// compute -> identity is plaintext for now; see api-gateway's identical
-	// note on the mTLS follow-up.
+	clientCreds, err := mtls.ClientCredentials(*tlsCert, *tlsKey, *tlsCA)
+	if err != nil {
+		slog.Error("load mTLS client credentials", "err", err)
+		os.Exit(1)
+	}
+
 	identityConn, err := grpc.NewClient(*identityAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(clientCreds),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
@@ -99,9 +106,8 @@ func main() {
 	}
 	defer identityConn.Close()
 
-	// compute -> image is plaintext for now; see the identical note above.
 	imageConn, err := grpc.NewClient(*imageAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(clientCreds),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
@@ -110,9 +116,8 @@ func main() {
 	}
 	defer imageConn.Close()
 
-	// compute -> network is plaintext for now; see the identical note above.
 	networkConn, err := grpc.NewClient(*networkAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(clientCreds),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
 	if err != nil {
@@ -138,12 +143,18 @@ func main() {
 		}
 	}()
 
+	serverCreds, err := mtls.ServerCredentials(*tlsCert, *tlsKey, *tlsCA)
+	if err != nil {
+		slog.Error("load mTLS server credentials", "err", err)
+		os.Exit(1)
+	}
+
 	lis, err := net.Listen("tcp", *grpcAddr)
 	if err != nil {
 		slog.Error("listen", "addr", *grpcAddr, "err", err)
 		os.Exit(1)
 	}
-	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	grpcServer := grpc.NewServer(grpc.Creds(serverCreds), grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	computev1.RegisterVirtualMachineServiceServer(grpcServer, grpcserver.New(svc, recon))
 	computev1.RegisterHypervisorServiceServer(grpcServer, grpcserver.NewHypervisorServer(svc))
 

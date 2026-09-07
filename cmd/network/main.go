@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
+	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/network"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/network/grpcserver"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
@@ -31,6 +32,9 @@ func main() {
 	grpcAddr := flag.String("grpc-addr", ":8084", "address to serve SubnetService/NetworkInterfaceService on")
 	metricsAddr := flag.String("metrics-addr", ":9096", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
+	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers (see internal/mtls)")
+	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
+	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA callers' certificates must chain to")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -74,12 +78,18 @@ func main() {
 		}
 	}()
 
+	serverCreds, err := mtls.ServerCredentials(*tlsCert, *tlsKey, *tlsCA)
+	if err != nil {
+		slog.Error("load mTLS server credentials", "err", err)
+		os.Exit(1)
+	}
+
 	lis, err := net.Listen("tcp", *grpcAddr)
 	if err != nil {
 		slog.Error("listen", "addr", *grpcAddr, "err", err)
 		os.Exit(1)
 	}
-	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	grpcServer := grpc.NewServer(grpc.Creds(serverCreds), grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	networkv1.RegisterSubnetServiceServer(grpcServer, grpcserver.NewSubnetServer(svc))
 	networkv1.RegisterNetworkInterfaceServiceServer(grpcServer, grpcserver.NewNetworkInterfaceServer(svc))
 

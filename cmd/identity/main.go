@@ -20,6 +20,7 @@ import (
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/identity"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/identity/grpcserver"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
@@ -29,6 +30,9 @@ func main() {
 	grpcAddr := flag.String("grpc-addr", ":8082", "address to serve TenantService on")
 	metricsAddr := flag.String("metrics-addr", ":9091", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
+	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers (see internal/mtls)")
+	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
+	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA callers' certificates must chain to")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -67,12 +71,18 @@ func main() {
 
 	svc := identity.NewService()
 
+	serverCreds, err := mtls.ServerCredentials(*tlsCert, *tlsKey, *tlsCA)
+	if err != nil {
+		slog.Error("load mTLS server credentials", "err", err)
+		os.Exit(1)
+	}
+
 	lis, err := net.Listen("tcp", *grpcAddr)
 	if err != nil {
 		slog.Error("listen", "addr", *grpcAddr, "err", err)
 		os.Exit(1)
 	}
-	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	grpcServer := grpc.NewServer(grpc.Creds(serverCreds), grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	identityv1.RegisterTenantServiceServer(grpcServer, grpcserver.New(svc))
 
 	go func() {
