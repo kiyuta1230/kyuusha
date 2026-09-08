@@ -49,10 +49,14 @@ message Hypervisor {
 
 message RegisterHypervisorRequest {
   string hypervisor = 1; // stable id, e.g. "hypervisor-1"; becomes meta.id and meta.name
-  string zone = 2;
   int32 allocatable_vcpu = 3;
   int64 allocatable_memory_mb = 4;
   repeated string supported_drivers = 5;
+  // Required: a zone-scoped JWT minted by `kyuusha hypervisor bootstrap-token
+  // create -zone=...` (internal/bootstraptoken). Its `zone` claim -- not any
+  // self-reported value from the agent -- becomes the registered
+  // Hypervisor's zone; see docs/architecture.md "Hypervisor自己登録とzone割当".
+  string bootstrap_token = 6;
 }
 
 message GetHypervisorRequest {

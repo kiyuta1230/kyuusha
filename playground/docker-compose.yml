@@ -212,7 +212,6 @@ services:
       - "-nats-url=nats://nats:4222"
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-1"
-      - "-zone=zone-a"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
     devices:
@@ -235,7 +234,6 @@ services:
       - "-nats-url=nats://nats:4222"
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-2"
-      - "-zone=zone-a"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
     devices:
@@ -258,7 +256,6 @@ services:
       - "-nats-url=nats://nats:4222"
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-3"
-      - "-zone=zone-a"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
     devices:

@@ -50,10 +50,11 @@ identity向け。`create`は`tenant_id`を持たないリクエストのため**
 | `update` | `-id`(必須) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm`。明示的に指定したフラグだけがGet→Updateで上書きされ、省略したフィールドは既存値のまま |
 | `delete` | `-id`(必須) |
 
-## `kyuusha hypervisor <get|list|watch|set-schedulable>`
+## `kyuusha hypervisor <get|list|watch|set-schedulable|bootstrap-token>`
 
-compute向け。全サブコマンドが**admin-only**（`tenant_id`を持たないリクエストのため）。
-`create`はない（compute-agentの自己登録のみ、[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)）。
+compute向け。`get`/`list`/`watch`/`set-schedulable`は全て**admin-only**
+（`tenant_id`を持たないリクエストのため）。`create`はない（compute-agentの自己登録のみ、
+[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)）。
 
 | サブコマンド | フラグ |
 |---|---|
@@ -61,6 +62,12 @@ compute向け。全サブコマンドが**admin-only**（`tenant_id`を持たな
 | `list` | (フラグなし) |
 | `watch` | `-since-resource-version` |
 | `set-schedulable` | `-id`(必須) `-schedulable`(既定`true`) |
+| `bootstrap-token create` | `-zone`(必須) `-key`(既定`hack/devkeys/jwt-dev.key`) `-ttl`(既定24h) |
+
+`bootstrap-token create`は`token mint`と同じくapi-gateway/`-addr`/`-token`を一切使わない
+ローカル署名コマンド——ハイパーバイザーが`RegisterHypervisor`に提示するzoneスコープ付き
+JWTを、CLIを実行しているマシン上の秘密鍵ファイルで直接署名して標準出力に印字するだけ
+（`internal/bootstraptoken`、[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)参照）。
 
 ## `kyuusha image <create|get|list|watch|share|delete>`
 

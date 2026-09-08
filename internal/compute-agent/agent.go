@@ -39,8 +39,12 @@ type Agent struct {
 	// cmd/compute-agent/main.go (bypassing api-gateway: this is east-west
 	// traffic -- see docs/architecture.md "Hypervisor自己登録とzone割当"). Used
 	// once at startup to self-register/re-register.
-	Hypervisors         computev1.HypervisorServiceClient
-	Zone                string
+	Hypervisors computev1.HypervisorServiceClient
+	// BootstrapToken authorizes self-registration into a zone
+	// (internal/bootstraptoken) -- the resulting Hypervisor's zone comes
+	// from this token, not from any locally-configured value, since the
+	// agent's own claim about its zone isn't trusted.
+	BootstrapToken      string
 	AllocatableVCPU     int32
 	AllocatableMemoryMB int64
 	SupportedDrivers    []string
@@ -127,16 +131,16 @@ func (a *Agent) Run(ctx context.Context) error {
 func (a *Agent) register(ctx context.Context) error {
 	req := &computev1.RegisterHypervisorRequest{
 		Hypervisor:          a.Hypervisor,
-		Zone:                a.Zone,
+		BootstrapToken:      a.BootstrapToken,
 		AllocatableVcpu:     a.AllocatableVCPU,
 		AllocatableMemoryMb: a.AllocatableMemoryMB,
 		SupportedDrivers:    a.SupportedDrivers,
 	}
 	var lastErr error
 	for attempt := 0; attempt < 30; attempt++ {
-		_, err := a.Hypervisors.Register(ctx, req)
+		h, err := a.Hypervisors.Register(ctx, req)
 		if err == nil {
-			slog.Info("compute-agent: registered", "hypervisor", a.Hypervisor, "zone", a.Zone)
+			slog.Info("compute-agent: registered", "hypervisor", a.Hypervisor, "zone", h.GetStatus().GetZone())
 			return nil
 		}
 		lastErr = err

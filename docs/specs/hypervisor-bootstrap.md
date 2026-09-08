@@ -31,7 +31,8 @@ sequenceDiagram
 
     Note over A: 起動
     loop 最大30回・1秒間隔でリトライ
-        A->>C: Register(hypervisor, zone, allocatable_vcpu,<br/>allocatable_memory_mb, supported_drivers)
+        A->>C: Register(hypervisor, bootstrap_token, allocatable_vcpu,<br/>allocatable_memory_mb, supported_drivers)
+        C->>C: bootstrap_tokenを検証、zoneクレームを採用
         C-->>A: Hypervisor (成功時break)
     end
     Note over A: NATS購読開始、heartbeatループ開始
@@ -42,8 +43,12 @@ sequenceDiagram
 ```
 
 - `Register`は compute-agent が **compute へ直接gRPCで呼ぶ内部専用RPC**。api-gatewayは経由しない
-- 冪等（upsert）: 同じhypervisor IDでの再登録は zone/capacity/supported_drivers を最新の値に上書きするが、
-  以下は前回の値を保持する:
+- `bootstrap_token`は必須。空、署名不正、期限切れのいずれでも`Unauthenticated`で拒否される
+  （[認証・認可仕様](authn-authz.md)「Hypervisor自己登録の認証」参照）。`zone`は**リクエストの
+  フィールドとしては存在しない**——`status.zone`に採用されるのはトークンの`zone`クレームのみで、
+  compute-agent自身の設定値は一切関与しない
+- 冪等（upsert）: 同じhypervisor IDでの再登録は zone（トークン由来）/capacity/supported_driversを
+  最新の値に上書きするが、以下は前回の値を保持する:
   - `status.allocated_vcpu` / `allocated_memory_mb`（既存のスケジューラ予約）
   - `spec.schedulable`（オペレーターが設定した意図。agentの再起動で意図せず解除されない）
 - 新規登録時の初期値: `phase=Ready`, `allocated_vcpu=0`, `allocated_memory_mb=0`, `spec.schedulable=true`
@@ -68,15 +73,31 @@ stateDiagram-v2
 - `SetSchedulable(hypervisor, schedulable bool)` RPCで変更する。`Register`では変更されない
 - 計画メンテナンス等、ハイパーバイザー自体は正常でも新規VM配置だけ止めたい場合に使う
 
+## bootstrapトークン（`internal/bootstraptoken`）
+
+`kyuusha hypervisor bootstrap-token create -zone=<zone> [-ttl=24h] [-key=hack/devkeys/jwt-dev.key]`
+でzoneクレーム付きJWTをローカル署名する（`kyuusha token mint`と同じ「api-gatewayを経由しない
+ローカル署名」パターン）。compute-agentは`-bootstrap-token-file=<path>`でこのトークンのファイルを
+指定し、起動時の`Register`呼び出しに載せる。computeは`-bootstrap-token-public-key`
+（既定`hack/devkeys/jwt-dev.pub`）で検証し、**トークンの`zone`クレームだけをそのまま
+`status.zone`に採用する**——compute-agentが自分で「私はzone rack3です」と申告する余地はない。
+
+playgroundでは全compute-agentがzone-aを使うため、`hack/devkeys/bootstrap-token-zone-a.jwt`
+（10年有効の開発用トークン、`hack/devkeys`と同じ「dev-onlyでコミット済み」方針）を
+`docker/Dockerfile`のcompute-agentステージに焼き込んで共有している。
+
 ## 外部公開API
 
 `Get` / `List` / `Watch` / `SetSchedulable` のみapi-gateway経由で公開される。いずれも
 リクエストに`tenant_id`を持たないため、[認証・認可仕様](authn-authz.md)によりadmin-only。
-`Register`はapi-gatewayに登録されておらず、外部から到達できない。
+`Register`はapi-gatewayに登録されておらず、外部から到達できない。`hypervisor bootstrap-token
+create`もapi-gatewayを経由しない（ローカル署名のみ）。
 
 ## 既知の未実装事項
 
-- `Register`はmTLSで暗号化・相互認証される（`internal/mtls`、[認証・認可仕様](authn-authz.md)参照）ようになったが、
-  それが証明するのは「呼び出し元が何らかの正規のkyuushaサービスであること」だけ。設計上のzoneスコープ付き
-  bootstrapトークン検証（「どのzoneのどのhypervisorか」を確認するもの）はまだ無く、mTLSを通過した任意の
-  compute-agentが任意のzone/hypervisor名を名乗って自己登録できてしまう
+- bootstrapトークンは使い捨て（single-use）ではない——同じzoneに複数台配備する運用では
+  むしろ不自然なため、意図的に「zoneクレームの検証」だけに絞った。失効の仕組みも無く、
+  `-ttl`による有効期限切れのみが唯一の無効化手段
+- 元の設計にある「登録成功時にハイパーバイザー専用のmTLSクライアント証明書を発行する」部分は
+  未実装。現状の`internal/mtls`は全サービス共通の事前生成証明書のみで、ハイパーバイザー単位の
+  識別・失効はできない（[認証・認可仕様](authn-authz.md)参照）

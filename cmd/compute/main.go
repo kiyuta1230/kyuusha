@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
+	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute/grpcserver"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
@@ -41,6 +42,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers and used when dialing other services (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA both callers' and dialed services' certificates must chain to")
+	bootstrapTokenPublicKey := flag.String("bootstrap-token-public-key", "hack/devkeys/jwt-dev.pub", "PEM public key verifying Hypervisor self-registration bootstrap tokens (see internal/bootstraptoken, 'kyuusha hypervisor bootstrap-token create')")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -149,6 +151,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	bootstrapPubKey, err := authn.LoadECDSAPublicKeyPEM(*bootstrapTokenPublicKey)
+	if err != nil {
+		slog.Error("load bootstrap token public key", "err", err)
+		os.Exit(1)
+	}
+
 	lis, err := net.Listen("tcp", *grpcAddr)
 	if err != nil {
 		slog.Error("listen", "addr", *grpcAddr, "err", err)
@@ -156,7 +164,7 @@ func main() {
 	}
 	grpcServer := grpc.NewServer(grpc.Creds(serverCreds), grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	computev1.RegisterVirtualMachineServiceServer(grpcServer, grpcserver.New(svc, recon))
-	computev1.RegisterHypervisorServiceServer(grpcServer, grpcserver.NewHypervisorServer(svc))
+	computev1.RegisterHypervisorServiceServer(grpcServer, grpcserver.NewHypervisorServer(svc, bootstrapPubKey))
 
 	go func() {
 		<-ctx.Done()

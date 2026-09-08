@@ -26,7 +26,8 @@ RUN CGO_ENABLED=0 go build -o /out/block-storage ./cmd/block-storage
 FROM alpine:3 AS compute
 COPY --from=builder /out/compute /usr/local/bin/compute
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
-ENTRYPOINT ["/usr/local/bin/compute", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
+COPY hack/devkeys/jwt-dev.pub /etc/kyuusha/jwt-dev.pub
+ENTRYPOINT ["/usr/local/bin/compute", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt", "-bootstrap-token-public-key=/etc/kyuusha/jwt-dev.pub"]
 
 FROM alpine:3 AS api-gateway
 COPY --from=builder /out/api-gateway /usr/local/bin/api-gateway
@@ -53,7 +54,12 @@ RUN apk add --no-cache --virtual .fc-fetch curl \
 RUN apk add --no-cache e2fsprogs
 COPY --from=builder /out/compute-agent /usr/local/bin/compute-agent
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
-ENTRYPOINT ["/usr/local/bin/compute-agent", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
+# All 3 playground compute-agents register into zone-a (see
+# playground/docker-compose.yml), so one baked-in dev token covers all of
+# them; a hypervisor in a different zone needs its own token (`kyuusha
+# hypervisor bootstrap-token create -zone=...`) mounted/COPYed in instead.
+COPY hack/devkeys/bootstrap-token-zone-a.jwt /etc/kyuusha/bootstrap-token.jwt
+ENTRYPOINT ["/usr/local/bin/compute-agent", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt", "-bootstrap-token-file=/etc/kyuusha/bootstrap-token.jwt"]
 
 FROM alpine:3 AS kyuusha-cli
 COPY --from=builder /out/kyuusha /usr/local/bin/kyuusha

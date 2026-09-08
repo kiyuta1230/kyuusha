@@ -2,12 +2,14 @@ package grpcserver
 
 import (
 	"context"
+	"crypto"
 	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"gitlab.com/ki.yuta1230/kyuusha/internal/bootstraptoken"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
@@ -22,18 +24,30 @@ import (
 // registered on the same grpc.Server (see cmd/compute/main.go).
 type HypervisorServer struct {
 	computev1.UnimplementedHypervisorServiceServer
-	svc *compute.Service
+	svc                     *compute.Service
+	bootstrapTokenPublicKey crypto.PublicKey
 }
 
-func NewHypervisorServer(svc *compute.Service) *HypervisorServer {
-	return &HypervisorServer{svc: svc}
+func NewHypervisorServer(svc *compute.Service, bootstrapTokenPublicKey crypto.PublicKey) *HypervisorServer {
+	return &HypervisorServer{svc: svc, bootstrapTokenPublicKey: bootstrapTokenPublicKey}
 }
 
+// Register verifies the caller's zone-scoped bootstrap token
+// (internal/bootstraptoken, docs/architecture.md "Hypervisor自己登録とzone割当")
+// and registers the Hypervisor into the token's zone -- never a
+// self-reported one, since the agent's own claim isn't trusted.
 func (s *HypervisorServer) Register(ctx context.Context, req *computev1.RegisterHypervisorRequest) (*computev1.Hypervisor, error) {
 	if req.GetHypervisor() == "" {
 		return nil, status.Error(codes.InvalidArgument, "hypervisor is required")
 	}
-	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), req.GetZone(), req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers())
+	if req.GetBootstrapToken() == "" {
+		return nil, status.Error(codes.Unauthenticated, "bootstrap_token is required")
+	}
+	claims, err := bootstraptoken.VerifyWithKey(s.bootstrapTokenPublicKey, req.GetBootstrapToken())
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "invalid bootstrap_token: %v", err)
+	}
+	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), claims.Zone, req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers())
 	if err != nil {
 		return nil, toHypervisorStatus(err)
 	}

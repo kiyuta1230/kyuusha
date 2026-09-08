@@ -58,6 +58,7 @@ func usage() {
   kyuusha vm <create|get|list|watch|console|delete|add-finalizer|remove-finalizer> [flags]
   kyuusha tenant <create|get|list|watch|update|delete> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
+  kyuusha hypervisor bootstrap-token create -zone=... [flags]   (dev-only, local signing; see internal/bootstraptoken)
   kyuusha image <create|get|list|watch|share|delete> [flags]
   kyuusha subnet <create|get|list|watch|delete> [flags]
   kyuusha netif <create|get|list|watch|delete> [flags]

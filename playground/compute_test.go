@@ -7,6 +7,9 @@ package playground
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"net"
 	"testing"
 	"time"
@@ -17,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"gitlab.com/ki.yuta1230/kyuusha/internal/bootstraptoken"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute/grpcserver"
@@ -55,7 +59,7 @@ func startNATS(t *testing.T) *nats.Conn {
 // gRPC surface compute-agent's self-registration needs) over a real local
 // listener, so the agent registers exactly the way it does in production
 // rather than through some test-only shortcut.
-func startHypervisorService(t *testing.T, svc *compute.Service) computev1.HypervisorServiceClient {
+func startHypervisorService(t *testing.T, svc *compute.Service, bootstrapTokenPublicKey *ecdsa.PublicKey) computev1.HypervisorServiceClient {
 	t.Helper()
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -63,7 +67,7 @@ func startHypervisorService(t *testing.T, svc *compute.Service) computev1.Hyperv
 		t.Fatalf("listen: %v", err)
 	}
 	server := grpc.NewServer()
-	computev1.RegisterHypervisorServiceServer(server, grpcserver.NewHypervisorServer(svc))
+	computev1.RegisterHypervisorServiceServer(server, grpcserver.NewHypervisorServer(svc, bootstrapTokenPublicKey))
 	go server.Serve(lis)
 	t.Cleanup(server.Stop)
 
@@ -95,7 +99,15 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compute.NewService: %v", err)
 	}
-	hypervisorClient := startHypervisorService(t, svc)
+	bootstrapKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate bootstrap token key: %v", err)
+	}
+	bootstrapToken, err := bootstraptoken.Mint(bootstrapKey, "zone-a", time.Hour)
+	if err != nil {
+		t.Fatalf("mint bootstrap token: %v", err)
+	}
+	hypervisorClient := startHypervisorService(t, svc, &bootstrapKey.PublicKey)
 
 	recon := compute.NewReconciler(svc, nc, js)
 	go func() {
@@ -110,7 +122,7 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 		JS:                  js,
 		HeartbeatInterval:   200 * time.Millisecond,
 		Hypervisors:         hypervisorClient,
-		Zone:                "zone-a",
+		BootstrapToken:      bootstrapToken,
 		AllocatableVCPU:     8,
 		AllocatableMemoryMB: 16384,
 		SupportedDrivers:    []string{"FIRECRACKER"},

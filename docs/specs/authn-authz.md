@@ -91,8 +91,10 @@ allow if {
   既定値はdev用の共有証明書`hack/devcerts/`）。これが保証するのは「呼び出し元が何らかの正規の
   kyuushaサービスであること」だけで、「どのサービスがどのRPCを呼べるか」という内部最小権限は
   別軸のまま未実装（`docs/architecture.md`「認可の粒度」参照）。`compute-agent`の`Register`は
-  mTLSで認証されるようになったが、「どのzoneのどのhypervisorか」を検証するbootstrapトークンは
-  まだ無い（[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)参照）
+  mTLSに加え、zoneスコープ付きbootstrapトークン（`internal/bootstraptoken`）でzoneクレームを
+  検証するようになった——ハイパーバイザー自身が申告するzoneは信用せず、トークンのzoneだけを
+  採用する。ただし単位はzoneまでで「どのhypervisorか」の個体識別・失効はまだ無く、トークンは
+  使い捨てでもない（[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)参照）
 - `UpdateVirtualMachineRequest`/`UpdateTenantRequest`は`vm.meta.tenant_id`/`tenant.meta.tenant_id`と別に、認可用の`tenant_id`をトップレベルに持つ。gRPCサーバー側でこの2つの一致を検証し、不一致は`InvalidArgument`で拒否する
 
 ## 将来の拡張: テナント内ロール/細粒度認可の設計方針（未実装）

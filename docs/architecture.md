@@ -1034,14 +1034,25 @@ OPA採用によりこの「今は粗く、後で細かく」という判断は�
 ブートストラップフローを採用する（コンテナ固有のオブジェクトモデルではなく、この種の
 ブートストラップ手法として一般的に妥当なため借用）。
 
-1. 運用者がハイパーバイザープロビジョニング時に、**zoneスコープ付きの使い捨てbootstrapトークン**を発行する
-   （例: `kyuusha hypervisor bootstrap-token create --zone=rack3`）
+1. 運用者がハイパーバイザープロビジョニング時に、**zoneスコープ付きのbootstrapトークン**を発行する
+   （`kyuusha hypervisor bootstrap-token create -zone=rack3`）
 2. トークンをcloud-init/PXE経由でハイパーバイザーに埋め込む
 3. compute-agentが初回起動時、このトークンを使ってcomputeの内部専用`RegisterHypervisor`RPCを呼ぶ
 4. computeはトークンを検証し、**トークンに紐づくzoneをそのままHypervisorのzoneとして採用**する
    （ハイパーバイザー自身の自己申告は信用しない）。同時に、以後の通信用mTLSクライアント証明書を発行して
    ハイパーバイザーへ返す
 5. 以降の通信はこの証明書によるmTLSで認証される。bootstrapトークンは使い捨てで登録後に失効する
+
+**実装済みなのは1〜4のうち、zoneの検証部分のみ**（`internal/bootstraptoken`、
+[Hypervisor登録・死活監視仕様](specs/hypervisor-bootstrap.md)参照）。トークンは
+`internal/authn`の開発用JWT署名鍵をそのまま再利用したzoneクレーム付きJWTで、
+`RegisterHypervisor`は必須パラメータとしてこれを検証し、**トークンのzoneクレームだけを
+信頼する**（リクエスト自体はもうzoneフィールドを持たない）。使い捨て（single-use/失効）
+ではない——同じzoneに複数台配備する運用ではトークンを毎回使い捨てにする方が
+かえって不自然なため、意図的に「zoneスコープの検証」だけに絞った。ステップ4後半の
+「以後の通信用mTLSクライアント証明書を発行」は実装していない——現状のmTLS
+（`internal/mtls`）は全サービス共通の事前生成証明書のみで、ハイパーバイザー単位の
+識別はできない（「認証・認可とHypervisor登録」節のmTLS所感と同じ制約）。
 
 ## スケジューラ設計
 

@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/bootstraptoken"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
@@ -14,7 +18,9 @@ import (
 // compute's internal scheduling inventory, not a KaaS-facing resource.
 // Registration happens automatically when compute-agent starts -- there is
 // no `create` here. Admin-only through api-gateway (see internal/gateway's
-// HypervisorProxy doc comment).
+// HypervisorProxy doc comment). `bootstrap-token create` is the one
+// exception that doesn't talk to api-gateway at all -- see
+// hypervisorBootstrapTokenCreate's doc comment.
 func hypervisorCmd(args []string) {
 	if len(args) < 1 {
 		usage()
@@ -29,10 +35,48 @@ func hypervisorCmd(args []string) {
 		hypervisorWatch(args[1:])
 	case "set-schedulable":
 		hypervisorSetSchedulable(args[1:])
+	case "bootstrap-token":
+		hypervisorBootstrapTokenCmd(args[1:])
 	default:
 		usage()
 		os.Exit(2)
 	}
+}
+
+func hypervisorBootstrapTokenCmd(args []string) {
+	if len(args) < 1 || args[0] != "create" {
+		usage()
+		os.Exit(2)
+	}
+	hypervisorBootstrapTokenCreate(args[1:])
+}
+
+// hypervisorBootstrapTokenCreate is dev-only, like `token mint`: it signs
+// locally with a private key file instead of going through any RPC, so it
+// needs no -addr/-token (there's no api-gateway or bearer-token concept
+// involved -- this mints the credential a compute-agent presents *to*
+// RegisterHypervisor, see internal/bootstraptoken). A real deployment mints
+// these from whatever system holds the signing key when provisioning a
+// hypervisor, not with this CLI.
+func hypervisorBootstrapTokenCreate(args []string) {
+	fs := flag.NewFlagSet("hypervisor bootstrap-token create", flag.ExitOnError)
+	keyPath := fs.String("key", "hack/devkeys/jwt-dev.key", "PEM private key to sign with (dev only; same key `token mint` uses)")
+	zone := fs.String("zone", "", "zone this token authorizes hypervisor self-registration into (required)")
+	ttl := fs.Duration("ttl", 24*time.Hour, "token lifetime")
+	fs.Parse(args)
+
+	if *zone == "" {
+		fatal("-zone is required")
+	}
+	key, err := authn.LoadECDSAPrivateKeyPEM(*keyPath)
+	if err != nil {
+		fatal("load signing key: %v", err)
+	}
+	token, err := bootstraptoken.Mint(key, *zone, *ttl)
+	if err != nil {
+		fatal("mint bootstrap token: %v", err)
+	}
+	fmt.Println(token)
 }
 
 func hypervisorGet(args []string) {

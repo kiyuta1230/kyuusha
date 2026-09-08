@@ -32,7 +32,7 @@ func main() {
 	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL")
 	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for Hypervisor self-registration")
 	hypervisor := flag.String("hypervisor", "", "this hypervisor's ID (required)")
-	zone := flag.String("zone", "", "availability zone this hypervisor belongs to")
+	bootstrapTokenFile := flag.String("bootstrap-token-file", "", "path to a zone-scoped bootstrap token (required; see 'kyuusha hypervisor bootstrap-token create'). Its zone claim, not any locally-configured value, becomes this Hypervisor's zone")
 	vcpu := flag.Int("vcpu", 8, "allocatable vCPU capacity to report")
 	memoryMB := flag.Int64("memory-mb", 16384, "allocatable memory capacity to report, in MB")
 	drivers := flag.String("drivers", "FIRECRACKER", "comma-separated VMM drivers this hypervisor supports (FIRECRACKER|QEMU)")
@@ -53,6 +53,16 @@ func main() {
 		slog.Error("-hypervisor is required")
 		os.Exit(1)
 	}
+	if *bootstrapTokenFile == "" {
+		slog.Error("-bootstrap-token-file is required")
+		os.Exit(1)
+	}
+	bootstrapTokenBytes, err := os.ReadFile(*bootstrapTokenFile)
+	if err != nil {
+		slog.Error("read bootstrap token", "path", *bootstrapTokenFile, "err", err)
+		os.Exit(1)
+	}
+	bootstrapToken := strings.TrimSpace(string(bootstrapTokenBytes))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -125,7 +135,7 @@ func main() {
 		JS:                  js,
 		HeartbeatInterval:   *heartbeat,
 		Hypervisors:         computev1.NewHypervisorServiceClient(computeConn),
-		Zone:                *zone,
+		BootstrapToken:      bootstrapToken,
 		AllocatableVCPU:     int32(*vcpu),
 		AllocatableMemoryMB: *memoryMB,
 		SupportedDrivers:    strings.Split(*drivers, ","),
@@ -135,7 +145,7 @@ func main() {
 			RunDir:   *fcRunDir,
 		},
 	}
-	slog.Info("compute-agent: starting", "hypervisor", *hypervisor, "zone", *zone)
+	slog.Info("compute-agent: starting", "hypervisor", *hypervisor)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("agent stopped", "err", err)
 		os.Exit(1)

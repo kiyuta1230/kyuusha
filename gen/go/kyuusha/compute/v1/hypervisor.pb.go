@@ -364,12 +364,16 @@ func (x *Hypervisor) GetStatus() *HypervisorStatus {
 type RegisterHypervisorRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Hypervisor          string                 `protobuf:"bytes,1,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"` // stable id, e.g. "hypervisor-1"; becomes meta.id and meta.name
-	Zone                string                 `protobuf:"bytes,2,opt,name=zone,proto3" json:"zone,omitempty"`
 	AllocatableVcpu     int32                  `protobuf:"varint,3,opt,name=allocatable_vcpu,json=allocatableVcpu,proto3" json:"allocatable_vcpu,omitempty"`
 	AllocatableMemoryMb int64                  `protobuf:"varint,4,opt,name=allocatable_memory_mb,json=allocatableMemoryMb,proto3" json:"allocatable_memory_mb,omitempty"`
 	SupportedDrivers    []string               `protobuf:"bytes,5,rep,name=supported_drivers,json=supportedDrivers,proto3" json:"supported_drivers,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Required: a zone-scoped JWT minted by `kyuusha hypervisor bootstrap-token
+	// create -zone=...` (internal/bootstraptoken). Its `zone` claim -- not any
+	// self-reported value from the agent -- becomes the registered
+	// Hypervisor's zone; see docs/architecture.md "Hypervisor自己登録とzone割当".
+	BootstrapToken string `protobuf:"bytes,6,opt,name=bootstrap_token,json=bootstrapToken,proto3" json:"bootstrap_token,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RegisterHypervisorRequest) Reset() {
@@ -409,13 +413,6 @@ func (x *RegisterHypervisorRequest) GetHypervisor() string {
 	return ""
 }
 
-func (x *RegisterHypervisorRequest) GetZone() string {
-	if x != nil {
-		return x.Zone
-	}
-	return ""
-}
-
 func (x *RegisterHypervisorRequest) GetAllocatableVcpu() int32 {
 	if x != nil {
 		return x.AllocatableVcpu
@@ -435,6 +432,13 @@ func (x *RegisterHypervisorRequest) GetSupportedDrivers() []string {
 		return x.SupportedDrivers
 	}
 	return nil
+}
+
+func (x *RegisterHypervisorRequest) GetBootstrapToken() string {
+	if x != nil {
+		return x.BootstrapToken
+	}
+	return ""
 }
 
 type GetHypervisorRequest struct {
@@ -748,15 +752,15 @@ const file_kyuusha_compute_v1_hypervisor_proto_rawDesc = "" +
 	"Hypervisor\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x126\n" +
 	"\x04spec\x18\x02 \x01(\v2\".kyuusha.compute.v1.HypervisorSpecR\x04spec\x12<\n" +
-	"\x06status\x18\x03 \x01(\v2$.kyuusha.compute.v1.HypervisorStatusR\x06status\"\xdb\x01\n" +
+	"\x06status\x18\x03 \x01(\v2$.kyuusha.compute.v1.HypervisorStatusR\x06status\"\xf0\x01\n" +
 	"\x19RegisterHypervisorRequest\x12\x1e\n" +
 	"\n" +
 	"hypervisor\x18\x01 \x01(\tR\n" +
-	"hypervisor\x12\x12\n" +
-	"\x04zone\x18\x02 \x01(\tR\x04zone\x12)\n" +
+	"hypervisor\x12)\n" +
 	"\x10allocatable_vcpu\x18\x03 \x01(\x05R\x0fallocatableVcpu\x122\n" +
 	"\x15allocatable_memory_mb\x18\x04 \x01(\x03R\x13allocatableMemoryMb\x12+\n" +
-	"\x11supported_drivers\x18\x05 \x03(\tR\x10supportedDrivers\"6\n" +
+	"\x11supported_drivers\x18\x05 \x03(\tR\x10supportedDrivers\x12'\n" +
+	"\x0fbootstrap_token\x18\x06 \x01(\tR\x0ebootstrapToken\"6\n" +
 	"\x14GetHypervisorRequest\x12\x1e\n" +
 	"\n" +
 	"hypervisor\x18\x01 \x01(\tR\n" +
