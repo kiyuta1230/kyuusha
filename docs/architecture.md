@@ -1496,9 +1496,15 @@ scrapeするなり`remote_write`で自分の長期保存基盤に転送するな
 ### Firecracker: jailerとtapデバイス
 
 - 各VirtualMachineの Firecracker プロセスは**jailerでラップする**（chroot + cgroup + namespace分離）。
-  同一ホストに複数テナントのVirtualMachineが同居する前提上、プロセス分離は必須と判断
-  ——**未実装**（実装は今もcompute-agentコンテナの権限のまま動く。[Firecracker起動仕様](specs/firecracker-boot.md)参照）
-- cgroupのCPU/メモリ制限は`spec.vcpu`/`spec.memory_mb`の値からそのまま設定する ——未実装
+  同一ホストに複数テナントのVirtualMachineが同居する前提上、プロセス分離は必須と判断——
+  このうちcgroupによるCPU/メモリ制限は**実装済み**（次項）。chroot/namespace分離と
+  特権降格（uid/gid drop）は**未実装**のまま（実装は今もcompute-agentコンテナの権限のまま
+  動く。[Firecracker起動仕様](specs/firecracker-boot.md)参照）
+- cgroupのCPU/メモリ制限（`internal/compute-agent/cgroup`）は`spec.vcpu`/`spec.memory_mb`の
+  値からそのまま設定する——**実装済み**。cgroup v2の unified hierarchy のみ対応し、host/
+  コンテナ側でcgroup delegationが使えない環境ではエラーをログに残すだけで、VMは無制限
+  リソースのまま起動を続ける（best-effort。jailerが本来提供するプロセス隔離そのものでは
+  なく、あくまでリソース上限の強制のみ）
 - tapデバイスは**実装済み**（`internal/compute-agent/netsetup`、[network仕様](specs/network.md)
   「tap配線とローカルネットワーク」参照）: `NetworkInterface`ごとに決定的な名前
   （IDのSHA-256短縮形、`tap<12桁hex>`）で作成する。ここに書いた当初の想定は「1つの

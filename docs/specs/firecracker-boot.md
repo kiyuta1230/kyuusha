@@ -5,8 +5,10 @@
 `driver_hint=FIRECRACKER`（未指定時のデフォルト）のVirtualMachineは、compute-agentが実際に
 Firecrackerプロセスを起動する。`VirtualMachineSpec.network_interfaces`が指定されたVMには
 実際のtapデバイスも配線される（[network.md](network.md)「tap配線とローカルネットワーク」
-参照）。それ以外の部分は今も**jailerなし**の最小スコープのまま——jailer
-（chroot+cgroup+namespace分離）は意図的に見送っており、Firecrackerプロセスは
+参照）。`spec.vcpu`/`spec.memory_mb`はcgroup v2の`cpu.max`/`memory.max`として
+host側でも強制される（`internal/compute-agent/cgroup`、下記「cgroupリソース制限」参照）。
+それ以外の部分は今も**jailerなし**の最小スコープのまま——jailer本来の
+chroot+namespace分離+特権降格は意図的に見送っており、Firecrackerプロセスは
 compute-agentコンテナの権限のまま動く（**本番の隔離設計はdocs/architecture.mdの
 「Firecracker: jailerとtapデバイス」節を参照。ここに書くのはあくまで現状の実装**）。
 `driver_hint=QEMU`は引き続き未実装（stub-success）のまま。
@@ -113,6 +115,32 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
 | `-fc-cache-dir` | `/var/lib/kyuusha/fc-cache` | ダウンロード済みkernel/rootfsの共有キャッシュ |
 | `-fc-run-dir` | `/var/lib/kyuusha/fc-run` | VMごとの書き込み可能rootfsコピー・APIソケット・console.log |
 
+## cgroupリソース制限（`internal/compute-agent/cgroup`）
+
+Firecrackerプロセスの起動直後（`cmd.Start()`成功後）、そのPIDを`/sys/fs/cgroup/kyuusha/<VM ID>`
+というcgroup v2グループへ移し、`cpu.max`を`<spec.vcpu>*100000 100000`（=vcpu個ぶんのフル
+コアを上限としたCPU quota）、`memory.max`を`spec.memory_mb`をバイトに換算した値に設定する。
+Firecracker/KVMに渡した仮想トポロジ（`machine-config`のvcpu_count/mem_size_mib）と全く同じ
+数値を、そのままhost側の実リソース上限としても強制する形。
+
+- **cgroup v2のunified hierarchyのみ対応**（v1は非対応）。`Available()`が偽を返す環境
+  （cgroup v1のホスト、cgroupfsが読み取り専用/未委譲のコンテナ等）や、委譲はあっても
+  controllerの有効化に失敗する環境では、`Apply`はエラーを返すだけで**VMの起動自体は
+  ブロックしない**——警告ログを残し、そのVMは無制限リソースのまま起動を続ける
+  （best-effort。以前の全バージョンと同じ挙動へのフォールバック）
+- compute-agentコンテナ自身のプロセスは、cgroup v2の「no internal process」制約
+  （`subtree_control`で子へcontrollerを委譲するには、そのcgroup自身の`cgroup.procs`が
+  空でなければならない）を回避するため、起動時に`/sys/fs/cgroup/init`という兄弟cgroupへ
+  自分自身を退避させてから`/sys/fs/cgroup`（cgroupnsで見えるcontainerの実質root）の
+  `subtree_control`を有効化する（`ensureSelfMoved`）
+- VM終了時（Firecrackerプロセスが実際に`wait(2)`され切った後）に`kyuusha/<VM ID>`
+  ディレクトリを削除する。空にならないうちの削除はカーネルに拒否されるため、
+  短い間隔でリトライする
+- jailerが本来提供する隔離（chroot/namespace/uid drop）そのものではない——同一ホスト上の
+  他プロセスからのファイルシステム上の可視性やnamespace分離は一切変わらず、あくまで
+  CPU/メモリの消費量に上限を設けるだけ（docs/architecture.md「Firecracker: jailerとtap
+  デバイス」参照）
+
 ## playgroundでの構成
 
 - `/dev/kvm`をcompute-agentコンテナへ渡す必要がある（`playground/docker-compose.yml`の
@@ -133,7 +161,8 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
 
 - クロスHypervisorのネットワーク疎通（同じHypervisor内のtap+ブリッジのみ。
   [network.md](network.md)「tap配線とローカルネットワーク」参照）
-- jailer（chroot/cgroup/namespace分離。本番運用前に必須、docs/architecture.md参照）
+- jailer本来のchroot/namespace分離・特権降格（cgroupによるCPU/メモリ制限のみ実装済み、
+  上記「cgroupリソース制限」参照。本番運用前に必須、docs/architecture.md参照）
 - ダウンロードした`kernel_url`/`rootfs_url`の内容のdigest検証
 - Stop（一時停止）/Restart。今あるのは起動（Boot）と削除に伴う強制終了（Stop=プロセス終了）のみ
 - `user_data`の機密情報対応（保存時暗号化、監査ログからの除外。

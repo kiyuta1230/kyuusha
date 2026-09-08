@@ -219,6 +219,13 @@ services:
       - /dev/net/tun
     cap_add:
       - NET_ADMIN # tap device + bridge creation, see internal/compute-agent/netsetup
+    # cgroupfs is mounted read-only for any non-privileged container
+    # regardless of individual capabilities (confirmed: SYS_ADMIN alone did
+    # not make it writable) -- needed for internal/compute-agent/cgroup's
+    # delegation to work. compute-agent already runs as a highly-trusted,
+    # full-root process with /dev/kvm/NET_ADMIN, so this is a small marginal
+    # increase for playground purposes only.
+    privileged: true
     depends_on:
       nats:
         condition: service_healthy
@@ -241,6 +248,13 @@ services:
       - /dev/net/tun
     cap_add:
       - NET_ADMIN # tap device + bridge creation, see internal/compute-agent/netsetup
+    # cgroupfs is mounted read-only for any non-privileged container
+    # regardless of individual capabilities (confirmed: SYS_ADMIN alone did
+    # not make it writable) -- needed for internal/compute-agent/cgroup's
+    # delegation to work. compute-agent already runs as a highly-trusted,
+    # full-root process with /dev/kvm/NET_ADMIN, so this is a small marginal
+    # increase for playground purposes only.
+    privileged: true
     depends_on:
       nats:
         condition: service_healthy
@@ -263,6 +277,13 @@ services:
       - /dev/net/tun
     cap_add:
       - NET_ADMIN # tap device + bridge creation, see internal/compute-agent/netsetup
+    # cgroupfs is mounted read-only for any non-privileged container
+    # regardless of individual capabilities (confirmed: SYS_ADMIN alone did
+    # not make it writable) -- needed for internal/compute-agent/cgroup's
+    # delegation to work. compute-agent already runs as a highly-trusted,
+    # full-root process with /dev/kvm/NET_ADMIN, so this is a small marginal
+    # increase for playground purposes only.
+    privileged: true
     depends_on:
       nats:
         condition: service_healthy

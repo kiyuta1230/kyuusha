@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 
 	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/fcvmm"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
@@ -63,6 +64,17 @@ func main() {
 		os.Exit(1)
 	}
 	bootstrapToken := strings.TrimSpace(string(bootstrapTokenBytes))
+
+	// Must happen before any Firecracker process is ever forked (Boot's
+	// exec.Command): a child forked while this process still resides
+	// directly in the (cgroupns-scoped) root cgroup inherits that placement
+	// permanently, which then blocks cgroup.Apply's controller delegation
+	// for every VM after it. See internal/compute-agent/cgroup's doc
+	// comment on Init. Best-effort -- a host/container without usable
+	// cgroup v2 delegation just runs with VMs unconstrained.
+	if err := cgroup.Init(); err != nil {
+		slog.Warn("cgroup delegation not available, VMs will boot unconstrained", "err", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -110,10 +122,11 @@ func main() {
 	}
 
 	// compute-agent -> compute is mTLS-authenticated (proves "this is some
-	// kyuusha service") but not yet authorized as a specific hypervisor: the
-	// real design also verifies a zone-scoped bootstrap token here (see
-	// docs/architecture.md and docs/open-questions.md) -- that's a separate,
-	// still-undone follow-up.
+	// kyuusha service"); Register additionally carries a zone-scoped
+	// bootstrap token (see BootstrapToken below and
+	// docs/specs/hypervisor-bootstrap.md), verified by compute. Individual
+	// hypervisor identity/revocation remains a separate, still-undone
+	// follow-up (docs/open-questions.md).
 	clientCreds, err := mtls.ClientCredentials(*tlsCert, *tlsKey, *tlsCA)
 	if err != nil {
 		slog.Error("load mTLS client credentials", "err", err)

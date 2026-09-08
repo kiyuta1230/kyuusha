@@ -1,7 +1,12 @@
 // Package fcvmm runs real Firecracker microVMs for compute-agent. This is
-// the first real (non-stub) VMM integration: it deliberately skips jailer
-// (chroot/cgroup/namespace isolation) -- see docs/specs/firecracker-boot.md
-// for the scope this covers and what it doesn't. Real network interfaces
+// the first real (non-stub) VMM integration: it deliberately skips jailer's
+// chroot/namespace/uid-drop process isolation -- see
+// docs/specs/firecracker-boot.md for the scope this covers and what it
+// doesn't. It does apply host-side cgroup v2 CPU/memory limits (see
+// internal/compute-agent/cgroup) derived directly from spec.vcpu/
+// spec.memory_mb, best-effort: a host/container without usable cgroup v2
+// delegation just boots the VM unconstrained, same as before this existed.
+// Real network interfaces
 // (tap devices, per-VLAN bridges -- see internal/compute-agent/netsetup)
 // are wired for VMs whose spec carries them; a VM with none boots exactly
 // as before (network-less, serial-only). A VM with spec.user_data set gets
@@ -28,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/netsetup"
 )
 
@@ -293,6 +299,13 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		return fmt.Errorf("fcvmm: start firecracker: %w", err)
 	}
 
+	// Best-effort: a host/container without usable cgroup v2 delegation just
+	// boots this VM unconstrained, same as before this existed -- see
+	// internal/compute-agent/cgroup's doc comment.
+	if err := cgroup.Apply(spec.VMID, spec.VCPU, spec.MemoryMB, cmd.Process.Pid); err != nil {
+		slog.Warn("fcvmm: cgroup limits not applied, VM will boot unconstrained", "vm_id", spec.VMID, "err", err)
+	}
+
 	exitCh := make(chan error, 1)
 	go func() { exitCh <- cmd.Wait() }()
 
@@ -300,6 +313,9 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	case err := <-exitCh:
 		for _, t := range taps {
 			_ = netsetup.DeleteTap(t)
+		}
+		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
+			slog.Warn("fcvmm: removing cgroup after immediate exit", "vm_id", spec.VMID, "err", rmErr)
 		}
 		return fmt.Errorf("fcvmm: firecracker exited immediately (see %s): %w", consoleLog.Name(), err)
 	case <-time.After(bootGracePeriod):
@@ -319,6 +335,9 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		m.mu.Unlock()
 		for _, t := range taps {
 			_ = netsetup.DeleteTap(t)
+		}
+		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
+			slog.Warn("fcvmm: removing cgroup", "vm_id", spec.VMID, "err", rmErr)
 		}
 		if err != nil {
 			slog.Warn("fcvmm: firecracker process exited", "vm_id", spec.VMID, "err", err)
