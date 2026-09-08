@@ -1,8 +1,11 @@
 // Package computeagent is the compute-agent side of the NATS command/event
-// exchange described in docs/architecture.md. driver_hint=FIRECRACKER VMs
-// are booted for real via fcvmm (see docs/specs/firecracker-boot.md for
-// what that milestone does and doesn't cover); QEMU remains a stub, since
-// that driver has no implementation at all yet.
+// exchange described in docs/architecture.md. It dispatches each
+// CreateCommand to whichever VMM driver (internal/compute-agent/vmm.VMM)
+// is registered under its driver_hint -- see docs/specs/firecracker-boot.md
+// (FIRECRACKER) and docs/specs/qemu-boot.md (QEMU). A driver_hint with no
+// registered driver, or one missing its artifact URLs (shouldn't happen
+// given compute's own validation, but handled defensively), stub-succeeds
+// as before this package had any real VMM integration.
 package computeagent
 
 import (
@@ -19,7 +22,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	computeagentfc "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/fcvmm"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
@@ -49,11 +52,13 @@ type Agent struct {
 	AllocatableMemoryMB int64
 	SupportedDrivers    []string
 
-	// Firecracker boots/tears down driver_hint=FIRECRACKER VMs. Never nil in
-	// practice (cmd/compute-agent/main.go always constructs one), but
-	// handleCreate falls back to the old stub behavior if it is, so tests
-	// that don't set it keep working.
-	Firecracker *computeagentfc.Manager
+	// Drivers boots/tears down VMs, keyed by driver_hint (e.g.
+	// string(compute.VmmDriverFirecracker), string(compute.VmmDriverQEMU)).
+	// cmd/compute-agent/main.go always populates both in production;
+	// handleCreate falls back to the old stub behavior for a driver_hint
+	// with no entry (or a nil map), so tests that don't set this keep
+	// working.
+	Drivers map[string]vmm.VMM
 }
 
 // Run registers with compute (retrying briefly in case it isn't up yet --
@@ -154,11 +159,11 @@ func (a *Agent) register(ctx context.Context) error {
 }
 
 // handleCreate acks on receipt (per docs/architecture.md: agents ack once
-// the work is durably accepted, not once it completes). driver_hint=
-// FIRECRACKER commands with both artifact URLs set are booted for real via
-// fcvmm; everything else (QEMU, or a Firecracker command missing URLs --
-// shouldn't happen given compute's validation, but handled defensively)
-// stub-succeeds as before.
+// the work is durably accepted, not once it completes). A command whose
+// driver_hint has a registered Drivers entry, and both artifact URLs set,
+// is booted for real; everything else (an unregistered driver_hint, or a
+// command missing URLs -- shouldn't happen given compute's validation, but
+// handled defensively) stub-succeeds as before.
 func (a *Agent) handleCreate(msg jetstream.Msg) {
 	_ = msg.Ack()
 
@@ -178,9 +183,9 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 	defer span.End()
 
 	result := compute.CreateResult{VMID: cmd.VMID, Success: true}
-	if a.Firecracker != nil && cmd.DriverHint == string(compute.VmmDriverFirecracker) && cmd.KernelURL != "" && cmd.RootfsURL != "" {
-		slog.Info("compute-agent: booting VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "interfaces", len(cmd.Interfaces))
-		if err := a.Firecracker.Boot(ctx, computeagentfc.BootSpec{
+	if driver, ok := a.Drivers[cmd.DriverHint]; ok && driver != nil && cmd.KernelURL != "" && cmd.RootfsURL != "" {
+		slog.Info("compute-agent: booting VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "driver_hint", cmd.DriverHint, "interfaces", len(cmd.Interfaces))
+		if err := driver.Boot(ctx, vmm.BootSpec{
 			VMID:              cmd.VMID,
 			VCPU:              cmd.VCPU,
 			MemoryMB:          cmd.MemoryMB,
@@ -208,9 +213,14 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 	}
 }
 
-// handleDelete tears down whatever real process Firecracker may have
-// booted for this VM. Fire-and-forget: no result event, see
-// reconciler.go's releaseIfReserved.
+// handleDelete tears down whatever real process may have booted for this
+// VM. Every registered driver's Stop is tried: exactly one of them (if
+// any) actually booted a given VM, since a VM's Image format determines
+// which drivers can even consume it (see internal/compute/image.go's
+// validateImage), and each driver's Stop is already documented as a no-op
+// for a vm_id it never booted, so trying them all is safe and needs no
+// separate bookkeeping of which driver "owns" a VM. Fire-and-forget: no
+// result event, see reconciler.go's releaseIfReserved.
 func (a *Agent) handleDelete(msg jetstream.Msg) {
 	_ = msg.Ack()
 
@@ -219,22 +229,22 @@ func (a *Agent) handleDelete(msg jetstream.Msg) {
 		slog.Error("compute-agent: bad delete command", "err", err)
 		return
 	}
-	if a.Firecracker != nil {
-		a.Firecracker.Stop(cmd.VMID)
+	for _, driver := range a.Drivers {
+		driver.Stop(cmd.VMID)
 	}
 }
 
 // buildNetIfaces resolves cmd.Interfaces (compute.NetworkInterfaceInfo,
-// see nats.go) into what fcvmm.Manager.Boot needs to actually wire a tap
+// see nats.go) into what a VMM driver's Boot needs to actually wire a tap
 // device for each: mainly parsing CIDR down to a prefix length, since the
-// kernel cmdline convention fcvmm builds (kyuusha.net.<i>.ip=<ip>/<prefix>)
-// needs it in that form. An interface with no IPAddress/CIDR (its
+// kernel cmdline convention each driver builds (kyuusha.net.<i>.ip=<ip>/
+// <prefix>) needs it in that form. An interface with no IPAddress/CIDR (its
 // NetworkInterface's IP allocation hadn't succeeded yet when the VM was
 // scheduled -- see docs/specs/network.md) is skipped rather than failing
 // the whole boot: the guest simply comes up with one fewer NIC than
 // requested.
-func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []computeagentfc.NetIface {
-	var out []computeagentfc.NetIface
+func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.NetIface {
+	var out []vmm.NetIface
 	for _, ni := range infos {
 		if ni.IPAddress == "" || ni.CIDR == "" {
 			slog.Warn("compute-agent: skipping network interface with no allocated IP yet", "vm_id", vmID, "iface_id", ni.IfaceID)
@@ -246,7 +256,7 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []compute
 			continue
 		}
 		prefixLen, _ := ipnet.Mask.Size()
-		out = append(out, computeagentfc.NetIface{
+		out = append(out, vmm.NetIface{
 			IfaceID:    ni.IfaceID,
 			MACAddress: ni.MACAddress,
 			IPAddress:  ni.IPAddress,

@@ -1,7 +1,8 @@
 // Command compute-agent runs the NATS side of compute-agent: it accepts
-// vm.create/vm.delete commands and boots real Firecracker microVMs for
-// driver_hint=FIRECRACKER VMs (see internal/compute-agent/fcvmm and
-// docs/specs/firecracker-boot.md); QEMU remains a stub.
+// vm.create/vm.delete commands and boots real VMM processes -- Firecracker
+// for driver_hint=FIRECRACKER (internal/compute-agent/fcvmm,
+// docs/specs/firecracker-boot.md) and QEMU for driver_hint=QEMU
+// (internal/compute-agent/qemuvmm, docs/specs/qemu-boot.md).
 package main
 
 import (
@@ -20,9 +21,12 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/fcvmm"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/qemuvmm"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
@@ -43,6 +47,9 @@ func main() {
 	fcBin := flag.String("firecracker-bin", "firecracker", "firecracker binary to exec for driver_hint=FIRECRACKER VMs")
 	fcCacheDir := flag.String("fc-cache-dir", "/var/lib/kyuusha/fc-cache", "directory caching downloaded kernel/rootfs artifacts, shared across VMs")
 	fcRunDir := flag.String("fc-run-dir", "/var/lib/kyuusha/fc-run", "directory holding each running VM's writable rootfs copy, API socket, and console log")
+	qemuBin := flag.String("qemu-bin", "qemu-system-x86_64", "qemu-system binary to exec for driver_hint=QEMU VMs (see internal/compute-agent/qemuvmm)")
+	qemuCacheDir := flag.String("qemu-cache-dir", "/var/lib/kyuusha/qemu-cache", "directory caching downloaded kernel/rootfs artifacts for driver_hint=QEMU VMs")
+	qemuRunDir := flag.String("qemu-run-dir", "/var/lib/kyuusha/qemu-run", "directory holding each running driver_hint=QEMU VM's writable rootfs copy and console log")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented when dialing compute (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
@@ -152,10 +159,17 @@ func main() {
 		AllocatableVCPU:     int32(*vcpu),
 		AllocatableMemoryMB: *memoryMB,
 		SupportedDrivers:    strings.Split(*drivers, ","),
-		Firecracker: &fcvmm.Manager{
-			BinPath:  *fcBin,
-			CacheDir: *fcCacheDir,
-			RunDir:   *fcRunDir,
+		Drivers: map[string]vmm.VMM{
+			string(compute.VmmDriverFirecracker): &fcvmm.Manager{
+				BinPath:  *fcBin,
+				CacheDir: *fcCacheDir,
+				RunDir:   *fcRunDir,
+			},
+			string(compute.VmmDriverQEMU): &qemuvmm.Manager{
+				BinPath:  *qemuBin,
+				CacheDir: *qemuCacheDir,
+				RunDir:   *qemuRunDir,
+			},
 		},
 	}
 	slog.Info("compute-agent: starting", "hypervisor", *hypervisor)

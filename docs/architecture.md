@@ -483,10 +483,11 @@ message ImageStatus {
 ```
 
 **Create時のバリデーション**: VirtualMachineが参照する`Image.spec.format`は、`VirtualMachineSpec.driver_hint`が
-要求するVMMと対応していなければならない（`KERNEL_ROOTFS`↔`FIRECRACKER`、`QCOW2`↔`QEMU`）。
-不一致ならCreate時に拒否する。フォーマット変換（自動トランスコード）は行わない。イメージの
-作成者（運用者、あるいはKaaS側のイメージビルドパイプライン）が対象driverに合った形式で
-公開する前提とする。
+要求するVMMと対応していなければならない（`KERNEL_ROOTFS`は`FIRECRACKER`・`QEMU`どちらでも可、
+`QCOW2`は`QEMU`のみ——同じ`KERNEL_ROOTFS`資産を両ドライバがそれぞれの直接カーネルブート
+機構で起動できるため、[QEMU起動仕様](specs/qemu-boot.md)参照）。不一致ならCreate時に拒否する。
+フォーマット変換（自動トランスコード）は行わない。イメージの作成者（運用者、あるいはKaaS側の
+イメージビルドパイプライン）が対象driverに合った形式で公開する前提とする。
 
 **マルチテナント対応**: `visibility=PUBLIC`、または`PRIVATE`のまま`shared_with_tenant_ids`に
 列挙することで、所有テナント以外からもGet/List/Watch/VM Create時の参照ができる（Update相当の
@@ -1271,6 +1272,12 @@ RTに関係なく任意のAZ同士を無条件でメッシュ接続すること�
 
 ## Compute内部のVMM抽象化
 
+以下は当初の設計時点の構想（`InstanceSpec`/`Instance`等、実際には存在しない型を含む
+擬似コード）。実装は結局これより薄い形に落ち着いた——compute-agent側の実際のGoインタフェースは
+`internal/compute-agent/vmm.VMM`（`Boot`/`Stop`/`ConsoleLogPath`の3メソッドのみ）で、
+Volume添付やStart/Stop（一時停止）のような、まだ要求のない操作は持たせていない
+（[Firecracker起動仕様](specs/firecracker-boot.md)/[QEMU起動仕様](specs/qemu-boot.md)参照）。
+
 ```go
 type HypervisorDriver interface {
     CreateInstance(ctx context.Context, spec InstanceSpec) (*Instance, error)
@@ -1284,21 +1291,28 @@ type HypervisorDriver interface {
 ```
 
 - ライブマイグレーション不要という方針上、**Firecrackerを第一候補**とする（軽量・高速起動、KaaSハイパーバイザーの使い捨て運用に合う）
-- `libvirt`ドライバは将来的な選択肢として抽象化のみ残す（実装は後回し）
+- `libvirt`ドライバは将来的な選択肢として抽象化のみ残す（実装は後回し。実装したのは
+  libvirt経由ではなく`qemu-system-x86_64`を直接execする素朴な形——下記参照）
 
 ### `spec.driver_hint`によるドライバ切り替え
 
 FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが頻発するI/O負荷に対して
-QEMUより不利になる可能性がある（要ベンチマーク検証）。またNUMAトポロジ露出やhugepages対応も
+QEMUより不利になる可能性がある（要ベンチマーク検証、まだ未実施）。またNUMAトポロジ露出やhugepages対応も
 QEMUほど手厚くない。`recovery_policy: SELF_HEAL`を使うpet/control-planeハイパーバイザー（etcd/PKIサーバ等）で
 これが問題になりうるため、**全VirtualMachineにFirecrackerを強制せず、`VirtualMachineSpec.driver_hint`で
-使用する`HypervisorDriver`実装を選べるようにする**。
+使用するVMMドライバを選べるようにする**。
 
 - computeサービスは`driver_hint`（未指定なら`FIRECRACKER`）を見て、スケジューリング時に
   対応する`supported_drivers`を持つHypervisorへ配置する
-- 初期実装は変わらずFirecracker一本（軽量cattleハイパーバイザー用）。libvirt/QEMUドライバの実装と
-  I/O性能ベンチマークを経てから、pet/control-planeワークロードで`driver_hint: QEMU`を
-  明示指定するようガイドする
+- **実装済み**: `FIRECRACKER`（`internal/compute-agent/fcvmm`）・`QEMU`
+  （`internal/compute-agent/qemuvmm`、libvirt経由ではなくQEMUを直接exec）の両方が実際に
+  VMを起動する。どちらも同じ`KERNEL_ROOTFS`形式のImage（カーネル+生rootfs、
+  ブートローダーなし）を、それぞれの直接カーネルブート機構で起動する——QEMU側は
+  本来可能な「ブートローダー内蔵の自己完結ディスク」（`QCOW2`）を今回あえて選ばず、
+  同じImage資産を使い回せることを優先した（[QEMU起動仕様](specs/qemu-boot.md)
+  「起動方式」参照。この選択の対価としてWindows等の非Linuxゲストは現状サポート外）
+- I/O性能ベンチマークはまだ未実施。pet/control-planeワークロードで`driver_hint: QEMU`を
+  明示指定すべきかのガイドは、それを経てから確定させる
 - 当初は「machine_class(実装都合を隠す間接的なラベル)」経由でドライバを間接的に決める設計だったが、
   固定カタログ自体を廃止したため（「設計原則: 命名はOpenStackを踏襲しない」節）、
   `driver_hint`として素直にspecへ持たせる形に変更した
@@ -1494,6 +1508,10 @@ scrapeするなり`remote_write`で自分の長期保存基盤に転送するな
 ## Compute実装メモ
 
 ### Firecracker: jailerとtapデバイス
+
+（tap配線・cgroup制限は`driver_hint=QEMU`（`internal/compute-agent/qemuvmm`）とも共有する
+仕組み——[QEMU起動仕様](specs/qemu-boot.md)参照。jailer自体はFirecracker固有の概念で、
+QEMU側に相当する隔離機構はそもそも用意していない。）
 
 - 各VirtualMachineの Firecracker プロセスは**jailerでラップする**（chroot + cgroup + namespace分離）。
   同一ホストに複数テナントのVirtualMachineが同居する前提上、プロセス分離は必須と判断——

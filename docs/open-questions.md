@@ -32,6 +32,20 @@ zoneスコープ付きbootstrapトークン検証（`internal/bootstraptoken`）
 トークンを持っている」ことしか確認できない）、(2) bootstrapトークンの使い捨て化。
 どちらも必要になった時点で着手する、という判断で今は先送りしている。
 
+## QEMUドライバのブート可能ディスク対応（Windows等の非Linuxゲスト）
+
+2026-09に`driver_hint=QEMU`を実装した（`internal/compute-agent/qemuvmm`）。ただし起動方式は
+Firecrackerと同じ「kernel/rootfsを直接指定する」方式を選び、QEMUが本来可能な「ブートローダー
+内蔵の自己完結ディスク」（`QCOW2`）経由の起動は実装しなかった——同じ`KERNEL_ROOTFS`資産を
+両ドライバで使い回せることを優先したため（[QEMU起動仕様](specs/qemu-boot.md)「起動方式」参照）。
+
+この選択の対価として、Windows等の非Linuxゲストは現状サポート外（BIOS/UEFIファームウェアを
+経由しないため原理的に起動できない）。`Image.spec.format=QCOW2`自体はスキーマ・
+Create時バリデーションとも既に存在するが、どのドライバもまだ`spec.disk`を消費しない
+（Reconcilerが読んでいない）——本当に必要になった時点で、QCOW2を実際に起動する新しい
+パスを`qemuvmm`に足す（chroot/ファームウェア起動を含む、既存のkernel/rootfs直接ブートとは
+別の実装になる見込み）という判断で今は先送りしている。
+
 ## ロールベースの細かい認可（RPCメソッド・リソース種別単位）をやるべきか
 
 現状`role`クレームは実質`admin`かそれ以外かの2値でしか使われておらず、「このロールは

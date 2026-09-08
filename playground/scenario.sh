@@ -63,7 +63,7 @@ grep -q PermissionDenied /tmp/kyuusha-tenant-admin-check.log && echo "    denied
 echo "==> creating Tenant $tenant_name via identity (admin token)"
 tenant_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 \
   -name="$tenant_name" -display-name="Scenario Tenant" \
-  -max-vcpu=8 -max-memory-mb=16384 -max-volume-gb=50 -max-vms="$((count + 1))" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
+  -max-vcpu=8 -max-memory-mb=16384 -max-volume-gb=50 -max-vms="$((count + 2))" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
 echo "$tenant_line"
 tenant="$(echo "$tenant_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 if [ -z "$tenant" ]; then
@@ -172,10 +172,26 @@ go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant"
 echo "==> confirming vm-1 actually booted a real Firecracker guest (via kyuusha vm console; needs /dev/kvm -- see docs/specs/firecracker-boot.md)"
 vm1_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-1 ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
 if go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$vm1_id" 2>/dev/null \
-    | grep -q "kyuusha: firecracker guest booted OK"; then
+    | grep -q "kyuusha: guest booted OK"; then
   echo "    confirmed: real Firecracker guest booted"
 else
   echo "!! could not confirm a real guest boot for vm-1 (no /dev/kvm on this host? try: kyuusha vm console -tenant=$tenant -id=$vm1_id)" >&2
+fi
+
+echo "==> creating a VM with -driver-hint=qemu against the same Image (KERNEL_ROOTFS now accepts either driver -- see docs/specs/qemu-boot.md)"
+go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-qemu \
+  -image="$image" -vcpu=1 -memory-mb=128 -driver-hint=qemu -wait
+qemu_vm_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-qemu ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
+qemu_console=""
+for _ in $(seq 1 15); do
+  qemu_console="$(go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$qemu_vm_id" 2>/dev/null)"
+  echo "$qemu_console" | grep -q "kyuusha: guest booted OK" && break
+  sleep 1
+done
+if echo "$qemu_console" | grep -q "kyuusha: guest booted OK"; then
+  echo "    confirmed: real QEMU guest booted from the same kernel_rootfs Image as vm-1"
+else
+  echo "!! could not confirm a real guest boot for vm-qemu (no /dev/kvm on this host, or qemu-system-x86_64 missing? try: kyuusha vm console -tenant=$tenant -id=$qemu_vm_id)" >&2
 fi
 
 echo "==> creating Subnet for tenant $tenant (zone-a; real IPAM -- see docs/specs/network.md)"
@@ -321,7 +337,7 @@ go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" \
 echo "==> hypervisor capacity reservations (expect allocated=2/8vcpu on two of the three, 3/8vcpu on whichever got vm-netif)"
 KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha hypervisor list -addr=localhost:8080
 
-echo "==> confirming quota is enforced (max-vms=$count already reached)"
+echo "==> confirming quota is enforced (max-vms=$((count + 2)) already reached)"
 if go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name="vm-over-quota" \
   -image="$image" -vcpu=1 -memory-mb=512 2>/tmp/kyuusha-quota-check.log; then
   echo "!! expected ResourceExhausted but VM creation over quota succeeded" >&2

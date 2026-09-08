@@ -1,4 +1,4 @@
-package fcvmm
+package vmm
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ import (
 // which per spec.user_data's own doc comment top out around 64KB.
 const seedDiskSizeBytes = 1 << 20 // 1MiB
 
-// buildSeedDisk writes user-data/meta-data (and network-config, if any
+// BuildSeedDisk writes user-data/meta-data (and network-config, if any
 // interface has an allocated IP) into their own directory and packs them
 // into a cidata-labeled filesystem image via `mkfs.ext4 -d` (the same
 // populate-from-directory technique docker/Dockerfile's image-assets stage
@@ -26,13 +26,17 @@ const seedDiskSizeBytes = 1 << 20 // 1MiB
 // minimal guest. See docs/architecture.md "UserData注入: NoCloud seed
 // disk". Returns the path to the generated image.
 //
+// Shared by every VMM driver (fcvmm, qemuvmm): building the seed disk
+// itself has nothing driver-specific about it, only how each driver
+// attaches the resulting image file as a second block device.
+//
 // kyuusha never inspects or transforms userData: it's opaque cloud-init
 // user-data (or a #! script; NoCloud doesn't care) written through
 // verbatim, per spec.user_data's existing doc comment.
-func buildSeedDisk(vmDir, vmID, userData string, ifaces []NetIface) (string, error) {
+func BuildSeedDisk(vmDir, vmID, userData string, ifaces []NetIface) (string, error) {
 	seedDir := filepath.Join(vmDir, "seed")
 	if err := os.MkdirAll(seedDir, 0o755); err != nil {
-		return "", fmt.Errorf("fcvmm: create seed dir: %w", err)
+		return "", fmt.Errorf("vmm: create seed dir: %w", err)
 	}
 
 	// instance-id/local-hostname are the only fields cloud-init's NoCloud
@@ -41,14 +45,14 @@ func buildSeedDisk(vmDir, vmID, userData string, ifaces []NetIface) (string, err
 	// name) and is already a hostname-safe string ("vm-<hex>").
 	metaData := fmt.Sprintf("instance-id: %s\nlocal-hostname: %s\n", vmID, vmID)
 	if err := os.WriteFile(filepath.Join(seedDir, "meta-data"), []byte(metaData), 0o644); err != nil {
-		return "", fmt.Errorf("fcvmm: write meta-data: %w", err)
+		return "", fmt.Errorf("vmm: write meta-data: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(seedDir, "user-data"), []byte(userData), 0o644); err != nil {
-		return "", fmt.Errorf("fcvmm: write user-data: %w", err)
+		return "", fmt.Errorf("vmm: write user-data: %w", err)
 	}
 	if netConfig := buildNetworkConfig(ifaces); netConfig != "" {
 		if err := os.WriteFile(filepath.Join(seedDir, "network-config"), []byte(netConfig), 0o644); err != nil {
-			return "", fmt.Errorf("fcvmm: write network-config: %w", err)
+			return "", fmt.Errorf("vmm: write network-config: %w", err)
 		}
 	}
 
@@ -59,18 +63,18 @@ func buildSeedDisk(vmDir, vmID, userData string, ifaces []NetIface) (string, err
 	imgPath := filepath.Join(vmDir, "seed.img")
 	f, err := os.Create(imgPath)
 	if err != nil {
-		return "", fmt.Errorf("fcvmm: create seed image: %w", err)
+		return "", fmt.Errorf("vmm: create seed image: %w", err)
 	}
 	if err := f.Truncate(seedDiskSizeBytes); err != nil {
 		f.Close()
-		return "", fmt.Errorf("fcvmm: size seed image: %w", err)
+		return "", fmt.Errorf("vmm: size seed image: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("fcvmm: close seed image: %w", err)
+		return "", fmt.Errorf("vmm: close seed image: %w", err)
 	}
 
 	if out, err := exec.Command("mkfs.ext4", "-L", "cidata", "-d", seedDir, "-F", imgPath).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("fcvmm: mkfs.ext4: %w: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("vmm: mkfs.ext4: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return imgPath, nil
 }

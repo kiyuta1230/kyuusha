@@ -6,14 +6,17 @@
 // internal/compute-agent/cgroup) derived directly from spec.vcpu/
 // spec.memory_mb, best-effort: a host/container without usable cgroup v2
 // delegation just boots the VM unconstrained, same as before this existed.
-// Real network interfaces
+// Manager implements internal/compute-agent/vmm.VMM -- see qemuvmm for the
+// other implementation (driver_hint=QEMU). Real network interfaces
 // (tap devices, per-VLAN bridges -- see internal/compute-agent/netsetup)
 // are wired for VMs whose spec carries them; a VM with none boots exactly
 // as before (network-less, serial-only). A VM with spec.user_data set gets
-// a cloud-init NoCloud seed disk (see seed.go and docs/architecture.md
-// "UserData注入: NoCloud seed disk"). Only driver_hint=FIRECRACKER
-// (KERNEL_ROOTFS images) is handled here; QEMU remains an unimplemented
-// stub, same as before this package existed.
+// a cloud-init NoCloud seed disk (see internal/compute-agent/vmm's
+// BuildSeedDisk and docs/architecture.md "UserData注入: NoCloud seed
+// disk"). Handles driver_hint=FIRECRACKER only; see
+// internal/compute-agent/qemuvmm for driver_hint=QEMU, which boots from the
+// exact same kind of Image (KERNEL_ROOTFS: a kernel + a raw rootfs, no
+// bootloader) via a different VMM process.
 package fcvmm
 
 import (
@@ -35,7 +38,15 @@ import (
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/netsetup"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
 )
+
+// var _ vmm.VMM = (*Manager)(nil) is checked in manager_test.go-equivalent
+// fashion by every real caller (agent.go stores Manager values in a
+// map[string]vmm.VMM); asserted here too so a signature drift fails to
+// compile immediately, at the point of the drift, not wherever it happens
+// to be assigned.
+var _ vmm.VMM = (*Manager)(nil)
 
 const (
 	// init=/init: the playground's guest rootfs (see docker/fc-guest-init.sh)
@@ -55,40 +66,14 @@ const (
 	killGracePeriod = 3 * time.Second
 )
 
-// BootSpec is what Manager needs to boot one VM. Callers (agent.go) build
-// this from a compute.CreateCommand.
-type BootSpec struct {
-	VMID              string
-	VCPU              int32
-	MemoryMB          int64
-	KernelURL         string
-	RootfsURL         string
-	BootArgs          string
-	NetworkInterfaces []NetIface
-	// UserData is spec.user_data verbatim (see docs/architecture.md
-	// "UserData注入: NoCloud seed disk"); empty means don't inject
-	// anything, matching that field's own doc comment. Non-empty triggers
-	// building a cidata-labeled seed disk (see seed.go) carrying it plus
-	// meta-data and, if any NetworkInterfaces have an allocated IP,
-	// network-config.
-	UserData string
-}
-
-// NetIface is one already-resolved network attachment Boot should wire for
-// real (see internal/compute-agent/netsetup): agent.go builds these from
-// compute.CreateCommand.Interfaces, having already parsed CIDR down to
-// PrefixLen. IPAddress/CIDR are only ever missing (and so never turned into
-// a NetIface at all) when the NetworkInterface's own IP allocation hadn't
-// succeeded yet at Scheduled time -- see docs/specs/network.md.
-type NetIface struct {
-	IfaceID    string
-	MACAddress string
-	IPAddress  string
-	PrefixLen  int
-	GatewayIP  string
-	VLANID     int32
-	Primary    bool
-}
+// BootSpec and NetIface are aliases (not new types) for
+// internal/compute-agent/vmm's shapes: Manager implements vmm.VMM, and
+// agent.go builds one shared vmm.BootSpec value regardless of which
+// driver_hint it's dispatching to, so both must be the exact same type as
+// what qemuvmm.Manager.Boot accepts, not merely structurally similar
+// copies.
+type BootSpec = vmm.BootSpec
+type NetIface = vmm.NetIface
 
 // Manager tracks the Firecracker processes this compute-agent has booted.
 // One Manager per compute-agent process.
@@ -238,7 +223,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		IsReadOnly:   false,
 	}}
 	if spec.UserData != "" {
-		seedISO, err := buildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
+		seedISO, err := vmm.BuildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
 		if err != nil {
 			for _, t := range taps {
 				_ = netsetup.DeleteTap(t)

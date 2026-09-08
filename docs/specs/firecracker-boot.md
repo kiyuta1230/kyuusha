@@ -11,7 +11,9 @@ host側でも強制される（`internal/compute-agent/cgroup`、下記「cgroup
 chroot+namespace分離+特権降格は意図的に見送っており、Firecrackerプロセスは
 compute-agentコンテナの権限のまま動く（**本番の隔離設計はdocs/architecture.mdの
 「Firecracker: jailerとtapデバイス」節を参照。ここに書くのはあくまで現状の実装**）。
-`driver_hint=QEMU`は引き続き未実装（stub-success）のまま。
+`driver_hint=QEMU`は別ドライバとして実装済み——[QEMU起動仕様](qemu-boot.md)参照
+（同じ`KERNEL_ROOTFS`形式のImageを、`internal/compute-agent/qemuvmm`が別のVMMプロセスで
+起動する）。
 
 ## computeからcompute-agentへ渡る情報
 
@@ -27,7 +29,8 @@ Imageを解決し、起動に必要な情報をすべて`CreateCommand`（NATS�
 | `interfaces` | `network_interfaces`から作られたNetworkInterface+そのSubnetの情報（[network.md](network.md)参照）。空配列ならネットワークなしで起動する |
 | `user_data` | `VirtualMachineSpec.user_data`そのまま。空なら何も注入しない（下記「UserData注入」参照） |
 
-`kernel_url`/`rootfs_url`が空、または`driver_hint`が`FIRECRACKER`以外の場合、compute-agentは
+`kernel_url`/`rootfs_url`が空、または`driver_hint`に対応する登録済みドライバがない場合
+（`internal/compute-agent/agent.go`の`Drivers`マップに無い値）、compute-agentは
 即座に成功を返す旧来のstub動作にフォールバックする。
 
 ## compute-agent側の起動処理（`internal/compute-agent/fcvmm`）
@@ -53,8 +56,8 @@ Imageを解決し、起動に必要な情報をすべて`CreateCommand`（NATS�
 
 ## UserData注入（cloud-init NoCloud seed disk）
 
-`spec.user_data`が空でないVMには、`internal/compute-agent/fcvmm/seed.go`が
-cloud-initのNoCloud方式のseed diskを作り、root diskと並ぶ2番目の（読み取り専用の）
+`spec.user_data`が空でないVMには、`internal/compute-agent/vmm/seed.go`（fcvmm/qemuvmm
+共有）がcloud-initのNoCloud方式のseed diskを作り、root diskと並ぶ2番目の（読み取り専用の）
 virtio-blockドライブとしてFirecrackerへ渡す（ゲストからは通常`/dev/vdb`に見える）。
 `docs/architecture.md`「UserData注入: NoCloud seed disk」参照。
 
@@ -105,7 +108,7 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
   にも30分の安全上限がある（[NATSメッセージ仕様](nats-messaging.md)参照）
 
 対象VMが一度もスケジュールされていない（`status.hypervisor`が空）場合や、
-（QEMUドライバ等）実プロセスを一度も起動していない場合はエラーになる。
+（stub-succeededなVM等）実プロセスを一度も起動していない場合はエラーになる。
 
 ## `-fc-*`フラグ（`cmd/compute-agent`）
 
@@ -117,7 +120,8 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
 
 ## cgroupリソース制限（`internal/compute-agent/cgroup`）
 
-Firecrackerプロセスの起動直後（`cmd.Start()`成功後）、そのPIDを`/sys/fs/cgroup/kyuusha/<VM ID>`
+fcvmm/qemuvmm共通の仕組み（下記は両方に当てはまる。qemuvmm側の適用は
+[QEMU起動仕様](qemu-boot.md)参照）。Firecrackerプロセスの起動直後（`cmd.Start()`成功後）、そのPIDを`/sys/fs/cgroup/kyuusha/<VM ID>`
 というcgroup v2グループへ移し、`cpu.max`を`<spec.vcpu>*100000 100000`（=vcpu個ぶんのフル
 コアを上限としたCPU quota）、`memory.max`を`spec.memory_mb`をバイトに換算した値に設定する。
 Firecracker/KVMに渡した仮想トポロジ（`machine-config`のvcpu_count/mem_size_mib）と全く同じ

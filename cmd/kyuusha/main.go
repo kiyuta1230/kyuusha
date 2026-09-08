@@ -147,6 +147,7 @@ func vmCreate(args []string) {
 	vcpu := fs.Int("vcpu", 1, "vCPU count")
 	memoryMB := fs.Int64("memory-mb", 1024, "memory in MB")
 	recovery := fs.String("recovery-policy", "none", "none|self-heal")
+	driverHint := fs.String("driver-hint", "", "VMM driver: firecracker|qemu (empty: server default, FIRECRACKER). Must match the Image's format -- KERNEL_ROOTFS accepts either, QCOW2 requires qemu; see docs/specs/image.md")
 	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
 	userDataFile := fs.String("user-data-file", "", "path to a cloud-init user-data file (NoCloud seed disk; see docs/architecture.md \"UserData注入\"); empty means don't inject anything")
 	wait := fs.Bool("wait", false, "block until the VM reaches Running or Error")
@@ -184,6 +185,7 @@ func vmCreate(args []string) {
 			Vcpu:              int32(*vcpu),
 			MemoryMb:          *memoryMB,
 			RecoveryPolicy:    parseRecoveryPolicy(*recovery),
+			DriverHint:        parseVmmDriver(*driverHint),
 			NetworkInterfaces: netifs,
 			UserData:          userData,
 		},
@@ -472,5 +474,23 @@ func parseRecoveryPolicy(s string) computev1.RecoveryPolicy {
 		return computev1.RecoveryPolicy_RECOVERY_POLICY_SELF_HEAL
 	default:
 		return computev1.RecoveryPolicy_RECOVERY_POLICY_NONE
+	}
+}
+
+func parseVmmDriver(s string) computev1.VmmDriver {
+	switch s {
+	case "":
+		return computev1.VmmDriver_VMM_DRIVER_UNSPECIFIED
+	case "firecracker":
+		return computev1.VmmDriver_VMM_DRIVER_FIRECRACKER
+	case "qemu":
+		return computev1.VmmDriver_VMM_DRIVER_QEMU
+	default:
+		// Fatal, not a silent fallback: unlike -recovery-policy, silently
+		// defaulting an unrecognized value here (e.g. a typo'd "QEMU") would
+		// pick a different, working driver rather than obviously failing --
+		// a KERNEL_ROOTFS Image accepts either, so nothing would complain.
+		fatal("-driver-hint: unrecognized %q, want firecracker|qemu", s)
+		return computev1.VmmDriver_VMM_DRIVER_UNSPECIFIED
 	}
 }

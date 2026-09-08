@@ -38,11 +38,11 @@ func (a *Agent) handleConsoleRequest(msg *nats.Msg) {
 }
 
 func (a *Agent) serveConsole(req compute.ConsoleRequest) {
-	if a.Firecracker == nil {
-		a.publishConsoleDone(req.ReplySubject, "this compute-agent has no Firecracker manager configured")
+	path, ok := a.consoleLogPath(req.VMID)
+	if !ok {
+		a.publishConsoleDone(req.ReplySubject, "no console log for this vm_id")
 		return
 	}
-	path := a.Firecracker.ConsoleLogPath(req.VMID)
 	data, offset, err := readTail(path, req.TailBytes)
 	if err != nil {
 		a.publishConsoleDone(req.ReplySubject, "no console log for this vm_id: "+err.Error())
@@ -69,6 +69,23 @@ func (a *Agent) serveConsole(req compute.ConsoleRequest) {
 		return
 	}
 	a.followConsole(req, path, offset)
+}
+
+// consoleLogPath finds which of a.Drivers actually booted vmID, by
+// checking which driver's ConsoleLogPath resolves to a file that actually
+// exists on disk. handleCreate doesn't separately record which driver won
+// a given VM -- a VM's Image format determines which drivers can even
+// consume it (see internal/compute/image.go's validateImage), so at most
+// one driver would ever have booted it for real, making "the first
+// existing file" unambiguous in practice.
+func (a *Agent) consoleLogPath(vmID string) (string, bool) {
+	for _, d := range a.Drivers {
+		path := d.ConsoleLogPath(vmID)
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 func (a *Agent) followConsole(req compute.ConsoleRequest, path string, offset int64) {
