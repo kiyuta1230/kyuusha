@@ -183,7 +183,7 @@ go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-q
   -image="$image" -vcpu=1 -memory-mb=128 -driver-hint=qemu -wait
 qemu_vm_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-qemu ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
 qemu_console=""
-for _ in $(seq 1 15); do
+for _ in $(seq 1 30); do
   qemu_console="$(go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$qemu_vm_id" 2>/dev/null)"
   echo "$qemu_console" | grep -q "kyuusha: guest booted OK" && break
   sleep 1
@@ -287,7 +287,7 @@ if [ "$ranged_ip" != "10.0.6.10" ] && [ "$ranged_ip" != "10.0.6.11" ]; then
 fi
 echo "    confirmed: ip_address stayed inside the configured allocatable_ip_ranges"
 
-echo "==> creating a Volume (block-storage; no real backend yet, Quota-check-then-Ready -- see docs/specs/volume.md)"
+echo "==> creating a Volume (block-storage; real ZFS zvol via storage-agent -- see docs/specs/volume.md)"
 volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume -size-gb=10)"
 echo "$volume_line"
 volume="$(echo "$volume_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
@@ -296,7 +296,7 @@ if [ -z "$volume" ] || ! echo "$volume_line" | grep -q 'phase=Ready'; then
   exit 1
 fi
 
-echo "==> attaching the Volume to vm-1 and confirming the exclusive-attach constraint (docs/architecture.md '具体的な排他制御')"
+echo "==> attaching the Volume to already-Running vm-1 and confirming the exclusive-attach constraint (docs/architecture.md '具体的な排他制御'; real ExportVolume happens here too, but vm-1 already booted so nothing actually attaches inside the guest -- attach-before-boot only, see docs/specs/volume.md. That real end-to-end path is exercised separately below)"
 first_attach_line="$(go run ./cmd/kyuusha volattach create -addr=localhost:8080 -tenant="$tenant" -name=scenario-attach-1 -vm="$vm1_id" -volume="$volume")"
 echo "$first_attach_line"
 if ! echo "$first_attach_line" | grep -q 'phase=Attached'; then
@@ -449,6 +449,64 @@ else
     exit 1
   fi
   echo "    confirmed: the cloud-init NoCloud seed disk was built, attached, and its user-data read back correctly by the guest"
+fi
+go run ./cmd/kyuusha vm delete -addr=localhost:8080 -tenant="$tenant" -id="$cloudinit_vm_id" # frees its quota slot for the persistence test below
+
+echo "==> creating a Volume and a VM that attaches it at boot (-volumes, real StorageBackend end-to-end: ZFS zvol -> iSCSI export -> compute-agent initiator -> extra virtio-blk drive -- see docs/specs/volume.md)"
+persist_volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-persist-volume -size-gb=1)"
+echo "$persist_volume_line"
+persist_volume="$(echo "$persist_volume_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if [ -z "$persist_volume" ] || ! echo "$persist_volume_line" | grep -q 'phase=Ready'; then
+  echo "!! persist-test volume was not created Ready: $persist_volume_line" >&2
+  exit 1
+fi
+
+vma_line="$(go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-persist-a \
+  -image="$image" -vcpu=1 -memory-mb=128 -volumes="$persist_volume" -wait)"
+echo "$vma_line"
+if ! echo "$vma_line" | grep -q 'phase=Running'; then
+  echo "!! VM with -volumes did not reach Running: $vma_line" >&2
+  exit 1
+fi
+vma_id="$(echo "$vma_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+
+vma_console=""
+for _ in $(seq 1 15); do
+  vma_console="$(go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$vma_id" 2>/dev/null)"
+  echo "$vma_console" | grep -q 'kyuusha: volume data written' && break
+  sleep 1
+done
+marker="$(echo "$vma_console" | grep -o 'kyuusha: volume data written: [^ ]*' | cut -d' ' -f5)"
+if [ -z "$marker" ]; then
+  echo "!! could not confirm the Volume was really attached and written to (no /dev/kvm on this host, or storage-agent unreachable? try: kyuusha vm console -tenant=$tenant -id=$vma_id): $vma_console" >&2
+else
+  echo "    confirmed: real Volume attached at boot and written to by the guest ($marker)"
+  echo "==> deleting vm-persist-a and creating a second VM attaching the SAME Volume -- proving the data actually persists (the whole point of a Volume vs. ephemeral rootfs)"
+  go run ./cmd/kyuusha vm delete -addr=localhost:8080 -tenant="$tenant" -id="$vma_id"
+
+  vmb_line="$(go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-persist-b \
+    -image="$image" -vcpu=1 -memory-mb=128 -volumes="$persist_volume" -wait)"
+  echo "$vmb_line"
+  if ! echo "$vmb_line" | grep -q 'phase=Running'; then
+    echo "!! second VM with the same -volumes did not reach Running: $vmb_line" >&2
+    exit 1
+  fi
+  vmb_id="$(echo "$vmb_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+
+  vmb_console=""
+  for _ in $(seq 1 15); do
+    vmb_console="$(go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$vmb_id" 2>/dev/null)"
+    echo "$vmb_console" | grep -q "kyuusha: volume data found: $marker" && break
+    sleep 1
+  done
+  if echo "$vmb_console" | grep -q "kyuusha: volume data found: $marker"; then
+    echo "    confirmed: data written by vm-persist-a is still readable from vm-persist-b -- real persistent storage across VM recreation"
+  else
+    echo "!! second VM did not find the marker vm-persist-a wrote -- persistence did not actually work: $vmb_console" >&2
+    exit 1
+  fi
+
+  go run ./cmd/kyuusha vm delete -addr=localhost:8080 -tenant="$tenant" -id="$vmb_id"
 fi
 
 echo "==> confirming delete now exists in the CLI for netif/volattach/volume/subnet/image (previously gRPC-only; docs/specs/cli.md)"

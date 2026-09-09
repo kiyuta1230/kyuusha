@@ -79,6 +79,17 @@ func (s *Store[T, PT]) Create(ctx context.Context, tenantID, name string, obj T)
 	return s.create(NewID(s.idPrefix), tenantID, tenantID, name, obj)
 }
 
+// CreateWithID is Create for a caller-chosen id instead of one minted here,
+// preserving Create's idempotent-by-(tenantID, name) semantics (unlike Put,
+// which has none). For a resource whose creation must first succeed
+// against some external system keyed by that same id (e.g.
+// block-storage's Volume, keyed into storage-agent's ZFS pool) -- so id
+// has to be known before the external call, not handed back only after
+// the local record already exists.
+func (s *Store[T, PT]) CreateWithID(ctx context.Context, id, tenantID, name string, obj T) (T, error) {
+	return s.create(id, tenantID, tenantID, name, obj)
+}
+
 // CreateSelfReferential is Create for resources whose own tenant_id equals
 // their id (e.g. identity.Tenant: it isn't owned by some other, already-
 // existing tenant -- it IS the tenant). The id is minted up front and used

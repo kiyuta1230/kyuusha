@@ -41,6 +41,38 @@ func newThingStore() *Store[thing, *thing] {
 	})
 }
 
+// TestStore_CreateWithIDUsesGivenIDAndStaysIdempotentByName exercises
+// block-storage's motivating use case: a caller needs the id before the
+// local record exists (to call an external system keyed by it), but
+// idempotent-by-(tenantID, name) re-Create must still work exactly like
+// Create's.
+func TestStore_CreateWithIDUsesGivenIDAndStaysIdempotentByName(t *testing.T) {
+	ctx := context.Background()
+	s := newThingStore()
+
+	out, err := s.CreateWithID(ctx, "thing-fixed-id", "tenant-a", "x", thing{Name: "unchanged"})
+	if err != nil {
+		t.Fatalf("CreateWithID: %v", err)
+	}
+	if out.Meta.ID != "thing-fixed-id" {
+		t.Fatalf("Meta.ID = %q, want the given id", out.Meta.ID)
+	}
+	if out.Meta.TenantID != "tenant-a" {
+		t.Fatalf("Meta.TenantID = %q, want tenant-a", out.Meta.TenantID)
+	}
+
+	// A second CreateWithID for the same (tenantID, name) -- even with a
+	// different id, which a caller minting a fresh id per attempt would
+	// naturally do -- must return the existing object, not mint another.
+	again, err := s.CreateWithID(ctx, "thing-different-id", "tenant-a", "x", thing{Name: "unchanged"})
+	if err != nil {
+		t.Fatalf("idempotent CreateWithID: %v", err)
+	}
+	if again.Meta.ID != "thing-fixed-id" {
+		t.Fatalf("idempotent re-Create minted a new ID: %s vs thing-fixed-id", again.Meta.ID)
+	}
+}
+
 func TestStore_DeleteWithoutFinalizersRemovesImmediately(t *testing.T) {
 	ctx := context.Background()
 	s := newThingStore()

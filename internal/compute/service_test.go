@@ -13,7 +13,7 @@ import (
 
 func newTestService(t *testing.T, ctx context.Context) *Service {
 	t.Helper()
-	svc, err := NewService(ctx, &FakeTenantClient{}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{})
+	svc, err := NewService(ctx, &FakeTenantClient{}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestService_DeleteWithFinalizerBlocksUntilCleared(t *testing.T) {
 	// call time" assertion below meaningful.
 	svc, err := NewService(ctx, &FakeTenantClient{Quota: &identityv1.QuotaSpec{
 		MaxVcpu: 8, MaxMemoryMb: 8192, MaxVms: 1, MaxVcpuPerVm: 8, MaxMemoryMbPerVm: 8192,
-	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{})
+	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

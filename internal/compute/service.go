@@ -9,6 +9,7 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 
+	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
 	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
@@ -46,20 +47,22 @@ const (
 // target scale implies. Sharding it per tenant is a reasonable follow-up if
 // that ever matters.
 type Service struct {
-	store          *resource.Store[VirtualMachine, *VirtualMachine]
-	hypervisors    *resource.Store[Hypervisor, *Hypervisor]
-	scheduler      SchedulingStrategy
-	identityClient identityv1.TenantServiceClient
-	imageClient    imagev1.ImageServiceClient
-	subnetClient   networkv1.SubnetServiceClient
-	netifClient    networkv1.NetworkInterfaceServiceClient
-	quota          *quotaChecker
+	store                  *resource.Store[VirtualMachine, *VirtualMachine]
+	hypervisors            *resource.Store[Hypervisor, *Hypervisor]
+	scheduler              SchedulingStrategy
+	identityClient         identityv1.TenantServiceClient
+	imageClient            imagev1.ImageServiceClient
+	subnetClient           networkv1.SubnetServiceClient
+	netifClient            networkv1.NetworkInterfaceServiceClient
+	volumeClient           blockstoragev1.VolumeServiceClient
+	volumeAttachmentClient blockstoragev1.VolumeAttachmentServiceClient
+	quota                  *quotaChecker
 
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
 }
 
-func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient, imageClient imagev1.ImageServiceClient, subnetClient networkv1.SubnetServiceClient, netifClient networkv1.NetworkInterfaceServiceClient) (*Service, error) {
+func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient, imageClient imagev1.ImageServiceClient, subnetClient networkv1.SubnetServiceClient, netifClient networkv1.NetworkInterfaceServiceClient, volumeClient blockstoragev1.VolumeServiceClient, volumeAttachmentClient blockstoragev1.VolumeAttachmentServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
@@ -75,13 +78,15 @@ func NewService(ctx context.Context, identityClient identityv1.TenantServiceClie
 			Conflict:      ErrHypervisorConflict,
 			HistoryPruned: ErrHypervisorHistoryPruned,
 		}),
-		scheduler:      MostAvailableFirst{},
-		identityClient: identityClient,
-		imageClient:    imageClient,
-		subnetClient:   subnetClient,
-		netifClient:    netifClient,
-		quota:          quota,
-		usage:          make(map[string]tenantUsage),
+		scheduler:              MostAvailableFirst{},
+		identityClient:         identityClient,
+		imageClient:            imageClient,
+		subnetClient:           subnetClient,
+		netifClient:            netifClient,
+		volumeClient:           volumeClient,
+		volumeAttachmentClient: volumeAttachmentClient,
+		quota:                  quota,
+		usage:                  make(map[string]tenantUsage),
 	}, nil
 }
 
@@ -117,6 +122,9 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 		return nil, err
 	}
 	if _, err := validateNetworkInterfaces(ctx, s.subnetClient, tenantID, spec.NetworkInterfaces); err != nil {
+		return nil, err
+	}
+	if err := validateVolumes(ctx, s.volumeClient, tenantID, spec.Volumes); err != nil {
 		return nil, err
 	}
 

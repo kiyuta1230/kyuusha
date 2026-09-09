@@ -149,6 +149,7 @@ func vmCreate(args []string) {
 	recovery := fs.String("recovery-policy", "none", "none|self-heal")
 	driverHint := fs.String("driver-hint", "", "VMM driver: firecracker|qemu (empty: server default, FIRECRACKER). Must match the Image's format -- KERNEL_ROOTFS accepts either, QCOW2 requires qemu; see docs/specs/image.md")
 	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
+	volumes := fs.String("volumes", "", "comma-separated Volume IDs to attach at boot (see docs/specs/volume.md; attach-before-boot only -- a Volume added after the VM is already Running is not attached)")
 	userDataFile := fs.String("user-data-file", "", "path to a cloud-init user-data file (NoCloud seed disk; see docs/architecture.md \"UserData注入\"); empty means don't inject anything")
 	wait := fs.Bool("wait", false, "block until the VM reaches Running or Error")
 	fs.Parse(args)
@@ -163,6 +164,14 @@ func vmCreate(args []string) {
 			continue
 		}
 		netifs = append(netifs, &computev1.NetworkAttachment{SubnetId: subnetID, Primary: i == 0})
+	}
+
+	var volRequests []*computev1.VolumeRequest
+	for _, volumeID := range strings.Split(*volumes, ",") {
+		if volumeID == "" {
+			continue
+		}
+		volRequests = append(volRequests, &computev1.VolumeRequest{VolumeId: volumeID})
 	}
 
 	var userData string
@@ -187,6 +196,7 @@ func vmCreate(args []string) {
 			RecoveryPolicy:    parseRecoveryPolicy(*recovery),
 			DriverHint:        parseVmmDriver(*driverHint),
 			NetworkInterfaces: netifs,
+			Volumes:           volRequests,
 			UserData:          userData,
 		},
 	})

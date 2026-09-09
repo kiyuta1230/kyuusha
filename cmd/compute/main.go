@@ -25,6 +25,7 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
+	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
@@ -37,6 +38,7 @@ func main() {
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
 	imageAddr := flag.String("image-addr", "localhost:8083", "image service address, for Create-time Image validation")
 	networkAddr := flag.String("network-addr", "localhost:8084", "network service address, for Create-time NetworkInterface validation/creation")
+	blockStorageAddr := flag.String("block-storage-addr", "localhost:8085", "block-storage service address, for Create-time Volume validation/attachment")
 	metricsAddr := flag.String("metrics-addr", ":9092", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers and used when dialing other services (see internal/mtls)")
@@ -128,11 +130,23 @@ func main() {
 	}
 	defer networkConn.Close()
 
+	blockStorageConn, err := grpc.NewClient(*blockStorageAddr,
+		grpc.WithTransportCredentials(clientCreds),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial block-storage", "addr", *blockStorageAddr, "err", err)
+		os.Exit(1)
+	}
+	defer blockStorageConn.Close()
+
 	svc, err := compute.NewService(ctx,
 		identityv1.NewTenantServiceClient(identityConn),
 		imagev1.NewImageServiceClient(imageConn),
 		networkv1.NewSubnetServiceClient(networkConn),
 		networkv1.NewNetworkInterfaceServiceClient(networkConn),
+		blockstoragev1.NewVolumeServiceClient(blockStorageConn),
+		blockstoragev1.NewVolumeAttachmentServiceClient(blockStorageConn),
 	)
 	if err != nil {
 		slog.Error("new compute service", "err", err)

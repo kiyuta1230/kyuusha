@@ -1,3 +1,8 @@
 .git
 docs
 hack/devkeys/jwt-dev.key
+# storage-agent's ZFS pool backing file: a large (sparse but still
+# multi-GB-transferring) file that must never be shipped as build context --
+# found live: it turned a ~1min docker build into a 10+min one. See
+# .gitignore and playground/docker-compose.yml.
+playground/storage-agent-data

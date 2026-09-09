@@ -26,12 +26,17 @@ const (
 type VolumeAttachmentStatus struct {
 	Phase      VolumeAttachmentPhase
 	Conditions []resource.Condition
-	// DevicePath and Hypervisor stay empty until a real StorageBackend and
-	// compute-agent-side wiring exist (see docs/specs/volume.md) -- same
-	// "declared field, not yet populated" stage NetworkInterface.status.
-	// hypervisor was in before tap wiring.
+	// DevicePath and Hypervisor stay empty: there is no report-back path
+	// from compute-agent (which does know the real local device path and
+	// which hypervisor it attached on) to block-storage yet -- known gap,
+	// see docs/specs/volume.md "既知の未実装事項".
 	DevicePath string
 	Hypervisor string
+	// TargetIQN/TargetPortal are set once tryAttach's real StorageBackend
+	// (storage-agent) call succeeds -- see docs/specs/volume.md. Empty
+	// while Pending, or if storage-agent is unreachable (Error phase).
+	TargetIQN    string
+	TargetPortal string
 }
 
 type VolumeAttachment struct {

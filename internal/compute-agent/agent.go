@@ -194,6 +194,7 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 			BootArgs:          cmd.BootArgs,
 			NetworkInterfaces: buildNetIfaces(cmd.VMID, cmd.Interfaces),
 			UserData:          cmd.UserData,
+			Volumes:           buildVolumeInfos(cmd.Volumes),
 		}); err != nil {
 			span.RecordError(err)
 			slog.Error("compute-agent: boot failed", "vm_id", cmd.VMID, "err", err)
@@ -265,6 +266,23 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.Net
 			VLANID:     ni.VLANID,
 			Primary:    ni.Primary,
 		})
+	}
+	return out
+}
+
+// buildVolumeInfos resolves cmd.Volumes (compute.VolumeAttachInfo, see
+// nats.go) into what a VMM driver's Boot needs to actually attach each
+// already-exported Volume: a straight field-for-field copy, since
+// block-storage already resolved everything (target IQN/portal) before
+// this ever reached compute-agent -- see internal/compute-agent/iscsi.
+func buildVolumeInfos(infos []compute.VolumeAttachInfo) []vmm.VolumeAttachInfo {
+	out := make([]vmm.VolumeAttachInfo, len(infos))
+	for i, v := range infos {
+		out[i] = vmm.VolumeAttachInfo{
+			AttachmentID: v.AttachmentID,
+			TargetIQN:    v.TargetIQN,
+			TargetPortal: v.TargetPortal,
+		}
 	}
 	return out
 }

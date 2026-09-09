@@ -50,11 +50,12 @@ const (
 // DriverHint/KernelURL/RootfsURL/BootArgs are the VM's already-validated
 // Image resolved to concrete boot inputs at publish time (see
 // reconciler.go's PhaseScheduled branch): compute-agent has no image
-// service client of its own, so everything it needs to actually boot a
-// driver_hint=FIRECRACKER VM travels in this one message. KernelURL/
-// RootfsURL are empty for QCOW2 images (QEMU driver remains unimplemented,
-// see docs/specs/firecracker-boot.md) -- compute-agent stub-succeeds that
-// case as before.
+// service client of its own, so everything it needs to actually boot the
+// VM (via whichever of internal/compute-agent/fcvmm or .../qemuvmm
+// driver_hint selects) travels in this one message. KernelURL/RootfsURL
+// are empty for a QCOW2 Image (no driver consumes that format yet -- see
+// docs/specs/qemu-boot.md), in which case compute-agent stub-succeeds as
+// before.
 type CreateCommand struct {
 	VMID       string `json:"vm_id"`
 	TenantID   string `json:"tenant_id"`
@@ -76,8 +77,24 @@ type CreateCommand struct {
 	// docs/architecture.md "UserData注入: NoCloud seed disk"); empty means
 	// don't inject anything. compute-agent builds a cloud-init NoCloud
 	// seed disk from this plus Interfaces (for network-config) --
-	// see internal/compute-agent/fcvmm/seed.go.
+	// see internal/compute-agent/vmm/seed.go.
 	UserData string `json:"user_data,omitempty"`
+	// Volumes is populated by reconciler.go's PhaseScheduled branch from
+	// the VolumeAttachments it just created (see
+	// internal/compute/volume.go's createVolumeAttachments) -- same
+	// reasoning as Interfaces: compute-agent has no block-storage service
+	// client of its own, so the already-exported iSCSI connection info
+	// each attachment needs (internal/compute-agent/iscsi) travels here.
+	Volumes []VolumeAttachInfo `json:"volumes,omitempty"`
+}
+
+// VolumeAttachInfo is one VM Volume attachment, already resolved to a real
+// iSCSI export by block-storage's StorageBackend (storage-agent) --
+// TargetIQN/TargetPortal come straight from VolumeAttachmentStatus.
+type VolumeAttachInfo struct {
+	AttachmentID string `json:"attachment_id"`
+	TargetIQN    string `json:"target_iqn"`
+	TargetPortal string `json:"target_portal"`
 }
 
 // NetworkInterfaceInfo is one VM network attachment, already resolved to

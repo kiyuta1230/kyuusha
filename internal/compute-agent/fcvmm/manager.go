@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/iscsi"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/netsetup"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
 )
@@ -100,8 +101,9 @@ type Manager struct {
 // goroutine Boot starts) can tear all of it down: the process itself, and
 // every tap device Wire created for it.
 type runningVM struct {
-	cmd  *exec.Cmd
-	taps []string
+	cmd     *exec.Cmd
+	taps    []string
+	volumes []vmm.VolumeAttachInfo
 }
 
 func (m *Manager) binPath() string {
@@ -170,11 +172,21 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 
 	// Wire every real network interface before Firecracker starts (it opens
 	// each host_dev_name by name at boot, so the tap must already exist).
-	// On a failure partway through, unwire whatever this call already
-	// created rather than leaking tap devices for a VM that never boots.
+	// On a failure partway through, cleanup() unwinds whatever's already
+	// been wired/attached rather than leaking tap devices or iSCSI sessions
+	// for a VM that never boots.
 	var fcNetIfaces []fcNetworkInterface
 	var netArgs []string
 	var taps []string
+	var attachedVolumes []vmm.VolumeAttachInfo
+	cleanup := func() {
+		for _, t := range taps {
+			_ = netsetup.DeleteTap(t)
+		}
+		for _, v := range attachedVolumes {
+			_ = iscsi.Detach(v.TargetIQN, v.TargetPortal)
+		}
+	}
 	for i, ni := range spec.NetworkInterfaces {
 		wired, err := netsetup.Wire(netsetup.Interface{
 			IfaceID:    ni.IfaceID,
@@ -184,9 +196,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 			VLANID:     ni.VLANID,
 		})
 		if err != nil {
-			for _, t := range taps {
-				_ = netsetup.DeleteTap(t)
-			}
+			cleanup()
 			return fmt.Errorf("fcvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
 		}
 		taps = append(taps, wired.TapName)
@@ -225,9 +235,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	if spec.UserData != "" {
 		seedISO, err := vmm.BuildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
 		if err != nil {
-			for _, t := range taps {
-				_ = netsetup.DeleteTap(t)
-			}
+			cleanup()
 			return fmt.Errorf("fcvmm: build seed disk: %w", err)
 		}
 		// Read-only, non-root: the guest sees this as a second
@@ -241,6 +249,26 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		})
 	}
 
+	// Attach every already-exported Volume before Firecracker starts (same
+	// reasoning as taps: the device must exist before a drive can
+	// reference it) -- see internal/compute-agent/iscsi and
+	// docs/specs/volume.md. Each becomes its own read-write virtio-block
+	// drive alongside rootfs/seed.
+	for i, v := range spec.Volumes {
+		devPath, err := iscsi.Attach(ctx, v.TargetIQN, v.TargetPortal)
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("fcvmm: attach volume %d (%s): %w", i, v.AttachmentID, err)
+		}
+		attachedVolumes = append(attachedVolumes, v)
+		drives = append(drives, fcDrive{
+			DriveID:      fmt.Sprintf("vol%d", i),
+			PathOnHost:   devPath,
+			IsRootDevice: false,
+			IsReadOnly:   false,
+		})
+	}
+
 	cfg := fcConfig{
 		BootSource:        fcBootSource{KernelImagePath: kernelPath, BootArgs: bootArgs},
 		Drives:            drives,
@@ -250,23 +278,17 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	configPath := filepath.Join(vmDir, "config.json")
 	configBytes, err := json.Marshal(cfg)
 	if err != nil {
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		return fmt.Errorf("fcvmm: marshal config: %w", err)
 	}
 	if err := os.WriteFile(configPath, configBytes, 0o644); err != nil {
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		return fmt.Errorf("fcvmm: write config: %w", err)
 	}
 
 	consoleLog, err := os.Create(filepath.Join(vmDir, "console.log"))
 	if err != nil {
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		return fmt.Errorf("fcvmm: create console log: %w", err)
 	}
 	defer consoleLog.Close()
@@ -278,9 +300,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	cmd.Stdout = consoleLog
 	cmd.Stderr = consoleLog
 	if err := cmd.Start(); err != nil {
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		return fmt.Errorf("fcvmm: start firecracker: %w", err)
 	}
 
@@ -296,9 +316,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 
 	select {
 	case err := <-exitCh:
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("fcvmm: removing cgroup after immediate exit", "vm_id", spec.VMID, "err", rmErr)
 		}
@@ -310,7 +328,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
-	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps}
+	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps, volumes: attachedVolumes}
 	m.mu.Unlock()
 
 	go func() {
@@ -318,9 +336,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		m.mu.Lock()
 		delete(m.running, spec.VMID)
 		m.mu.Unlock()
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("fcvmm: removing cgroup", "vm_id", spec.VMID, "err", rmErr)
 		}

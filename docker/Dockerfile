@@ -22,6 +22,7 @@ RUN CGO_ENABLED=0 go build -o /out/identity ./cmd/identity
 RUN CGO_ENABLED=0 go build -o /out/image ./cmd/image
 RUN CGO_ENABLED=0 go build -o /out/network ./cmd/network
 RUN CGO_ENABLED=0 go build -o /out/block-storage ./cmd/block-storage
+RUN CGO_ENABLED=0 go build -o /out/storage-agent ./cmd/storage-agent
 
 FROM alpine:3 AS compute
 COPY --from=builder /out/compute /usr/local/bin/compute
@@ -35,34 +36,60 @@ COPY hack/devkeys/jwt-dev.pub /etc/kyuusha/jwt-dev.pub
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
 ENTRYPOINT ["/usr/local/bin/api-gateway", "-jwt-public-key=/etc/kyuusha/jwt-dev.pub", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
 
-FROM alpine:3 AS compute-agent
+# Ubuntu-based, not Alpine like every other service here (except
+# storage-agent, also Ubuntu for its own unrelated packaging reason above):
+# found live that Alpine's musl-linked open-iscsi package (iscsid) reliably
+# crashes under load in this environment ("iscsid: sendmsg: bug? ctrl_fd 4",
+# confirmed via /proc/<pid>/status showing it a zombie right after, and via
+# a dedicated restart-loop + long retry budget in
+# compute-agent-entrypoint.sh/internal/compute-agent/iscsi that still
+# couldn't outrun it -- every single retry re-triggered another crash,
+# never stabilizing). Ubuntu/Debian's glibc-linked open-iscsi build doesn't
+# hit this at all in the same testing -- see docs/specs/volume.md "known
+# gotchas".
+FROM ubuntu:24.04 AS compute-agent
 # Firecracker release binary (statically linked, no glibc dependency) --
 # real driver_hint=FIRECRACKER VM boot, see internal/compute-agent/fcvmm.
-RUN apk add --no-cache --virtual .fc-fetch curl \
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && ARCH="$(uname -m)" && FC_VERSION=v1.16.1 \
     && curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-${ARCH}.tgz" \
        | tar -xz \
     && mv "release-${FC_VERSION}-${ARCH}/firecracker-${FC_VERSION}-${ARCH}" /usr/local/bin/firecracker \
     && chmod +x /usr/local/bin/firecracker \
     && rm -rf "release-${FC_VERSION}-${ARCH}" \
-    && apk del .fc-fetch
+    && apt-get purge -y curl && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 # qemu-system-x86_64 -- real driver_hint=QEMU VM boot, see
 # internal/compute-agent/qemuvmm and docs/specs/qemu-boot.md.
-RUN apk add --no-cache qemu-system-x86_64
+#
 # e2fsprogs: builds the cloud-init NoCloud seed disk as an ext4 image via
 # `mkfs.ext4 -d` (see internal/compute-agent/vmm/seed.go and
-# docs/architecture.md "UserData注入: NoCloud seed disk") -- kept
-# installed, not a build-only --virtual package, since it runs at VM Boot
-# time, not image build time.
-RUN apk add --no-cache e2fsprogs
+# docs/architecture.md "UserData注入: NoCloud seed disk").
+#
+# open-iscsi: the iscsiadm CLI internal/compute-agent/iscsi shells out to,
+# for attaching Volumes exported by storage-agent -- see docs/specs/
+# volume.md. Just the CLI: iscsid itself has to be the *host's* own
+# already-running instance, not one started in this container -- see
+# internal/compute-agent/iscsi's package doc comment and
+# compute-agent-entrypoint.sh for why. Installing the open-iscsi package
+# here is still needed for iscsiadm/its libraries, even though this
+# image's own iscsid is never actually run.
+#
+# iproute2: `ip` (internal/compute-agent/netsetup's tap/bridge wiring) --
+# unlike Alpine, Ubuntu's minimal base doesn't carry this by default.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      qemu-system-x86 e2fsprogs open-iscsi iproute2 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/compute-agent /usr/local/bin/compute-agent
+COPY docker/compute-agent-entrypoint.sh /usr/local/bin/compute-agent-entrypoint.sh
+RUN chmod +x /usr/local/bin/compute-agent-entrypoint.sh
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
 # All 3 playground compute-agents register into zone-a (see
 # playground/docker-compose.yml), so one baked-in dev token covers all of
 # them; a hypervisor in a different zone needs its own token (`kyuusha
 # hypervisor bootstrap-token create -zone=...`) mounted/COPYed in instead.
 COPY hack/devkeys/bootstrap-token-zone-a.jwt /etc/kyuusha/bootstrap-token.jwt
-ENTRYPOINT ["/usr/local/bin/compute-agent", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt", "-bootstrap-token-file=/etc/kyuusha/bootstrap-token.jwt"]
+ENTRYPOINT ["/usr/local/bin/compute-agent-entrypoint.sh", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt", "-bootstrap-token-file=/etc/kyuusha/bootstrap-token.jwt"]
 
 FROM alpine:3 AS kyuusha-cli
 COPY --from=builder /out/kyuusha /usr/local/bin/kyuusha
@@ -87,6 +114,26 @@ FROM alpine:3 AS block-storage
 COPY --from=builder /out/block-storage /usr/local/bin/block-storage
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
 ENTRYPOINT ["/usr/local/bin/block-storage", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
+
+# storage-agent needs zfsutils-linux + targetcli-fb (internal/storage-agent
+# shells out to `zfs`/`zpool`/`targetcli`) -- Ubuntu-based, not Alpine or
+# Debian like every other service here: Alpine doesn't reliably package
+# targetcli-fb, and Debian's default `main` component doesn't carry
+# zfsutils-linux at all (it's gated behind `contrib`, for CDDL-licensing
+# reasons Ubuntu doesn't apply the same way -- confirmed live: the package
+# install that failed here on debian:bookworm-slim is the exact one that
+# succeeded cleanly on this repo's own (Ubuntu) dev host). `universe` has
+# to be added explicitly first -- Ubuntu's minimal container base only
+# enables `main`/`restricted` by default, unlike a full desktop/server
+# install.
+FROM ubuntu:24.04 AS storage-agent
+RUN sed -i 's/^Components: main restricted$/Components: main restricted universe/' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      zfsutils-linux targetcli-fb \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/storage-agent /usr/local/bin/storage-agent
+COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
+ENTRYPOINT ["/usr/local/bin/storage-agent", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
 
 # ---- image-assets: prebuilt kernel + minimal rootfs for the playground's ----
 # Firecracker milestone (see docs/specs/firecracker-boot.md). A real Firecracker

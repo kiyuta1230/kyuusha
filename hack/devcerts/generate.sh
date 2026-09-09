@@ -11,7 +11,7 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
   -subj "/CN=kyuusha-dev-ca"
 
 cat > server.ext <<'EOF'
-subjectAltName = DNS:api-gateway,DNS:compute,DNS:identity,DNS:image,DNS:network,DNS:block-storage,DNS:compute-agent-1,DNS:compute-agent-2,DNS:compute-agent-3,DNS:localhost,IP:127.0.0.1
+subjectAltName = DNS:api-gateway,DNS:compute,DNS:identity,DNS:image,DNS:network,DNS:block-storage,DNS:storage-agent,DNS:compute-agent-1,DNS:compute-agent-2,DNS:compute-agent-3,DNS:localhost,IP:127.0.0.1
 EOF
 
 openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \

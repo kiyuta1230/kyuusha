@@ -1,3 +1,8 @@
 /bin/
 *.test
 *.out
+
+# storage-agent's ZFS pool backing file (playground/docker-compose.yml
+# bind-mounts this at an identical host/container path -- see
+# internal/storage-agent's package doc comment for why).
+/playground/storage-agent-data/

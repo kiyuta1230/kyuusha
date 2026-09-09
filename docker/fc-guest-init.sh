@@ -22,17 +22,15 @@ mount -t sysfs sysfs /sys
 
 echo "kyuusha: guest booted OK, uptime=$(cut -d' ' -f1 /proc/uptime)s"
 
-# If compute-agent built a cloud-init NoCloud seed disk (spec.user_data was
-# set -- see internal/compute-agent/fcvmm/seed.go and docs/architecture.md
-# "UserData注入: NoCloud seed disk"), it's the second virtio-block device,
-# /dev/vdb, formatted ext4 (not vfat/ISO9660 -- this kernel has neither
-# CONFIG_VFAT_FS nor CONFIG_ISO9660_FS, only ext4; see
-# internal/compute-agent/vmm/seed.go). This guest has no real cloud-init
-# installed (it's a bare from-scratch Alpine rootfs, not a full distro
-# image), so this isn't actually running user-data -- it's a
-# minimal, honest stand-in that just proves the seed disk arrived and is
-# readable, the same way the tap-wiring gateway ping proves that pipe
-# end-to-end without needing a second VM.
+# /dev/vdb, if present, is either of two things this scenario never
+# combines in the same VM (so there's no ambiguity in practice): a
+# cloud-init NoCloud seed disk (spec.user_data was set -- see
+# internal/compute-agent/vmm/seed.go and docs/architecture.md "UserData
+# 注入: NoCloud seed disk"), formatted ext4 (not vfat/ISO9660 -- this
+# kernel has neither CONFIG_VFAT_FS nor CONFIG_ISO9660_FS, only ext4); or
+# a blank kyuusha Volume attached over iSCSI (docs/specs/volume.md), with
+# no filesystem at all. Try mounting as the former first; a mount failure
+# means it must be the latter.
 if [ -b /dev/vdb ]; then
   mkdir -p /mnt/seed
   if mount -t ext4 -o ro /dev/vdb /mnt/seed 2>/dev/null; then
@@ -46,7 +44,24 @@ if [ -b /dev/vdb ]; then
       echo "kyuusha: seed disk also carries network-config"
     fi
   else
-    echo "kyuusha: seed disk present at /dev/vdb but could not be mounted"
+    # Not a seed disk after all: no ext4 filesystem at all means this is a
+    # blank zvol attached over iSCSI (docs/specs/volume.md) -- an actual
+    # kyuusha Volume, not the seed disk. Same self-diagnostic spirit as the
+    # tap-wiring gateway ping / seed disk mount above, proving the thing
+    # that actually matters for a Volume: whatever a *previous* boot wrote
+    # here is still readable now. No filesystem needed for this -- just
+    # read/write a small marker at the very front of the raw device.
+    existing="$(dd if=/dev/vdb bs=1 count=64 2>/dev/null | tr -d '\0')"
+    case "$existing" in
+      kyuusha-volume-marker:*)
+        echo "kyuusha: volume data found: $existing"
+        ;;
+      *)
+        marker="kyuusha-volume-marker:$(cat /proc/sys/kernel/random/uuid)"
+        printf '%s' "$marker" | dd of=/dev/vdb bs=1 count=64 conv=notrunc 2>/dev/null
+        echo "kyuusha: volume data written: $marker"
+        ;;
+    esac
   fi
 fi
 

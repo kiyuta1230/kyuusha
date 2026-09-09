@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/iscsi"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/netsetup"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
 )
@@ -99,8 +100,9 @@ type Manager struct {
 // goroutine Boot starts) can tear all of it down: the process itself, and
 // every tap device Wire created for it.
 type runningVM struct {
-	cmd  *exec.Cmd
-	taps []string
+	cmd     *exec.Cmd
+	taps    []string
+	volumes []vmm.VolumeAttachInfo
 }
 
 func (m *Manager) binPath() string {
@@ -174,6 +176,15 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	var netArgs []string
 	var qemuNetArgs []string
 	var taps []string
+	var attachedVolumes []vmm.VolumeAttachInfo
+	cleanup := func() {
+		for _, t := range taps {
+			_ = netsetup.DeleteTap(t)
+		}
+		for _, v := range attachedVolumes {
+			_ = iscsi.Detach(v.TargetIQN, v.TargetPortal)
+		}
+	}
 	for i, ni := range spec.NetworkInterfaces {
 		wired, err := netsetup.Wire(netsetup.Interface{
 			IfaceID:    ni.IfaceID,
@@ -183,9 +194,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 			VLANID:     ni.VLANID,
 		})
 		if err != nil {
-			for _, t := range taps {
-				_ = netsetup.DeleteTap(t)
-			}
+			cleanup()
 			return fmt.Errorf("qemuvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
 		}
 		taps = append(taps, wired.TapName)
@@ -218,9 +227,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	if spec.UserData != "" {
 		seedImg, err := vmm.BuildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
 		if err != nil {
-			for _, t := range taps {
-				_ = netsetup.DeleteTap(t)
-			}
+			cleanup()
 			return fmt.Errorf("qemuvmm: build seed disk: %w", err)
 		}
 		// Read-only, non-root: the guest sees this as a second virtio-blk
@@ -230,11 +237,23 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		driveArgs = append(driveArgs, "-drive", fmt.Sprintf("file=%s,format=raw,if=virtio,readonly=on", seedImg))
 	}
 
+	// Attach every already-exported Volume before QEMU starts -- same
+	// reasoning as taps, see internal/compute-agent/iscsi and
+	// docs/specs/volume.md. Each becomes its own read-write virtio-blk
+	// drive alongside rootfs/seed.
+	for i, v := range spec.Volumes {
+		devPath, err := iscsi.Attach(ctx, v.TargetIQN, v.TargetPortal)
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("qemuvmm: attach volume %d (%s): %w", i, v.AttachmentID, err)
+		}
+		attachedVolumes = append(attachedVolumes, v)
+		driveArgs = append(driveArgs, "-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", devPath))
+	}
+
 	consoleLog, err := os.Create(filepath.Join(vmDir, "console.log"))
 	if err != nil {
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		return fmt.Errorf("qemuvmm: create console log: %w", err)
 	}
 	defer consoleLog.Close()
@@ -271,9 +290,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	cmd.Stdout = consoleLog
 	cmd.Stderr = consoleLog
 	if err := cmd.Start(); err != nil {
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		return fmt.Errorf("qemuvmm: start qemu: %w", err)
 	}
 
@@ -289,9 +306,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 
 	select {
 	case err := <-exitCh:
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("qemuvmm: removing cgroup after immediate exit", "vm_id", spec.VMID, "err", rmErr)
 		}
@@ -303,7 +318,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
-	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps}
+	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps, volumes: attachedVolumes}
 	m.mu.Unlock()
 
 	go func() {
@@ -311,9 +326,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		m.mu.Lock()
 		delete(m.running, spec.VMID)
 		m.mu.Unlock()
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
-		}
+		cleanup()
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("qemuvmm: removing cgroup", "vm_id", spec.VMID, "err", rmErr)
 		}

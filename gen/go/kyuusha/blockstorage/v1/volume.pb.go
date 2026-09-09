@@ -733,8 +733,10 @@ type VolumeAttachmentStatus struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Attaching / Attached / Detaching / Deleting / Error
 	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	DevicePath    string                 `protobuf:"bytes,3,opt,name=device_path,json=devicePath,proto3" json:"device_path,omitempty"` // 実際に割り当てられたデバイスパス（実バックエンドができるまでは常に空）
-	Hypervisor    string                 `protobuf:"bytes,4,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`                   // 実バックエンド/compute連携ができるまでは常に空
+	DevicePath    string                 `protobuf:"bytes,3,opt,name=device_path,json=devicePath,proto3" json:"device_path,omitempty"`       // compute-agent側でのローカルデバイスパス（まだ報告経路が無く常に空。既知の未実装事項）
+	Hypervisor    string                 `protobuf:"bytes,4,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`                         // まだ空（VolumeAttachmentSpecにhypervisorを持たせていないため。既知の未実装事項）
+	TargetIqn     string                 `protobuf:"bytes,5,opt,name=target_iqn,json=targetIqn,proto3" json:"target_iqn,omitempty"`          // Attached時のみ非空。実StorageBackend（storage-agent）がexportしたiSCSI target IQN
+	TargetPortal  string                 `protobuf:"bytes,6,opt,name=target_portal,json=targetPortal,proto3" json:"target_portal,omitempty"` // Attached時のみ非空。"host:port"形式のiSCSI portalアドレス
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -793,6 +795,20 @@ func (x *VolumeAttachmentStatus) GetDevicePath() string {
 func (x *VolumeAttachmentStatus) GetHypervisor() string {
 	if x != nil {
 		return x.Hypervisor
+	}
+	return ""
+}
+
+func (x *VolumeAttachmentStatus) GetTargetIqn() string {
+	if x != nil {
+		return x.TargetIqn
+	}
+	return ""
+}
+
+func (x *VolumeAttachmentStatus) GetTargetPortal() string {
+	if x != nil {
+		return x.TargetPortal
 	}
 	return ""
 }
@@ -1287,7 +1303,7 @@ const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12\x13\n" +
 	"\x05vm_id\x18\x02 \x01(\tR\x04vmId\x12\x1f\n" +
 	"\vdevice_hint\x18\x03 \x01(\tR\n" +
-	"deviceHint\"\xaf\x01\n" +
+	"deviceHint\"\xf3\x01\n" +
 	"\x16VolumeAttachmentStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -1297,7 +1313,10 @@ const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"devicePath\x12\x1e\n" +
 	"\n" +
 	"hypervisor\x18\x04 \x01(\tR\n" +
-	"hypervisor\"\xd3\x01\n" +
+	"hypervisor\x12\x1d\n" +
+	"\n" +
+	"target_iqn\x18\x05 \x01(\tR\ttargetIqn\x12#\n" +
+	"\rtarget_portal\x18\x06 \x01(\tR\ftargetPortal\"\xd3\x01\n" +
 	"\x10VolumeAttachment\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x12A\n" +
 	"\x04spec\x18\x02 \x01(\v2-.kyuusha.blockstorage.v1.VolumeAttachmentSpecR\x04spec\x12G\n" +

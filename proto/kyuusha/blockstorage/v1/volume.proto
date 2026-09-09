@@ -92,8 +92,10 @@ message VolumeAttachmentSpec {
 message VolumeAttachmentStatus {
   string phase = 1; // Pending / Attaching / Attached / Detaching / Deleting / Error
   repeated kyuusha.resource.v1.Condition conditions = 2;
-  string device_path = 3; // 実際に割り当てられたデバイスパス（実バックエンドができるまでは常に空）
-  string hypervisor = 4;  // 実バックエンド/compute連携ができるまでは常に空
+  string device_path = 3; // compute-agent側でのローカルデバイスパス（まだ報告経路が無く常に空。既知の未実装事項）
+  string hypervisor = 4;  // まだ空（VolumeAttachmentSpecにhypervisorを持たせていないため。既知の未実装事項）
+  string target_iqn = 5;    // Attached時のみ非空。実StorageBackend（storage-agent）がexportしたiSCSI target IQN
+  string target_portal = 6; // Attached時のみ非空。"host:port"形式のiSCSI portalアドレス
 }
 
 message VolumeAttachment {

@@ -20,6 +20,9 @@ scrape_configs:
   - job_name: block-storage
     static_configs:
       - targets: ["block-storage:9097"]
+  - job_name: storage-agent
+    static_configs:
+      - targets: ["storage-agent:9098"]
   - job_name: compute-agent
     static_configs:
       - targets: ["compute-agent-1:9094", "compute-agent-2:9094", "compute-agent-3:9094"]

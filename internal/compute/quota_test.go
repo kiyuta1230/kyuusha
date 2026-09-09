@@ -26,7 +26,7 @@ func TestService_CreateEnforcesQuota(t *testing.T) {
 		MaxVms:           2,
 		MaxVcpuPerVm:     2,
 		MaxMemoryMbPerVm: 4096,
-	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{})
+	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

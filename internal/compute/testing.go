@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
 	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
@@ -241,4 +242,95 @@ func (f *FakeNetworkInterfaceClient) Delete(context.Context, *networkv1.DeleteNe
 
 func (f *FakeNetworkInterfaceClient) Watch(context.Context, *networkv1.WatchNetworkInterfacesRequest, ...grpc.CallOption) (networkv1.NetworkInterfaceService_WatchClient, error) {
 	panic("FakeNetworkInterfaceClient: Watch not implemented; compute.Service never calls it")
+}
+
+// FakeVolumeClient is a minimal blockstoragev1.VolumeServiceClient for
+// tests: Get always returns a Ready Volume unless the requested id is
+// empty; every other method panics since compute.Service never calls
+// them.
+type FakeVolumeClient struct {
+	Phase string // default: "Ready"
+}
+
+func (f *FakeVolumeClient) phase() string {
+	if f.Phase != "" {
+		return f.Phase
+	}
+	return "Ready"
+}
+
+func (f *FakeVolumeClient) Get(ctx context.Context, req *blockstoragev1.GetVolumeRequest, opts ...grpc.CallOption) (*blockstoragev1.Volume, error) {
+	if req.GetId() == "" {
+		return nil, status.Error(codes.NotFound, "volume: not found")
+	}
+	return &blockstoragev1.Volume{
+		Meta:   &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
+		Spec:   &blockstoragev1.VolumeSpec{SizeGb: 10},
+		Status: &blockstoragev1.VolumeStatus{Phase: f.phase()},
+	}, nil
+}
+
+func (f *FakeVolumeClient) Create(context.Context, *blockstoragev1.CreateVolumeRequest, ...grpc.CallOption) (*blockstoragev1.Volume, error) {
+	panic("FakeVolumeClient: Create not implemented; compute.Service never calls it")
+}
+
+func (f *FakeVolumeClient) List(context.Context, *blockstoragev1.ListVolumesRequest, ...grpc.CallOption) (*blockstoragev1.ListVolumesResponse, error) {
+	panic("FakeVolumeClient: List not implemented; compute.Service never calls it")
+}
+
+func (f *FakeVolumeClient) Delete(context.Context, *blockstoragev1.DeleteVolumeRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
+	panic("FakeVolumeClient: Delete not implemented; compute.Service never calls it")
+}
+
+func (f *FakeVolumeClient) Watch(context.Context, *blockstoragev1.WatchVolumesRequest, ...grpc.CallOption) (blockstoragev1.VolumeService_WatchClient, error) {
+	panic("FakeVolumeClient: Watch not implemented; compute.Service never calls it")
+}
+
+// FakeVolumeAttachmentClient is a minimal
+// blockstoragev1.VolumeAttachmentServiceClient for tests: Create always
+// succeeds Attached with a plausible fake iSCSI target (so
+// createVolumeAttachments' full VolumeAttachInfo path is exercised, not
+// just the Pending/no-export short-circuit); every other method panics
+// since compute.Service never calls them.
+type FakeVolumeAttachmentClient struct {
+	// Pending, if true, simulates the exclusive-attach constraint blocking
+	// this attachment (see docs/architecture.md「具体的な排他制御」): Create
+	// still succeeds, but the returned VolumeAttachment has no iSCSI target
+	// yet.
+	Pending bool
+}
+
+func (f *FakeVolumeAttachmentClient) Create(ctx context.Context, req *blockstoragev1.CreateVolumeAttachmentRequest, opts ...grpc.CallOption) (*blockstoragev1.VolumeAttachment, error) {
+	if f.Pending {
+		return &blockstoragev1.VolumeAttachment{
+			Meta:   &resourcev1.ObjectMeta{Id: "volattach-" + req.GetName(), TenantId: req.GetTenantId()},
+			Spec:   req.GetSpec(),
+			Status: &blockstoragev1.VolumeAttachmentStatus{Phase: "Pending"},
+		}, nil
+	}
+	return &blockstoragev1.VolumeAttachment{
+		Meta: &resourcev1.ObjectMeta{Id: "volattach-" + req.GetName(), TenantId: req.GetTenantId()},
+		Spec: req.GetSpec(),
+		Status: &blockstoragev1.VolumeAttachmentStatus{
+			Phase:        "Attached",
+			TargetIqn:    "iqn.2026-09.io.kyuusha.fake:" + req.GetSpec().GetVolumeId(),
+			TargetPortal: "fake-storage-agent:3260",
+		},
+	}, nil
+}
+
+func (f *FakeVolumeAttachmentClient) Get(context.Context, *blockstoragev1.GetVolumeAttachmentRequest, ...grpc.CallOption) (*blockstoragev1.VolumeAttachment, error) {
+	panic("FakeVolumeAttachmentClient: Get not implemented; compute.Service never calls it")
+}
+
+func (f *FakeVolumeAttachmentClient) List(context.Context, *blockstoragev1.ListVolumeAttachmentsRequest, ...grpc.CallOption) (*blockstoragev1.ListVolumeAttachmentsResponse, error) {
+	panic("FakeVolumeAttachmentClient: List not implemented; compute.Service never calls it")
+}
+
+func (f *FakeVolumeAttachmentClient) Delete(context.Context, *blockstoragev1.DeleteVolumeAttachmentRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
+	panic("FakeVolumeAttachmentClient: Delete not implemented; compute.Service never calls it")
+}
+
+func (f *FakeVolumeAttachmentClient) Watch(context.Context, *blockstoragev1.WatchVolumeAttachmentsRequest, ...grpc.CallOption) (blockstoragev1.VolumeAttachmentService_WatchClient, error) {
+	panic("FakeVolumeAttachmentClient: Watch not implemented; compute.Service never calls it")
 }

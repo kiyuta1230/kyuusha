@@ -16,6 +16,7 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
+	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
 	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
@@ -163,6 +164,19 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 		}
 		vm.Status.InterfaceRefs = refs
 
+		// Same reasoning as NetworkInterfaces: VolumeAttachments are created
+		// now, not at Create time, so a VM that's never actually scheduled
+		// never leaves one behind with no owning VM. volInfos only carries
+		// the ones that actually reached Attached (see createVolumeAttachments'
+		// doc) -- this VM boots without whichever didn't, rather than being
+		// blocked on them (attach-before-boot only, see docs/specs/volume.md).
+		volInfos, volRefs, err := createVolumeAttachments(ctx, r.svc.volumeAttachmentClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.Volumes)
+		if err != nil {
+			slog.Error("provision: create volume attachments failed", "vm_id", vm.Meta.ID, "err", err)
+			return
+		}
+		vm.Status.VolumeAttachmentRefs = volRefs
+
 		vm.Status.Phase = PhaseProvisioning
 		if _, err := r.svc.Update(ctx, &vm); err != nil {
 			slog.Error("provision: update failed", "vm_id", vm.Meta.ID, "err", err)
@@ -192,6 +206,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			DriverHint: string(vm.Spec.DriverHint),
 			Interfaces: netifs,
 			UserData:   vm.Spec.UserData,
+			Volumes:    volInfos,
 		}
 		// Resolve the Image to concrete boot inputs now (not at Create time:
 		// the Image could have changed, and compute-agent has no image
@@ -229,18 +244,38 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 // It also tells that Hypervisor's compute-agent to tear down whatever real
 // process it may have started (fire-and-forget: VM deletion isn't gated on
 // this, matching the rest of this system's "compute-agent state is
-// best-effort, never authoritative" stance -- see docs/specs/vm-scheduling.md).
+// best-effort, never authoritative" stance -- see docs/specs/vm-scheduling.md),
+// and deletes every VolumeAttachment this VM ever created (also fire-and-
+// forget) -- without this, a Volume this VM held would stay Attached
+// forever, permanently blocking the exclusive-attach constraint
+// (docs/architecture.md「具体的な排他制御」) against ever reusing it.
+//
+// The DeleteCommand is published before the VolumeAttachments are deleted
+// (not after): deleting an attachment tears down its real iSCSI export
+// (block-storage's UnexportVolume), and doing that before compute-agent
+// has even been told to stop the VM would yank a still-running guest's
+// disk out from under it. Publishing first at least gives compute-agent a
+// head start on detaching on its own -- there's still no synchronization
+// waiting for that to actually finish, same eventual-consistency tolerance
+// as tap/cgroup cleanup already has elsewhere in this system.
 func (r *Reconciler) releaseIfReserved(ctx context.Context, vm VirtualMachine) {
-	if vm.Status.Hypervisor == "" {
-		return
-	}
-	r.svc.releaseHypervisorCapacity(ctx, vm.Status.Hypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
+	if vm.Status.Hypervisor != "" {
+		r.svc.releaseHypervisorCapacity(ctx, vm.Status.Hypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
 
-	payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
-	msg := nats.NewMsg(CmdSubjectDelete(vm.Status.Hypervisor))
-	msg.Data = payload
-	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
-		slog.Error("delete: publish delete command failed", "vm_id", vm.Meta.ID, "err", err)
+		payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
+		msg := nats.NewMsg(CmdSubjectDelete(vm.Status.Hypervisor))
+		msg.Data = payload
+		if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+			slog.Error("delete: publish delete command failed", "vm_id", vm.Meta.ID, "err", err)
+		}
+	}
+
+	for _, attachmentID := range vm.Status.VolumeAttachmentRefs {
+		if _, err := r.svc.volumeAttachmentClient.Delete(ctx, &blockstoragev1.DeleteVolumeAttachmentRequest{
+			TenantId: vm.Meta.TenantID, Id: attachmentID,
+		}); err != nil {
+			slog.Error("delete: delete volume attachment failed", "vm_id", vm.Meta.ID, "attachment_id", attachmentID, "err", err)
+		}
 	}
 }
 
