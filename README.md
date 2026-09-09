@@ -9,8 +9,10 @@ OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプ�
 〜500台・VM〜1〜2万台・テナント(KaaSクラスタ)〜500。詳しい設計判断の経緯は
 [docs/architecture.md](docs/architecture.md)を参照。
 
-> **ステータス**: 開発中。ストレージ以外の主要機能（VM/Hypervisor/Image/Network/CLI/認証認可）は
-> playground環境で一通り動作確認済みだが、東西通信のmTLS等いくつかの既知のギャップが残る
+> **ステータス**: 開発中。ストレージ以外の主要機能（VM/Hypervisor/Image/Network/CLI/認証認可/
+> 東西mTLS/Hypervisor bootstrapトークン/cgroupリソース制限）はplayground環境で一通り
+> 動作確認済み。VMMドライバはFirecracker/QEMUの両方が実際にVMを起動する（[起動方式の比較](docs/specs/qemu-boot.md)）。
+> jailer相当のプロセス隔離（chroot/namespace分離・特権降格）はどちらのドライバも未実装のまま
 > （詳細は各仕様書の「既知の穴」節を参照）。実ブロックストレージバックエンド（ZFS/NVMe-oF等）は
 > 未実装で、Volumeは現状Quotaチェック→即Readyのみ。
 
@@ -21,7 +23,7 @@ OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプ�
 | `api-gateway` | clientが到達できる唯一の公開エンドポイント。JWT検証＋OPA認可 |
 | `identity` | Tenant（テナント・Quota上限値）管理 |
 | `compute` | VirtualMachine・Hypervisor管理。スケジューラ、Quota強制、Image/Network検証 |
-| `compute-agent` | 各ハイパーバイザー上で動くagent。実Firecracker microVMを起動する |
+| `compute-agent` | 各ハイパーバイザー上で動くagent。実VMM（Firecracker/QEMUどちらも）を起動する |
 | `image` | Image（外部URL参照+digest）管理。テナント間共有（PUBLIC/PRIVATE）対応 |
 | `network` | Subnet・NetworkInterface管理。VLAN/IPアドレス払い出し(IPAM) |
 | `block-storage` | Volume・VolumeAttachment管理（実バックエンドはまだ無い） |
@@ -31,7 +33,7 @@ OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプ�
 
 ## クイックスタート（playground）
 
-`/dev/kvm`があれば実Firecracker microVMまで起動する、multi-hypervisorのローカル環境。
+`/dev/kvm`があれば実VMM（Firecracker/QEMU）までVMを起動する、multi-hypervisorのローカル環境。
 
 ```sh
 docker compose -f playground/docker-compose.yml up -d --build

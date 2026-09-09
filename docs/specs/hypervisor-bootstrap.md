@@ -19,7 +19,7 @@ Hypervisorはcompute内部のスケジューリング対象であり、KaaS向�
 | `status.last_heartbeat_at` | 最終heartbeat受信時刻 |
 | `status.allocatable_vcpu` / `allocatable_memory_mb` | 申告された総capacity |
 | `status.allocated_vcpu` / `allocated_memory_mb` | スケジューラによる予約合計 |
-| `status.supported_drivers` | 対応VMMドライバ一覧（例: `["FIRECRACKER"]`） |
+| `status.supported_drivers` | 対応VMMドライバ一覧（例: `["FIRECRACKER", "QEMU"]`） |
 | `status.available_devices` | PCIデバイス在庫（現状スケジューラは未使用） |
 
 ## 登録フロー

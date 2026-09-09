@@ -112,7 +112,11 @@ virtio-blk/virtio-netのPCIトランスポート自体が機能しなくなる�
 
 `docker/Dockerfile`の`compute-agent`ステージに`apk add qemu-system-x86_64`を追加した
 だけ——kernel/rootfsアセット自体はFirecracker用に既にある`image-assets`（vmlinux +
-Alpine minirootfsのext4）をそのまま使う。`playground/scenario.sh`は、Firecracker用の
+Alpine minirootfsのext4）をそのまま使う。加えて、各compute-agentの`-drivers`フラグに
+`QEMU`を含めないと（playgroundは`-drivers=FIRECRACKER,QEMU`）`driver_hint=QEMU`のVMは
+スケジュール不能になる——[Firecracker起動仕様](firecracker-boot.md)「playgroundでの構成」
+参照（`privileged: true`要件も含め、cgroupリソース制限側の共通事項はそちらにまとめてある）。
+`playground/scenario.sh`は、Firecracker用の
 Imageに対して`-driver-hint=qemu`で追加のVMを1台作り、同じ`kyuusha vm console`確認
 （`docker/fc-guest-init.sh`が出す起動メッセージ。ドライバによらず同じ文言——ゲスト自身は
 どちらのVMMで起動されたか区別できないため）で実ブートを確認する。

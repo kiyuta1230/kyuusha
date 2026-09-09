@@ -134,9 +134,13 @@ Firecracker/KVMに渡した仮想トポロジ（`machine-config`のvcpu_count/me
   （best-effort。以前の全バージョンと同じ挙動へのフォールバック）
 - compute-agentコンテナ自身のプロセスは、cgroup v2の「no internal process」制約
   （`subtree_control`で子へcontrollerを委譲するには、そのcgroup自身の`cgroup.procs`が
-  空でなければならない）を回避するため、起動時に`/sys/fs/cgroup/init`という兄弟cgroupへ
+  空でなければならない）を回避するため、`/sys/fs/cgroup/init`という兄弟cgroupへ
   自分自身を退避させてから`/sys/fs/cgroup`（cgroupnsで見えるcontainerの実質root）の
-  `subtree_control`を有効化する（`ensureSelfMoved`）
+  `subtree_control`を有効化する（`cgroup.Init()`）。**`cmd/compute-agent`の起動時、
+  最初のVMを起動するより前に一度だけ呼ぶ必要がある**——`Apply`の中で遅延実行すると、
+  最初のVMのFirecracker/QEMUプロセスがforkされる時点でcompute-agent自身がまだrootの
+  cgroupに残っており、その子プロセスもrootのcgroup.procsに入ったまま取り残されて
+  `subtree_control`の有効化が恒久的にEBUSYで失敗する（ライブ検証で実際に踏んだ実バグ）
 - VM終了時（Firecrackerプロセスが実際に`wait(2)`され切った後）に`kyuusha/<VM ID>`
   ディレクトリを削除する。空にならないうちの削除はカーネルに拒否されるため、
   短い間隔でリトライする
@@ -151,6 +155,15 @@ Firecracker/KVMに渡した仮想トポロジ（`machine-config`のvcpu_count/me
   `compute-agent-1/2/3`の`devices:`）。ホストにKVMがない場合、Firecrackerの起動自体が
   失敗する（スタックの他の部分は影響を受けない）。同様に、tap配線には`/dev/net/tun`と
   `CAP_NET_ADMIN`が要る（同じ`devices:`/`cap_add:`）——なければtap配線だけが失敗する
+- cgroupリソース制限（上記）を実際に効かせるには`privileged: true`が要る——Docker/runcは
+  非privilegedコンテナのcgroupfsを常にread-onlyでマウントし、`CAP_SYS_ADMIN`を個別に
+  付与するだけでは書き込み可能にならない（ライブ検証で確認済み）。無くてもVMの起動自体は
+  失敗しない（best-effortでリソース無制限のまま起動を続けるだけ）
+- `-drivers`フラグで、そのcompute-agentがサポートするVMMドライバをスケジューラへ申告する
+  （`compute-agent-1/2/3`の`command:`）。playgroundは`-drivers=FIRECRACKER,QEMU`——これが
+  無い（既定値`FIRECRACKER`のみ）と、`driver_hint=QEMU`のVMはスケジュール可能な
+  Hypervisorが1台も無い状態になり、`Pending`のまま進まなくなる（[VMスケジュール仕様](vm-scheduling.md)
+  参照。ライブ検証で実際に踏んだ実バグ）
 - kernel/rootfsは`image-assets`という専用compose serviceが配信する（プレーンHTTP、ホストには
   公開しない）。中身はビルド時（`docker build`。このsandboxではコンテナのランタイムネット
   ワークが外部インターネットに届かないため、実行時ではなくビルド時に取得している）に用意する:
