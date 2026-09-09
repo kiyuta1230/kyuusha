@@ -1334,6 +1334,12 @@ NATS採用時と同じ判断基準（運用コストを最優先）で、Ceph RB
 v1では採用しない。デフォルトは**専用のストレージノード（1台〜数台）がZFSでVolumeを管理し、
 iSCSIまたはNVMe-oFでcompute hypervisorへexportする**方式とする。
 
+**実装済み**（`storage-agent`サービス、`internal/storage-agent`。[Volume仕様](specs/volume.md)
+参照）——ただしNVMe-oFではなく**iSCSI**: 開発環境のカーネルに`nvmet-tcp`が無く
+（`nvmet-fc`のみ、実FCハードウェアが要るため選べない）、下記「iSCSI/NVMe-oFの選定」の
+第一候補は実現できなかった。NVMe-oF/TCPが実際にサポートされるホストが用意できたら、
+別`StorageBackend`実装として追加する判断になる。
+
 ```go
 type StorageBackend interface {
     CreateVolume(ctx context.Context, spec VolumeSpec) (*VolumeRef, error)
@@ -1346,6 +1352,14 @@ type StorageBackend interface {
 - block-storageサービスはCephなど将来の実装差し替えに備え`StorageBackend`をドライバとして抽象化する
 - **compute-agentはVMM制御に加え、iSCSI/NVMe-oFイニシエータとしてストレージノードへ接続し、
   ローカルブロックデバイスとして生やしてからFirecracker(またはQEMU)にvirtio-block経由で渡す**役割を持つ
+  ——**実装済み**（`internal/compute-agent/iscsi`。[Volume仕様](specs/volume.md)
+  「compute-agent側の配線」参照）。ライブ検証で見つかった深い実バグとして、実iSCSI
+  ログインのカーネルセッション作成（`NETLINK_ISCSI`ソケット）はコンテナ自身の
+  ネットワーク名前空間からは動かず、ホスト自身の名前空間へ`nsenter --net`する必要が
+  あった。`storage-agent`側の`zpool`/`zfs`/`targetcli`呼び出しにも同じテーマの
+  mount namespace版の実バグがある（コンテナ自身のmount namespaceからだと
+  `zpool create`が`ENOENT`で失敗する）——どちらも「カーネルのストレージ/iSCSI
+  サブシステムはホスト自身の名前空間からしか正しく動かない」という同じ制約
 - ZFSを選ぶことで、スナップショット・シンプロビジョニングは追加実装なしに得られる
 
 ### 正直な弱点: ストレージノード自体の冗長化は別問題
@@ -1364,6 +1378,12 @@ type StorageBackend interface {
 要求せず通常のEthernet上で動作し、iSCSIよりレイテンシ・CPUオーバーヘッドの面で有利。
 Linuxカーネルの`nvmet`/`nvme-cli`で実装できる。iSCSIは、対象のストレージ機材がNVMe-oF未対応の場合の
 フォールバックとして`StorageBackend`ドライバのもう一つの実装に留める。
+
+**v1実装はこのフォールバック側（iSCSI）を選んだ**: 開発環境のカーネルに`nvmet-tcp`
+モジュールが無く（`nvmet-fc`のみ、実FCハードウェア前提のため使えない）、
+`target_core_mod`/`iscsi_target_mod`（LIO）は動いたため。NVMe-oF/TCPを第一候補とする
+方針自体は変えていない——実際にサポートするホストが手に入ったら、そちら向けの
+`StorageBackend`実装を追加する。
 
 ## コントロールプレーンサービス自体の可用性
 
