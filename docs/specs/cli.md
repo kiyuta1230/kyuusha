@@ -13,7 +13,7 @@
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-recovery-policy`(`none`\|`self-heal`、既定`none`) `-driver-hint`(`firecracker`\|`qemu`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`qemu`必須。[Image仕様](image.md)参照) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[Firecracker起動仕様](firecracker-boot.md)/[QEMU起動仕様](qemu-boot.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-recovery-policy`(`none`\|`self-heal`、既定`none`) `-driver-hint`(`firecracker`\|`qemu`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`qemu`必須。[Image仕様](image.md)参照) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` `-finalizer-name`(指定すると`meta.finalizers`にその名前を含むVMだけに絞り込む。[外部システム連携仕様](external-integration.md)「大量Watch対策」参照) |

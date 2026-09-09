@@ -11,6 +11,7 @@
 - [VMスケジュール](vm-scheduling.md)
 - [Quota](quota.md)
 - [Image](image.md)
+- [VirtualMachine](virtual-machine.md)
 - [Firecracker起動](firecracker-boot.md)
 - [QEMU起動](qemu-boot.md)
 - [network](network.md)

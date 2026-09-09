@@ -46,9 +46,8 @@ Firecrackerと同じ「カーネル+rootfsをkyuusha側が直接指定する」�
 
 ## computeからcompute-agentへ渡る情報
 
-[Firecracker起動仕様](firecracker-boot.md)「computeからcompute-agentへ渡る情報」と
-完全に同じ`CreateCommand`を使う（`driver_hint`が`QEMU`になっているだけ）。
-`kernel_url`/`rootfs_url`が空の場合（`QCOW2`Image等）はstub動作にフォールバックする点も同じ。
+ドライバを問わず共通の`CreateCommand`ペイロード（`driver_hint`が`QEMU`になっているだけ）
+——[VirtualMachine仕様](virtual-machine.md)「computeからcompute-agentへ渡る情報」参照。
 
 ## compute-agent側の起動処理（`internal/compute-agent/qemuvmm`）
 
@@ -79,10 +78,10 @@ Firecrackerと同じ「カーネル+rootfsをkyuusha側が直接指定する」�
      出力とQEMU自身の起動時エラーの両方を1ファイルで見られるようにする（fcvmmの
      `console.log`契約と同じ考え方） |
 
-3. **成否判定**: fcvmmと同じ500msの猶予期間方式（`bootGracePeriod`）。QEMU固有の
+3. **成否判定**: fcvmm/qemuvmm共通の500ms猶予期間方式
+   （[VirtualMachine仕様](virtual-machine.md)「起動確認（成否判定）」参照）。QEMU固有の
    即時失敗（バイナリが無い、`/dev/kvm`権限がない、カーネルイメージをQEMUの直接ブート
-   ローダーが拒否する、等）を検知するためのもので、ゲストカーネルの実ブート完了確認では
-   ない点もfcvmmと同じ
+   ローダーが拒否する、等）を検知するためのもの
 
 ### boot_argsのデフォルトがFirecrackerと違う理由
 
@@ -104,18 +103,18 @@ virtio-blk/virtio-netのPCIトランスポート自体が機能しなくなる�
 
 ## UserData注入・cgroupリソース制限・削除・シリアルコンソール
 
-すべて[Firecracker起動仕様](firecracker-boot.md)の該当節と同じ仕組みを共有する
+すべて[VirtualMachine仕様](virtual-machine.md)の該当節と同じ仕組みを共有する
 （`internal/compute-agent/vmm`のBuildSeedDisk、`internal/compute-agent/cgroup`、
 `Stop`のSIGTERM→3秒待ちSIGKILL、`kyuusha vm console`）。qemuvmm固有の差分はない。
 
 ## playgroundでの構成
 
-`docker/Dockerfile`の`compute-agent`ステージに`apk add qemu-system-x86_64`を追加した
-だけ——kernel/rootfsアセット自体はFirecracker用に既にある`image-assets`（vmlinux +
-Alpine minirootfsのext4）をそのまま使う。加えて、各compute-agentの`-drivers`フラグに
-`QEMU`を含めないと（playgroundは`-drivers=FIRECRACKER,QEMU`）`driver_hint=QEMU`のVMは
-スケジュール不能になる——[Firecracker起動仕様](firecracker-boot.md)「playgroundでの構成」
-参照（`privileged: true`要件も含め、cgroupリソース制限側の共通事項はそちらにまとめてある）。
+`docker/Dockerfile`の`compute-agent`ステージにQEMUパッケージを追加しただけ——
+kernel/rootfsアセット自体はFirecracker用に既にある`image-assets`（vmlinux +
+Alpine minirootfsのext4）をそのまま使う。`/dev/kvm`・tap配線・`privileged: true`・
+`-drivers`フラグ（playgroundは`-drivers=FIRECRACKER,QEMU`——これが無いと
+`driver_hint=QEMU`のVMはスケジュール不能になる）等、ドライバを問わず共通の要件は
+[VirtualMachine仕様](virtual-machine.md)「playgroundでの共通構成」参照。
 `playground/scenario.sh`は、Firecracker用の
 Imageに対して`-driver-hint=qemu`で追加のVMを1台作り、同じ`kyuusha vm console`確認
 （`docker/fc-guest-init.sh`が出す起動メッセージ。ドライバによらず同じ文言——ゲスト自身は
@@ -130,7 +129,9 @@ Imageに対して`-driver-hint=qemu`で追加のVMを1台作り、同じ`kyuusha
   ブート可能ディスクサポートが実装されて初めて意味を持つ
 - PCI passthrough (VFIO)・vhost-user networking: 上記「なぜQEMUも要るのか」で挙げた
   本来の動機そのものは、まだどちらも未実装（`-M q35`の選択だけがその布石）
-- jailer相当のプロセス隔離（chroot/namespace分離・特権降格）: fcvmmと同じく未実装、
-  cgroupによるCPU/メモリ制限のみ実装済み
 - QEMU Monitor/QMPソケット経由の制御（一時停止、ライブマイグレーション等）: 使っていない
   （`-monitor none`）
+
+ドライバを問わず共通の未実装事項（jailer相当の分離、digest検証、Stop/Restart、
+`user_data`の機密情報対応、本物のcloud-initでの動作確認）は
+[VirtualMachine仕様](virtual-machine.md)「この実装がカバーしないもの（共通）」参照。
