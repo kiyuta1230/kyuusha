@@ -6,7 +6,8 @@ OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプ�
 
 想定ユーザーは「OpenStackを導入するには大きすぎる（運用チームを抱えられない）が、VMwareは
 一定規模からライセンスコストが厳しくなる」という間に落ちる企業。想定スケールはハイパーバイザー
-〜500台・VM〜1〜2万台・テナント(KaaSクラスタ)〜500。詳しい設計判断の経緯は
+〜500台・VM〜1〜2万台・テナント(KaaSクラスタ)〜500。**なぜOpenStackではなくこの設計なのか**は
+[docs/why-not-openstack.md](docs/why-not-openstack.md)に、詳しい設計判断の経緯は
 [docs/architecture.md](docs/architecture.md)を参照。
 
 > **ステータス**: 開発中。ストレージ以外の主要機能（VM/Hypervisor/Image/Network/CLI/認証認可/
@@ -64,6 +65,7 @@ protoの生成コードは`gen/go/`にコミット済み（`buf generate`の再�
 
 ## ドキュメント
 
+- [docs/why-not-openstack.md](docs/why-not-openstack.md) — なぜOpenStackではなくこの設計か（比較表）
 - [docs/architecture.md](docs/architecture.md) — 設計判断の経緯・議論・トレードオフ
 - [docs/specs/](docs/specs/README.md) — 完成した機能単位の現状仕様
 - [docs/open-questions.md](docs/open-questions.md) — 未決事項
