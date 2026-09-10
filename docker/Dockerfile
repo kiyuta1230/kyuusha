@@ -50,12 +50,19 @@ ENTRYPOINT ["/usr/local/bin/api-gateway", "-jwt-public-key=/etc/kyuusha/jwt-dev.
 FROM ubuntu:24.04 AS compute-agent
 # Firecracker release binary (statically linked, no glibc dependency) --
 # real driver_hint=FIRECRACKER VM boot, see internal/compute-agent/fcvmm.
+# jailer ships in the exact same release tarball -- every driver_hint=
+# FIRECRACKER VM is exec'd through it (chroot + uid/gid privilege drop;
+# Firecracker's own built-in seccomp filter applies regardless of jailer,
+# on by default unless -no-seccomp -- see docs/specs/firecracker-boot.md
+# "jailer"), unlike driver_hint=QEMU, for which an equivalent is still an
+# open question (docs/open-questions.md).
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && ARCH="$(uname -m)" && FC_VERSION=v1.16.1 \
     && curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-${ARCH}.tgz" \
        | tar -xz \
     && mv "release-${FC_VERSION}-${ARCH}/firecracker-${FC_VERSION}-${ARCH}" /usr/local/bin/firecracker \
-    && chmod +x /usr/local/bin/firecracker \
+    && mv "release-${FC_VERSION}-${ARCH}/jailer-${FC_VERSION}-${ARCH}" /usr/local/bin/jailer \
+    && chmod +x /usr/local/bin/firecracker /usr/local/bin/jailer \
     && rm -rf "release-${FC_VERSION}-${ARCH}" \
     && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

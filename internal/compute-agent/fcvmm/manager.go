@@ -1,9 +1,9 @@
-// Package fcvmm runs real Firecracker microVMs for compute-agent. This is
-// the first real (non-stub) VMM integration: it deliberately skips jailer's
-// chroot/namespace/uid-drop process isolation -- see
-// docs/specs/firecracker-boot.md for the scope this covers and what it
-// doesn't. It does apply host-side cgroup v2 CPU/memory limits (see
-// internal/compute-agent/cgroup) derived directly from spec.vcpu/
+// Package fcvmm runs real Firecracker microVMs for compute-agent, always
+// via jailer -- see docs/specs/firecracker-boot.md "jailer" for the scope
+// this covers and what it doesn't (network/PID namespace isolation and
+// per-VM unique uid/gid are deliberately deferred; every VM's jail shares
+// one fixed uid/gid). It does apply host-side cgroup v2 CPU/memory limits
+// (see internal/compute-agent/cgroup) derived directly from spec.vcpu/
 // spec.memory_mb, best-effort: a host/container without usable cgroup v2
 // delegation just boots the VM unconstrained, same as before this existed.
 // Manager implements internal/compute-agent/vmm.VMM -- see qemuvmm for the
@@ -86,10 +86,25 @@ type Manager struct {
 	// their URL -- shared read-only across all VMs booted from the same
 	// Image. Defaults to /var/lib/kyuusha/fc-cache.
 	CacheDir string
-	// RunDir holds one subdirectory per running VM (its writable rootfs
-	// copy, API socket, config, and console log). Defaults to
-	// /var/lib/kyuusha/fc-run.
+	// RunDir holds one subdirectory per running VM (its console log --
+	// everything else Firecracker itself touches now lives inside the
+	// jail, see JailChrootBaseDir). Defaults to /var/lib/kyuusha/fc-run.
 	RunDir string
+	// JailerBinPath is the jailer binary to exec instead of Firecracker
+	// directly. Defaults to "jailer" (resolved via $PATH) if empty.
+	JailerBinPath string
+	// JailChrootBaseDir is jailer's --chroot-base-dir: it creates
+	// <JailChrootBaseDir>/<firecracker binary's basename>/<vm_id>/root for
+	// each VM. Defaults to /var/lib/kyuusha/fc-jail.
+	JailChrootBaseDir string
+	// JailUID/JailGID are the uid/gid jailer drops privileges to before
+	// exec'ing Firecracker inside the jail -- shared across every VM this
+	// Manager boots (see the package doc comment for why per-VM unique
+	// uid/gid is deferred). Zero (Go's zero value, and also root -- refusing
+	// it is deliberate, not just a sentinel) means "use the default".
+	// Default: 123/100, arbitrary but matching jailer's own docs.md example.
+	JailUID uint32
+	JailGID uint32
 
 	downloadMu sync.Mutex // serializes ensureCached; fine at playground scale
 
@@ -127,6 +142,34 @@ func (m *Manager) runDir() string {
 	return "/var/lib/kyuusha/fc-run"
 }
 
+func (m *Manager) jailerBinPath() string {
+	if m.JailerBinPath != "" {
+		return m.JailerBinPath
+	}
+	return "jailer"
+}
+
+func (m *Manager) jailChrootBaseDir() string {
+	if m.JailChrootBaseDir != "" {
+		return m.JailChrootBaseDir
+	}
+	return "/var/lib/kyuusha/fc-jail"
+}
+
+func (m *Manager) jailUID() uint32 {
+	if m.JailUID != 0 {
+		return m.JailUID
+	}
+	return 123
+}
+
+func (m *Manager) jailGID() uint32 {
+	if m.JailGID != 0 {
+		return m.JailGID
+	}
+	return 100
+}
+
 // ConsoleLogPath is where Boot(vmID's spec) captures Firecracker's stdout/
 // stderr (== the guest's serial console, ttyS0) -- see docs/specs/
 // firecracker-boot.md. It exists only once Boot has actually run for this
@@ -153,21 +196,45 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		return fmt.Errorf("fcvmm: fetch rootfs: %w", err)
 	}
 
+	// console.log is the only thing this VM still keeps outside the jail --
+	// it's just an *os.File handed to the child as fd 1/2 before jailer
+	// chroots, which chroot/pivot_root doesn't affect (already-open file
+	// descriptors survive it).
 	vmDir := filepath.Join(m.runDir(), spec.VMID)
 	if err := os.MkdirAll(vmDir, 0o755); err != nil {
 		return fmt.Errorf("fcvmm: create run dir: %w", err)
+	}
+
+	fcExecPath, err := resolveExecPath(m.binPath())
+	if err != nil {
+		return fmt.Errorf("fcvmm: resolve firecracker binary: %w", err)
+	}
+	jailUID, jailGID := m.jailUID(), m.jailGID()
+	chroot := jailChrootDir(m.jailChrootBaseDir(), fcExecPath, spec.VMID)
+	if err := os.MkdirAll(chroot, 0o755); err != nil {
+		return fmt.Errorf("fcvmm: create jail chroot dir: %w", err)
+	}
+
+	// jailer copies the Firecracker binary itself in, but nothing else --
+	// every resource Firecracker's config references has to already be
+	// inside the chroot before jailer ever runs (see docs/specs/
+	// firecracker-boot.md "jailer"), referenced by its chroot-relative
+	// path, not this container's own view of it.
+	kernelInJail := filepath.Join(chroot, "kernel")
+	if err := placeReadOnlyResource(kernelPath, kernelInJail); err != nil {
+		return fmt.Errorf("fcvmm: place kernel in jail: %w", err)
 	}
 
 	// Firecracker opens its root drive read-write and writes guest changes
 	// straight into the backing file, so every VM needs its own copy -- the
 	// cached master is shared read-only across VMs booted from the same
 	// Image.
-	rootfsCopy := filepath.Join(vmDir, "rootfs.ext4")
-	if err := copyFile(masterRootfs, rootfsCopy); err != nil {
-		return fmt.Errorf("fcvmm: copy rootfs: %w", err)
+	rootfsCopy := filepath.Join(chroot, "rootfs.ext4")
+	if err := placeWritableResource(masterRootfs, rootfsCopy, jailUID, jailGID); err != nil {
+		return fmt.Errorf("fcvmm: copy rootfs into jail: %w", err)
 	}
 
-	apiSock := filepath.Join(vmDir, "api.sock")
+	apiSock := filepath.Join(chroot, "api.sock")
 	_ = os.Remove(apiSock) // stale socket from a previous failed attempt, if any; Firecracker refuses to start if this exists
 
 	// Wire every real network interface before Firecracker starts (it opens
@@ -226,24 +293,32 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		bootArgs = bootArgs + " " + strings.Join(netArgs, " ")
 	}
 
+	// PathOnHost below is, despite the name (Firecracker's own API field),
+	// the path *as seen from inside the jail* -- Firecracker reads
+	// config.json only after jailer has already chrooted it, so every path
+	// here is chroot-relative, not this container's own view of it.
 	drives := []fcDrive{{
 		DriveID:      "rootfs",
-		PathOnHost:   rootfsCopy,
+		PathOnHost:   "/rootfs.ext4",
 		IsRootDevice: true,
 		IsReadOnly:   false,
 	}}
 	if spec.UserData != "" {
-		seedISO, err := vmm.BuildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
+		seedImg, err := vmm.BuildSeedDisk(chroot, spec.VMID, spec.UserData, spec.NetworkInterfaces)
 		if err != nil {
 			cleanup()
 			return fmt.Errorf("fcvmm: build seed disk: %w", err)
+		}
+		if err := os.Chmod(seedImg, 0o644); err != nil {
+			cleanup()
+			return fmt.Errorf("fcvmm: chmod seed disk: %w", err)
 		}
 		// Read-only, non-root: the guest sees this as a second
 		// virtio-block device (typically /dev/vdb) alongside its root
 		// disk, exactly what cloud-init's NoCloud datasource expects.
 		drives = append(drives, fcDrive{
 			DriveID:      "seed",
-			PathOnHost:   seedISO,
+			PathOnHost:   "/" + filepath.Base(seedImg),
 			IsRootDevice: false,
 			IsReadOnly:   true,
 		})
@@ -253,7 +328,10 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// reasoning as taps: the device must exist before a drive can
 	// reference it) -- see internal/compute-agent/iscsi and
 	// docs/specs/volume.md. Each becomes its own read-write virtio-block
-	// drive alongside rootfs/seed.
+	// drive alongside rootfs/seed. mknod'd into the jail rather than
+	// hard-linked: a real block device special file and the jail's chroot
+	// tree are on different filesystems (see mknodDeviceLike's doc
+	// comment), so a hard link can't span them.
 	for i, v := range spec.Volumes {
 		devPath, err := iscsi.Attach(ctx, v.TargetIQN, v.TargetPortal)
 		if err != nil {
@@ -261,21 +339,26 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 			return fmt.Errorf("fcvmm: attach volume %d (%s): %w", i, v.AttachmentID, err)
 		}
 		attachedVolumes = append(attachedVolumes, v)
+		volName := fmt.Sprintf("vol%d", i)
+		if err := mknodDeviceLike(devPath, filepath.Join(chroot, volName), jailUID, jailGID); err != nil {
+			cleanup()
+			return fmt.Errorf("fcvmm: mknod volume %d (%s) into jail: %w", i, v.AttachmentID, err)
+		}
 		drives = append(drives, fcDrive{
-			DriveID:      fmt.Sprintf("vol%d", i),
-			PathOnHost:   devPath,
+			DriveID:      volName,
+			PathOnHost:   "/" + volName,
 			IsRootDevice: false,
 			IsReadOnly:   false,
 		})
 	}
 
 	cfg := fcConfig{
-		BootSource:        fcBootSource{KernelImagePath: kernelPath, BootArgs: bootArgs},
+		BootSource:        fcBootSource{KernelImagePath: "/kernel", BootArgs: bootArgs},
 		Drives:            drives,
 		MachineConfig:     fcMachineConfig{VcpuCount: spec.VCPU, MemSizeMib: spec.MemoryMB},
 		NetworkInterfaces: fcNetIfaces,
 	}
-	configPath := filepath.Join(vmDir, "config.json")
+	configPath := filepath.Join(chroot, "config.json")
 	configBytes, err := json.Marshal(cfg)
 	if err != nil {
 		cleanup()
@@ -296,12 +379,31 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// Not exec.CommandContext(ctx, ...): ctx here is the NATS message
 	// handler's context, which is done long before this VM's guest is --
 	// the process's lifetime is managed explicitly via m.running/Stop.
-	cmd := exec.Command(m.binPath(), "--api-sock", apiSock, "--config-file", configPath)
+	//
+	// No --netns/--new-pid-ns: this VM's tap devices (see netsetup.Wire
+	// above) live in this compute-agent container's own network namespace,
+	// and iSCSI's initiator side (internal/compute-agent/iscsi) already has
+	// its own nsenter dance into the *host's* -- adding a third namespace
+	// into the mix here is deliberately out of scope for now (see the
+	// package doc comment). jailer execs straight into Firecracker without
+	// forking when neither flag is given, so cmd.Process.Pid below still
+	// names the Firecracker process itself, same as it did calling it
+	// directly.
+	cmd := exec.Command(m.jailerBinPath(),
+		"--id", spec.VMID,
+		"--exec-file", fcExecPath,
+		"--uid", fmt.Sprint(jailUID),
+		"--gid", fmt.Sprint(jailGID),
+		"--chroot-base-dir", m.jailChrootBaseDir(),
+		"--",
+		"--api-sock", "/"+filepath.Base(apiSock),
+		"--config-file", "/"+filepath.Base(configPath),
+	)
 	cmd.Stdout = consoleLog
 	cmd.Stderr = consoleLog
 	if err := cmd.Start(); err != nil {
 		cleanup()
-		return fmt.Errorf("fcvmm: start firecracker: %w", err)
+		return fmt.Errorf("fcvmm: start jailer: %w", err)
 	}
 
 	// Best-effort: a host/container without usable cgroup v2 delegation just
@@ -420,23 +522,6 @@ func (m *Manager) ensureCached(ctx context.Context, rawURL string) (string, erro
 		return "", err
 	}
 	return dest, nil
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 type fcBootSource struct {

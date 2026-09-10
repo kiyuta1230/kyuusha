@@ -44,9 +44,13 @@ func main() {
 	heartbeat := flag.Duration("heartbeat", 5*time.Second, "heartbeat interval")
 	metricsAddr := flag.String("metrics-addr", ":9094", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
-	fcBin := flag.String("firecracker-bin", "firecracker", "firecracker binary to exec for driver_hint=FIRECRACKER VMs")
+	fcBin := flag.String("firecracker-bin", "firecracker", "firecracker binary jailer execs into for driver_hint=FIRECRACKER VMs")
 	fcCacheDir := flag.String("fc-cache-dir", "/var/lib/kyuusha/fc-cache", "directory caching downloaded kernel/rootfs artifacts, shared across VMs")
-	fcRunDir := flag.String("fc-run-dir", "/var/lib/kyuusha/fc-run", "directory holding each running VM's writable rootfs copy, API socket, and console log")
+	fcRunDir := flag.String("fc-run-dir", "/var/lib/kyuusha/fc-run", "directory holding each running VM's console log (everything else lives inside its jail, see -fc-jail-chroot-base-dir)")
+	fcJailerBin := flag.String("fc-jailer-bin", "jailer", "jailer binary every driver_hint=FIRECRACKER VM is exec'd through -- see docs/specs/firecracker-boot.md \"jailer\"")
+	fcJailChrootBaseDir := flag.String("fc-jail-chroot-base-dir", "/var/lib/kyuusha/fc-jail", "jailer's --chroot-base-dir: parent of <exec-file-basename>/<vm_id>/root for every VM's jail")
+	fcJailUID := flag.Uint("fc-jail-uid", 123, "uid jailer drops privileges to before exec'ing Firecracker inside its jail -- shared by every VM this compute-agent boots (see the fcvmm package doc comment)")
+	fcJailGID := flag.Uint("fc-jail-gid", 100, "gid jailer drops privileges to before exec'ing Firecracker inside its jail -- shared by every VM this compute-agent boots (see the fcvmm package doc comment)")
 	qemuBin := flag.String("qemu-bin", "qemu-system-x86_64", "qemu-system binary to exec for driver_hint=QEMU VMs (see internal/compute-agent/qemuvmm)")
 	qemuCacheDir := flag.String("qemu-cache-dir", "/var/lib/kyuusha/qemu-cache", "directory caching downloaded kernel/rootfs artifacts for driver_hint=QEMU VMs")
 	qemuRunDir := flag.String("qemu-run-dir", "/var/lib/kyuusha/qemu-run", "directory holding each running driver_hint=QEMU VM's writable rootfs copy and console log")
@@ -161,9 +165,13 @@ func main() {
 		SupportedDrivers:    strings.Split(*drivers, ","),
 		Drivers: map[string]vmm.VMM{
 			string(compute.VmmDriverFirecracker): &fcvmm.Manager{
-				BinPath:  *fcBin,
-				CacheDir: *fcCacheDir,
-				RunDir:   *fcRunDir,
+				BinPath:           *fcBin,
+				CacheDir:          *fcCacheDir,
+				RunDir:            *fcRunDir,
+				JailerBinPath:     *fcJailerBin,
+				JailChrootBaseDir: *fcJailChrootBaseDir,
+				JailUID:           uint32(*fcJailUID),
+				JailGID:           uint32(*fcJailGID),
 			},
 			string(compute.VmmDriverQEMU): &qemuvmm.Manager{
 				BinPath:  *qemuBin,
