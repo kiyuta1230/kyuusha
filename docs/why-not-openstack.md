@@ -20,6 +20,7 @@ kyuushaではこう解決した」という判断を1箇所にまとめた比較
 |---|---|---|
 | VMのライフサイクル前提 | Novaは「VMが最終利用者に長期間ペットとして使われる」前提でライブマイグレーション等フル機能を持つ | KaaSクラスタへハイパーバイザーを供給するだけに機能を絞る。ハイパーバイザー障害の復旧はKaaS層(Pod再スケジュール)が担い、ライブマイグレーションは不要（[architecture.md](architecture.md)「コンセプト」参照） |
 | ディスク永続化 | Cinderがスナップショット/レプリケーション等フル機能を持つ | 最小限。ルートディスクはイメージからのephemeral/copy-on-write、永続化が要る場合のみVolumeをattach（[architecture.md](architecture.md)「スコープ縮小の判断」参照） |
+| ブロックストレージのバックエンド抽象化 | Cinderは80以上のベンダー固有ドライバがそれぞれボリュームの作成/削除/エクスポートまでフルCRUDを実装——バックエンドが増えるたびに実装コストが増える分裂したエコシステムになっている | ボリュームの作成/削除/host接続の確立は一切しない。「プロトコル（iSCSI/NVMe-oF/NFS）を抽象化の境界に置き、既存のボリュームを参照して"紐つける"だけ」に責務を縮小——実際の作成・接続はオペレータの仕事（ちょうど`/dev/kvm`と同じ、ホスト側の前提条件）。ベンダー固有ドライバが要らないので、Cinder的なドライバエコシステムそのものを持つ必要がない（[architecture.md](architecture.md)「訂正: 責務の境界を『プロビジョニング＋export』から『参照＋接続』へ縮小」、[Volume仕様](specs/volume.md)参照） |
 | テナントネットワーク | Neutronがoverlay per-tenant/router/floating IP/per-tenant security policyまでフル機能を持つ | 最小限。テナント＝KaaSクラスタ単位のL2/L3分離のみ。クラスタ内Pod間の分離はCNI/NetworkPolicy層(KaaS側)の責務（同上） |
 | APIエンドポイント | Keystoneのサービスカタログ方式——各コンポーネントが個別のpublic URLを持ち、クライアントがカタログを見て使い分ける | `api-gateway`という単一の公開エンドポイントに集約。認証・認可の実施点も1箇所（backendは無認証）。K8s API server/BFFパターンと同じ思想（[認証・認可仕様](specs/authn-authz.md)参照） |
 | API設計 | REST、命令的CRUD+ポーリング、プロジェクトごとに規約バラバラ | 宣言的API（spec/status分離、Watch、resource_versionによる楽観的並行性制御）。ただしKubernetes CRD/Aggregated API Serverそのものにはしない（[architecture.md](architecture.md)「スコープ縮小の判断」参照） |
@@ -37,7 +38,7 @@ kyuushaではこう解決した」という判断を1箇所にまとめた比較
 
 - 赤の他人同士が同居する公開マルチテナントクラウド（テナント分離の脅威モデルが違う）
 - 数千ハイパーバイザー・10万VM超のような1桁上のスケール（スケジューラのキャッシュ/インデックス戦略、DBシャーディング等、別の前提の見直しが要る）
-- OpenStackが持つドライバ/プラグインの広いエコシステム（ストレージバックエンド、ネットワークバックエンド等の選択肢の広さ）
+- OpenStackが持つドライバ/プラグインの広いエコシステム（ネットワークバックエンド等の選択肢の広さ）。ただしブロックストレージについては、広いドライバエコシステムが要らないこと自体が上表の設計判断——非ゴールというより意図的な回避
 
 詳しい経緯・議論・トレードオフは[docs/architecture.md](architecture.md)を、現状の
 機能単位の仕様は[docs/specs/](specs/README.md)を参照。
