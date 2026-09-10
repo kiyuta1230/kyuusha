@@ -46,31 +46,71 @@ Create時バリデーションとも既に存在するが、どのドライバ�
 パスを`qemuvmm`に足す（chroot/ファームウェア起動を含む、既存のkernel/rootfs直接ブートとは
 別の実装になる見込み）という判断で今は先送りしている。
 
-## block-storageバックエンドの責務境界の作り直し（実装は既存機能の解体を伴う）
+## block-storageバックエンドの責務境界の作り直し（解決済み・実装済み、2026-09-10）
 
-2026-09-10に、`docs/architecture.md`「block-storageのバックエンド抽象化」節を、
+2026-09-10、`docs/architecture.md`「block-storageのバックエンド抽象化」節を、
 「厩舎がプロビジョニング＋export＋接続まで全部やる」という当初の`StorageBackend`
 設計から、「プロビジョニングとHypervisor単位の接続確立（iSCSI/NVMe-oFログイン、
 NFSマウント）は運用者側の責務、厩舎は参照メタデータ＋排他制御＋スケジューリング
-制約＋起動時のデバイス/ファイル発見のみを持つ」という縮小した境界へ書き換えた
-（詳細はそちらを参照）。iSCSI/NVMe-oF/NFSは「Hypervisor単位の事前接続＋接続済み
-セッション内の1リソースを参照するだけ」という統一モデルに収める方針。
+制約＋起動時のデバイス/ファイル発見のみを持つ」という縮小した境界へ書き換え、
+実装した（commit `92d359b`。`storage-agent`・`internal/compute-agent/iscsi`は
+完全に削除、新しい`internal/compute-agent/volumeref`が発見ロジックのみ担う）。
+iSCSI/NVMe-oF/NFSは「Hypervisor単位の事前接続＋接続済みセッション内の1リソースを
+参照するだけ」という統一モデルに収まった。`playground/scenario.sh`で実VM経由の
+永続化を実際に確認済み（詳細は`docs/specs/volume.md`参照）。
 
-**この結果、2026-09-09に出荷した`storage-agent`（ZFS+iSCSI専任サービス、
-`CreateVolume`/`DeleteVolume`/`ExportVolume`/`UnexportVolume`RPC）は、
-新しい責務境界の下では不要になる見込み。** ただしまだ以下が未確定:
+## Hypervisor↔ストレージバックエンドの接続確立をkyuusha側で自動化すべきか（未着手、下記参照）
 
-- `Volume`/`VolumeAttachment`の新しいスキーマ（プロトコル別識別子——ブロック系は
-  デバイスのシリアル/WWN、NFSはファイルパス——をどう持たせるか）
-- Hypervisorの「ストレージ接続の申告」をどんなリソース/フィールドとして表現するか
-  （`-drivers`と同じ発想だが、複数の接続を同時に申告できる必要がありそう）
-- 今の`storage-agent`・`internal/compute-agent/iscsi`（`nsenter --net`の実装込み）
-  をどこまで解体するか、どこまで（発見ロジックとして）再利用できるか
-- iSCSI/NVMe-oFを「1セッションに複数LUN/namespace」という形へ実際に作り直せるかの
-  ライブ検証（今の実装は1Volume=1ターゲットの専用セッション方式）
+上記の実装直後、ユーザーから: 「登録されたボリューム接続情報に従って、
+ハイパーバイザが自動でマウントなりしておくことはできるよね？」という指摘。
+現状（上記で実装した設計）は、Hypervisor自身が`-storage-connections=
+name[:local_path]`フラグで「もう接続済み」と自己申告する方式——新しい
+ストレージバックエンドを1つ追加するたびに、そのゾーンの既存Hypervisor**全台**の
+フラグを書き換えて再起動する必要があり、運用コストがHypervisor数×ストレージ
+バックエンド数のオーダーで増え続ける。
 
-ユーザーとの合意: (a) `docs/architecture.md`へ設計変更を反映（完了）→
-(b) 上記の未確定事項を詰める → (c) 実装、の順で進める。
+**実例との比較で分かったこと**: OpenStack Cinder（nova-compute側のos-brick）も
+Kubernetes CSIも、「プロビジョニング」（ボリュームの作成/削除、バックエンド固有）は
+外部化・プラガブルにする一方、「ホスト接続確立」（iSCSIログイン、NFSマウントに
+相当する`NodeStageVolume`）はオーケストレータ自身が自動でやる——kyuushaが
+直前に決めた「接続確立も含めて完全に外部化する」という境界は、これらの実例より
+一歩ドライブ過ぎている可能性がある。プロトコル標準の接続確立をkyuusha側へ
+戻すのは、直前の設計の後退ではなく、実例に近づける精緻化と捉えられる。
+
+**頻度分析（ユーザーと確認済み）**: 自動化する場合、Hypervisor側の作業は
+「ホスト初期セットアップ時（iscsiadm/nvme-cliインストール、認証情報配置）」の
+1回きりになり、その後は:
+- 新しいストレージバックエンドが増えたとき → そのゾーンの各Hypervisorが
+  自動で初回接続する（人手不要になる）
+- 既に接続済みのバックエンドの中でVolumeが増えるだけ → 接続作業は一切不要
+  （NFS/NVMe-oFは即座に見える。iSCSIだけ`iscsiadm --rescan`相当の軽い自動
+  再スキャンが要るかもしれないが、`volumeref.Resolve`内に隠蔽でき、人間の
+  作業は発生しない）
+
+**大まかな形（ユーザー提案、まだ詳細未確定）**: block-storageサービスに
+新しい`StorageBackend`（または`StorageConnection`）リソースを作り、実接続情報
+（iSCSIならポータルIP:port+IQN、NVMe-oFならdiscoveryアドレス+NQN、NFSなら
+サーバー:ベースパス、どのゾーンから到達可能か）を持たせる。ストレージ管理者が
+Subnetと同じ粒度（1ストレージノードにつき1回）で登録する。compute-agentがそれを
+Watchし、自分のゾーンに該当するものへ自動接続する。
+
+**まだ決まっていないこと（ユーザーの意向で一旦保留、着手しない）**:
+- 接続確立のタイミング: eager（Hypervisor起動時に自ゾーンの全StorageBackendへ
+  先回り接続）か、lazy（実際にそのVolumeを使うVMがスケジュールされた瞬間だけ
+  接続）か
+- リソースの正式な形・名前（`StorageBackend`か`StorageConnection`か、
+  独立したCRUDリソースかそれ以外か）
+- スケジューリング時、Volumeのstorage_connectionを持たないゾーンのHypervisorを
+  除外するフィルタ（自動化する場合はほぼ必須になる——手動declare方式では
+  「起動はするが劣化する」で済んでいた部分）
+- `kyuusha volume create`のCLI verb見直し（ユーザー提案、まだ「かもね」レベル）
+  ——RPC名`Create`自体はKubernetesの`PersistentVolume`も同じ「参照のみ・
+  それでもcreateと呼ぶ」という前例があり、他リソースとの一貫性のため維持が
+  妥当そうだが、Cinderの`volume create`（実プロビジョニングする）との紛らわしさ
+  を避けるCLIエイリアス（`register`等）は検討の余地がある
+
+この節は設計討議の記録であって実装計画ではない——次に着手するときはまず
+上記の未決事項から詰める。
 
 ## QEMU用のjailer相当の隔離方式（自前実装 vs. libvirt）
 
