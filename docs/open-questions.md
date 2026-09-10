@@ -46,6 +46,39 @@ Create時バリデーションとも既に存在するが、どのドライバ�
 パスを`qemuvmm`に足す（chroot/ファームウェア起動を含む、既存のkernel/rootfs直接ブートとは
 別の実装になる見込み）という判断で今は先送りしている。
 
+## QEMU用のjailer相当の隔離方式（自前実装 vs. libvirt）
+
+2026-09に`driver_hint=FIRECRACKER`のVMをjailer（chroot + uid/gid権限降格）でラップした
+（[Firecracker起動仕様](specs/firecracker-boot.md)「jailer」、docs/architecture.md
+「Firecracker: jailerとtapデバイス」参照）。jailer自体はFirecracker専用ツールで
+QEMUをラップできないため、`driver_hint=QEMU`にはまだ同等の隔離が無いまま。
+
+検討した選択肢:
+
+1. **libvirt経由でQEMUを使う**: OpenStack Novaも採用している現実的な方式。SELinux/
+   AppArmorによる自動閉じ込め（svirt）、非root実行、PCI/VFIOパススルーの成熟した
+   サポートを一括で得られる。ただし: (a) libvirtd自体が新しい重量級の依存になり、
+   今の「Goから`exec.Command`で直接VMMを起動する」というシンプルな設計から離れる
+   （tap配線・console.log・QMP周りもlibvirtのdomain modelへ作り直しになる）、
+   (b) このプロジェクト全体の「運用コストの重い既製品を避ける」判断（Ceph不採用、
+   Kafkaの代わりに軽量NATS選択等）と路線がズレる、(c) このセッションだけでも
+   ZFSのmount namespace問題・iSCSIのnetwork namespace問題等、コンテナ環境特有の
+   深いバグを何度も踏んでおり、libvirt+SELinux/AppArmorをこの環境に入れると
+   同種の沼にハマるリスクが十分ある
+2. **自前でchroot/namespace/uid-drop相当を実装する**: Goの`syscall.SysProcAttr`
+   （`Chroot`/`Cloneflags`/`Credential`）で`fork+exec`境界にカーネルへ直接処理させる
+   経路があり、比較的安全に実装できる。ただしseccompフィルタは標準ライブラリに無く、
+   自前でBPFを組む/libseccompバインディングを使うしかない——ここは緩すぎても
+   厳しすぎても事故る、一番リスクの高い部分。Firecracker側は実際にAWS製の
+   `jailer`にそのまま乗ることでこのリスクを避けられたが、QEMU向けの同等の
+   既製品は無い
+
+ユーザーの反応: 自前実装の方向に傾いているが未確定。libvirt依存については
+「そこまでクリティカルには感じていない」とのコメントあり——完全に却下したわけ
+ではなく、判断を先送りしている状態。もし自前実装を選ぶ場合は、chroot/namespace/
+uid-drop部分（低リスク）とseccomp部分（高リスク、最初は入れない/様子見という
+選択肢もある）を分けて考える方針で一致している。
+
 ## ロールベースの細かい認可（RPCメソッド・リソース種別単位）をやるべきか
 
 現状`role`クレームは実質`admin`かそれ以外かの2値でしか使われておらず、「このロールは

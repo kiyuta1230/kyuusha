@@ -1537,9 +1537,15 @@ QEMU側に相当する隔離機構はそもそも用意していない。）
 
 - 各VirtualMachineの Firecracker プロセスは**jailerでラップする**（chroot + cgroup + namespace分離）。
   同一ホストに複数テナントのVirtualMachineが同居する前提上、プロセス分離は必須と判断——
-  このうちcgroupによるCPU/メモリ制限は**実装済み**（次項）。chroot/namespace分離と
-  特権降格（uid/gid drop）は**未実装**のまま（実装は今もcompute-agentコンテナの権限のまま
-  動く。[Firecracker起動仕様](specs/firecracker-boot.md)参照）
+  このうちcgroupによるCPU/メモリ制限は**実装済み**（次項）。chroot + 特権降格（uid/gid drop）
+  も**実装済み**（実際にFirecracker公式の`jailer`バイナリでラップする。
+  [Firecracker起動仕様](specs/firecracker-boot.md)「jailer」参照）——ただしnamespace分離
+  （`--netns`/`--new-pid-ns`）は意図的に見送っている。この2つのVMのtap配線・iSCSI
+  イニシエータ側の`nsenter`（[Volume仕様](specs/volume.md)参照）がどちらもcompute-agent
+  コンテナ自身のnamespaceに依存しており、jailerへさらに別のnamespaceを重ねる設計は
+  当面のスコープ外とした。uid/gidも全VM共有の固定値（VMごとに一意な割当は将来の改善）。
+  QEMU側（`driver_hint=QEMU`）にはまだ同等の隔離が無く、別の未決事項として残っている
+  （docs/open-questions.md参照）
 - cgroupのCPU/メモリ制限（`internal/compute-agent/cgroup`）は`spec.vcpu`/`spec.memory_mb`の
   値からそのまま設定する——**実装済み**。cgroup v2の unified hierarchy のみ対応し、host/
   コンテナ側でcgroup delegationが使えない環境ではエラーをログに残すだけで、VMは無制限

@@ -102,10 +102,14 @@ fcvmm/qemuvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`
   有効化が恒久的にEBUSYで失敗する（ライブ検証で実際に踏んだ実バグ）
 - VM終了時（VMMプロセスが実際に`wait(2)`され切った後）に`kyuusha/<VM ID>`ディレクトリを
   削除する。空にならないうちの削除はカーネルに拒否されるため、短い間隔でリトライする
-- jailerが本来提供する隔離（chroot/namespace/uid drop）そのものではない——同一ホスト上の
-  他プロセスからのファイルシステム上の可視性やnamespace分離は一切変わらず、あくまで
-  CPU/メモリの消費量に上限を設けるだけ（docs/architecture.md「Firecracker: jailerとtap
-  デバイス」参照）
+- cgroupそのものは、jailerが本来提供する隔離（chroot/namespace/uid drop）ではない
+  ——同一ホスト上の他プロセスからのファイルシステム上の可視性やnamespace分離は
+  一切変わらず、あくまでCPU/メモリの消費量に上限を設けるだけ（docs/architecture.md
+  「Firecracker: jailerとtapデバイス」参照）。`driver_hint=FIRECRACKER`は実際に
+  jailerを使ってchroot+uid/gid降格を得ている（cgroupとは別の、fcvmm固有の仕組み
+  ——[Firecracker起動仕様](firecracker-boot.md)「jailer」参照）が、
+  `driver_hint=QEMU`にはまだ同等のものがない（QEMU用の隔離方式自体が
+  docs/open-questions.mdの未決事項）
 
 ## 削除
 
@@ -177,8 +181,10 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
   `docs/architecture.md`「UserData注入」の「機密情報の扱いに関する注記」参照）
 - 本物のcloud-initを動かすゲストでの動作確認（playgroundの最小Alpineゲストには
   cloud-init自体が入っていないため、seed diskが正しく届くことまでしか確認していない）
-- jailer本来のchroot/namespace分離・特権降格（cgroupによるCPU/メモリ制限のみ実装済み、
-  上記「cgroupリソース制限」参照。本番運用前に必須、docs/architecture.md参照）
 
-ドライバ固有の未実装事項（例: Firecrackerのクロスhypervisorネットワーク疎通、QEMUの
-PCI passthrough/vhost-user）はそれぞれの仕様書の「この実装がカバーしないもの」を参照。
+jailer相当のプロセス隔離はもう「共通の未実装事項」ではない——`driver_hint=FIRECRACKER`
+は実装済み（[Firecracker起動仕様](firecracker-boot.md)「jailer」参照）、
+`driver_hint=QEMU`は未実装のまま（docs/open-questions.md参照）と、ドライバごとに
+状況が分かれている。その他のドライバ固有の未実装事項（例: Firecrackerのクロス
+hypervisorネットワーク疎通、QEMUのPCI passthrough/vhost-user）も、それぞれの
+仕様書の「この実装がカバーしないもの」を参照。
