@@ -46,6 +46,32 @@ Create時バリデーションとも既に存在するが、どのドライバ�
 パスを`qemuvmm`に足す（chroot/ファームウェア起動を含む、既存のkernel/rootfs直接ブートとは
 別の実装になる見込み）という判断で今は先送りしている。
 
+## block-storageバックエンドの責務境界の作り直し（実装は既存機能の解体を伴う）
+
+2026-09-10に、`docs/architecture.md`「block-storageのバックエンド抽象化」節を、
+「厩舎がプロビジョニング＋export＋接続まで全部やる」という当初の`StorageBackend`
+設計から、「プロビジョニングとHypervisor単位の接続確立（iSCSI/NVMe-oFログイン、
+NFSマウント）は運用者側の責務、厩舎は参照メタデータ＋排他制御＋スケジューリング
+制約＋起動時のデバイス/ファイル発見のみを持つ」という縮小した境界へ書き換えた
+（詳細はそちらを参照）。iSCSI/NVMe-oF/NFSは「Hypervisor単位の事前接続＋接続済み
+セッション内の1リソースを参照するだけ」という統一モデルに収める方針。
+
+**この結果、2026-09-09に出荷した`storage-agent`（ZFS+iSCSI専任サービス、
+`CreateVolume`/`DeleteVolume`/`ExportVolume`/`UnexportVolume`RPC）は、
+新しい責務境界の下では不要になる見込み。** ただしまだ以下が未確定:
+
+- `Volume`/`VolumeAttachment`の新しいスキーマ（プロトコル別識別子——ブロック系は
+  デバイスのシリアル/WWN、NFSはファイルパス——をどう持たせるか）
+- Hypervisorの「ストレージ接続の申告」をどんなリソース/フィールドとして表現するか
+  （`-drivers`と同じ発想だが、複数の接続を同時に申告できる必要がありそう）
+- 今の`storage-agent`・`internal/compute-agent/iscsi`（`nsenter --net`の実装込み）
+  をどこまで解体するか、どこまで（発見ロジックとして）再利用できるか
+- iSCSI/NVMe-oFを「1セッションに複数LUN/namespace」という形へ実際に作り直せるかの
+  ライブ検証（今の実装は1Volume=1ターゲットの専用セッション方式）
+
+ユーザーとの合意: (a) `docs/architecture.md`へ設計変更を反映（完了）→
+(b) 上記の未確定事項を詰める → (c) 実装、の順で進める。
+
 ## QEMU用のjailer相当の隔離方式（自前実装 vs. libvirt）
 
 2026-09に`driver_hint=FIRECRACKER`のVMをjailer（chroot + uid/gid権限降格）でラップした
