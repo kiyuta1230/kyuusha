@@ -22,7 +22,7 @@ func TestService_VolumeAttachmentAttachesWhenVolumeIsFree(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	vol, err := svc.CreateVolume(ctx, "tenant-a", "data-1", VolumeSpec{SizeGB: 10})
+	vol, err := svc.CreateVolume(ctx, "tenant-a", "data-1", testVolumeSpec(10))
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestService_ExclusiveAttachBlocksSecondAttachmentThenRetrySucceeds(t *testi
 	defer cancel()
 	svc := newTestService(t, ctx)
 
-	vol, err := svc.CreateVolume(ctx, "tenant-a", "data-1", VolumeSpec{SizeGB: 10})
+	vol, err := svc.CreateVolume(ctx, "tenant-a", "data-1", testVolumeSpec(10))
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)
 	}

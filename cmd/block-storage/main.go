@@ -2,10 +2,10 @@
 // VolumeService and VolumeAttachmentService gRPC APIs, plus the periodic
 // sweep that retries VolumeAttachments left Pending by the exclusive-attach
 // constraint. See docs/architecture.md "block-storageサービスのリソース:
-// Volume / VolumeAttachment" and docs/specs/volume.md. The real
-// StorageBackend is internal/storage-agent (cmd/storage-agent), a single
-// static node dialed via -storage-agent-addr -- no registration or
-// multi-node scheduling in v1.
+// Volume / VolumeAttachment" and docs/specs/volume.md. kyuusha doesn't
+// provision or export storage itself (see docs/architecture.md「訂正: 責務の
+// 境界を...」) -- there is no dedicated storage-node service to dial;
+// Volume/VolumeAttachment are pure reference metadata.
 package main
 
 import (
@@ -29,13 +29,11 @@ import (
 
 	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
-	storageagentv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/storageagent/v1"
 )
 
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":8085", "address to serve VolumeService/VolumeAttachmentService on")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
-	storageAgentAddr := flag.String("storage-agent-addr", "localhost:8092", "storage-agent address (the real StorageBackend -- see internal/storage-agent, cmd/storage-agent)")
 	metricsAddr := flag.String("metrics-addr", ":9097", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers and used when dialing other services (see internal/mtls)")
@@ -93,17 +91,7 @@ func main() {
 	}
 	defer identityConn.Close()
 
-	storageAgentConn, err := grpc.NewClient(*storageAgentAddr,
-		grpc.WithTransportCredentials(clientCreds),
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-	)
-	if err != nil {
-		slog.Error("dial storage-agent", "addr", *storageAgentAddr, "err", err)
-		os.Exit(1)
-	}
-	defer storageAgentConn.Close()
-
-	svc, err := blockstorage.NewService(ctx, identityv1.NewTenantServiceClient(identityConn), storageagentv1.NewStorageBackendServiceClient(storageAgentConn))
+	svc, err := blockstorage.NewService(ctx, identityv1.NewTenantServiceClient(identityConn))
 	if err != nil {
 		slog.Error("new block-storage service", "err", err)
 		os.Exit(1)

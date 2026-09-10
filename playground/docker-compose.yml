@@ -28,15 +28,6 @@
 # and observability-metrics.md.
 name: kyuusha-playground
 
-# A fixed subnet, so storage-agent can be given a static IP (see its
-# comment below for why) instead of Docker's usual dynamically-assigned
-# one.
-networks:
-  default:
-    ipam:
-      config:
-        - subnet: 172.30.0.0/16
-
 services:
   nats:
     image: nats:2-alpine
@@ -172,73 +163,14 @@ services:
     command:
       - "-grpc-addr=:8085"
       - "-identity-addr=identity:8082"
-      - "-storage-agent-addr=storage-agent:8092"
       - "-metrics-addr=:9097"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
       identity:
         condition: service_started
-      storage-agent:
-        condition: service_started
       jaeger:
         condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
-
-  # The real StorageBackend (internal/storage-agent, docs/specs/volume.md):
-  # a ZFS pool (sparse-file-backed here) exported over iSCSI. Deliberately
-  # its own container/process, not folded into block-storage -- it's the
-  # "storage node" compute-agent's iSCSI initiator dials directly and
-  # separately from block-storage's own control-plane traffic, matching
-  # docs/architecture.md's "専用ストレージノード" design (and unlike
-  # block-storage, which is never itself in the actual VM I/O path).
-  storage-agent:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      target: storage-agent
-    privileged: true # ZFS (/dev/zfs) + LIO (configfs) kernel interfaces -- same "cgroupfs is read-only without this" reasoning as compute-agent's own privileged:true, see docs/specs/firecracker-boot.md
-    pid: host # `zpool create` genuinely fails from inside a container's own mount namespace (confirmed live via strace -- ZFS_IOC_POOL_CREATE itself returns ENOENT); internal/storage-agent works around this by nsenter-ing into PID 1's mount namespace for every zpool/zfs/targetcli call, which needs PID 1 to actually be the *host's* init -- see internal/storage-agent's package doc comment.
-    # ${PWD}/playground/storage-agent-data as BOTH the bind mount's source
-    # (host path) and target (container path), deliberately identical:
-    # nsenter'd commands run in the host's mount namespace, so the backing
-    # file's path string has to already mean the same file there too, not
-    # just from this container's own view. scenario.sh always invokes
-    # `docker compose` from the repo root, so ${PWD} here is that root.
-    volumes:
-      - ${PWD}/playground/storage-agent-data:${PWD}/playground/storage-agent-data
-    # A static IP, not the `storage-agent` DNS name Docker's embedded
-    # resolver would otherwise give it: compute-agent's iSCSI initiator
-    # (internal/compute-agent/iscsi) has to run in the *host's* network
-    # namespace (see its package doc comment for why), where Docker's
-    # per-compose-network DNS isn't reachable at all -- but a container's
-    # bridge IP is always directly routable from the host, so a fixed one
-    # sidesteps needing a resolve-then-nsenter dance.
-    networks:
-      default:
-        ipv4_address: 172.30.0.10
-    command:
-      - "-grpc-addr=:8092"
-      - "-metrics-addr=:9098"
-      - "-otlp-endpoint=jaeger:4317"
-      # Not the standard iSCSI port 3260: found live that this dev sandbox's
-      # firewall silently drops (refuses) *any* listener on 3260, even a
-      # plain userspace socket over loopback -- nothing to do with LIO or
-      # this code. ExportVolume creates the real LIO network portal on
-      # whatever port is named here (see internal/storage-agent), so this
-      # just moves it off the blocked one; a real deployment would use its
-      # own reachable host:port (cmd/storage-agent/main.go's actual
-      # default is storage-agent:3260, a real DNS name -- this static-IP
-      # requirement is specific to this playground's compute-agent
-      # containers needing the host's network namespace, not to
-      # storage-agent itself).
-      - "-portal-host=172.30.0.10:33260"
-      - "-zpool-backing-file=${PWD}/playground/storage-agent-data/zpool-backing.img"
-    depends_on:
-      jaeger:
-        condition: service_started
-    # No ports exposed to the host: iSCSI (3260) and gRPC (8092) are both
-    # only ever reached from inside the compose network (compute-agent and
-    # block-storage respectively).
 
   api-gateway:
     build:
@@ -284,13 +216,12 @@ services:
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-1"
       - "-drivers=FIRECRACKER,QEMU"
+      - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
-    # /dev/kvm and /dev/net/tun no longer need individual `devices:`
-    # entries now that the whole host /dev is bind-mounted below (needed
-    # anyway for a different reason -- see that volume's own comment); the
-    # container is already fully privileged, so it has access to whatever
-    # host device nodes it can see regardless of how they got there.
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
     cap_add:
       - NET_ADMIN # tap device + bridge creation, see internal/compute-agent/netsetup
     # cgroupfs is mounted read-only for any non-privileged container
@@ -300,23 +231,20 @@ services:
     # full-root process with /dev/kvm/NET_ADMIN, so this is a small marginal
     # increase for playground purposes only.
     privileged: true
-    # So that `nsenter --net=/proc/1/ns/net` (internal/compute-agent/iscsi,
-    # docker/compute-agent-entrypoint.sh) via /proc/1 actually reaches the
-    # *host's* network namespace, not just this container's own: a real
-    # iSCSI login's kernel session creation (a NETLINK_ISCSI socket)
-    # doesn't work from inside a container's own network namespace at all
-    # -- see internal/compute-agent/iscsi's package doc comment for the
-    # full story.
-    pid: host
-    # A successful iSCSI login creates a real host-level block device node
-    # (/dev/disk/by-path/...), not a container-local one (see
-    # internal/compute-agent/iscsi's package doc comment) -- bind-mounting
-    # the host's actual /dev is what makes that node (and /dev/kvm,
-    # /dev/net/tun, previously listed individually under `devices:`) show
-    # up inside this container at all, so Firecracker/QEMU (running inside
-    # it) can open it as a drive.
+    # /mnt/kyuusha-volumes is this Hypervisor's one "playground-nfs" storage
+    # connection (see the -storage-connections flag above and
+    # internal/compute-agent/volumeref): a plain host directory standing in
+    # for a real NFS export, bind-mounted identically into all three
+    # compute-agent containers -- exactly NFS's own "every Hypervisor
+    # mounts the same thing" shape (see docs/architecture.md「訂正: 責務の境界
+    # を...」), just without an actual NFS server. Files under it must
+    # already exist (and be world-read-write, since kyuusha never chowns a
+    # bind-mounted Volume file -- see fcvmm/jailer.go's placeVolumeLike)
+    # before any Volume referencing them is created -- scenario.sh plays
+    # the "operator" role that would do this for real, per this design's
+    # own responsibility boundary.
     volumes:
-      - /dev:/dev
+      - ${PWD}/playground/volume-data:/mnt/kyuusha-volumes
     depends_on:
       nats:
         condition: service_healthy
@@ -333,13 +261,12 @@ services:
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-2"
       - "-drivers=FIRECRACKER,QEMU"
+      - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
-    # /dev/kvm and /dev/net/tun no longer need individual `devices:`
-    # entries now that the whole host /dev is bind-mounted below (needed
-    # anyway for a different reason -- see that volume's own comment); the
-    # container is already fully privileged, so it has access to whatever
-    # host device nodes it can see regardless of how they got there.
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
     cap_add:
       - NET_ADMIN # tap device + bridge creation, see internal/compute-agent/netsetup
     # cgroupfs is mounted read-only for any non-privileged container
@@ -349,23 +276,20 @@ services:
     # full-root process with /dev/kvm/NET_ADMIN, so this is a small marginal
     # increase for playground purposes only.
     privileged: true
-    # So that `nsenter --net=/proc/1/ns/net` (internal/compute-agent/iscsi,
-    # docker/compute-agent-entrypoint.sh) via /proc/1 actually reaches the
-    # *host's* network namespace, not just this container's own: a real
-    # iSCSI login's kernel session creation (a NETLINK_ISCSI socket)
-    # doesn't work from inside a container's own network namespace at all
-    # -- see internal/compute-agent/iscsi's package doc comment for the
-    # full story.
-    pid: host
-    # A successful iSCSI login creates a real host-level block device node
-    # (/dev/disk/by-path/...), not a container-local one (see
-    # internal/compute-agent/iscsi's package doc comment) -- bind-mounting
-    # the host's actual /dev is what makes that node (and /dev/kvm,
-    # /dev/net/tun, previously listed individually under `devices:`) show
-    # up inside this container at all, so Firecracker/QEMU (running inside
-    # it) can open it as a drive.
+    # /mnt/kyuusha-volumes is this Hypervisor's one "playground-nfs" storage
+    # connection (see the -storage-connections flag above and
+    # internal/compute-agent/volumeref): a plain host directory standing in
+    # for a real NFS export, bind-mounted identically into all three
+    # compute-agent containers -- exactly NFS's own "every Hypervisor
+    # mounts the same thing" shape (see docs/architecture.md「訂正: 責務の境界
+    # を...」), just without an actual NFS server. Files under it must
+    # already exist (and be world-read-write, since kyuusha never chowns a
+    # bind-mounted Volume file -- see fcvmm/jailer.go's placeVolumeLike)
+    # before any Volume referencing them is created -- scenario.sh plays
+    # the "operator" role that would do this for real, per this design's
+    # own responsibility boundary.
     volumes:
-      - /dev:/dev
+      - ${PWD}/playground/volume-data:/mnt/kyuusha-volumes
     depends_on:
       nats:
         condition: service_healthy
@@ -382,13 +306,12 @@ services:
       - "-compute-addr=compute:8081"
       - "-hypervisor=hypervisor-3"
       - "-drivers=FIRECRACKER,QEMU"
+      - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
-    # /dev/kvm and /dev/net/tun no longer need individual `devices:`
-    # entries now that the whole host /dev is bind-mounted below (needed
-    # anyway for a different reason -- see that volume's own comment); the
-    # container is already fully privileged, so it has access to whatever
-    # host device nodes it can see regardless of how they got there.
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
     cap_add:
       - NET_ADMIN # tap device + bridge creation, see internal/compute-agent/netsetup
     # cgroupfs is mounted read-only for any non-privileged container
@@ -398,23 +321,20 @@ services:
     # full-root process with /dev/kvm/NET_ADMIN, so this is a small marginal
     # increase for playground purposes only.
     privileged: true
-    # So that `nsenter --net=/proc/1/ns/net` (internal/compute-agent/iscsi,
-    # docker/compute-agent-entrypoint.sh) via /proc/1 actually reaches the
-    # *host's* network namespace, not just this container's own: a real
-    # iSCSI login's kernel session creation (a NETLINK_ISCSI socket)
-    # doesn't work from inside a container's own network namespace at all
-    # -- see internal/compute-agent/iscsi's package doc comment for the
-    # full story.
-    pid: host
-    # A successful iSCSI login creates a real host-level block device node
-    # (/dev/disk/by-path/...), not a container-local one (see
-    # internal/compute-agent/iscsi's package doc comment) -- bind-mounting
-    # the host's actual /dev is what makes that node (and /dev/kvm,
-    # /dev/net/tun, previously listed individually under `devices:`) show
-    # up inside this container at all, so Firecracker/QEMU (running inside
-    # it) can open it as a drive.
+    # /mnt/kyuusha-volumes is this Hypervisor's one "playground-nfs" storage
+    # connection (see the -storage-connections flag above and
+    # internal/compute-agent/volumeref): a plain host directory standing in
+    # for a real NFS export, bind-mounted identically into all three
+    # compute-agent containers -- exactly NFS's own "every Hypervisor
+    # mounts the same thing" shape (see docs/architecture.md「訂正: 責務の境界
+    # を...」), just without an actual NFS server. Files under it must
+    # already exist (and be world-read-write, since kyuusha never chowns a
+    # bind-mounted Volume file -- see fcvmm/jailer.go's placeVolumeLike)
+    # before any Volume referencing them is created -- scenario.sh plays
+    # the "operator" role that would do this for real, per this design's
+    # own responsibility boundary.
     volumes:
-      - /dev:/dev
+      - ${PWD}/playground/volume-data:/mnt/kyuusha-volumes
     depends_on:
       nats:
         condition: service_healthy

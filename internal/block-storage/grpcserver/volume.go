@@ -98,11 +98,47 @@ func toStatus(err error) error {
 }
 
 func fromVolumeSpec(s *blockstoragev1.VolumeSpec) blockstorage.VolumeSpec {
-	return blockstorage.VolumeSpec{SizeGB: s.GetSizeGb()}
+	return blockstorage.VolumeSpec{
+		SizeGB:            s.GetSizeGb(),
+		Protocol:          fromStorageProtocol(s.GetProtocol()),
+		StorageConnection: s.GetStorageConnection(),
+		Identifier:        s.GetIdentifier(),
+	}
 }
 
 func toVolumeSpec(s blockstorage.VolumeSpec) *blockstoragev1.VolumeSpec {
-	return &blockstoragev1.VolumeSpec{SizeGb: s.SizeGB}
+	return &blockstoragev1.VolumeSpec{
+		SizeGb:            s.SizeGB,
+		Protocol:          toStorageProtocol(s.Protocol),
+		StorageConnection: s.StorageConnection,
+		Identifier:        s.Identifier,
+	}
+}
+
+func fromStorageProtocol(p blockstoragev1.StorageProtocol) blockstorage.StorageProtocol {
+	switch p {
+	case blockstoragev1.StorageProtocol_ISCSI:
+		return blockstorage.StorageProtocolISCSI
+	case blockstoragev1.StorageProtocol_NVME_OF:
+		return blockstorage.StorageProtocolNVMeOF
+	case blockstoragev1.StorageProtocol_NFS:
+		return blockstorage.StorageProtocolNFS
+	default:
+		return ""
+	}
+}
+
+func toStorageProtocol(p blockstorage.StorageProtocol) blockstoragev1.StorageProtocol {
+	switch p {
+	case blockstorage.StorageProtocolISCSI:
+		return blockstoragev1.StorageProtocol_ISCSI
+	case blockstorage.StorageProtocolNVMeOF:
+		return blockstoragev1.StorageProtocol_NVME_OF
+	case blockstorage.StorageProtocolNFS:
+		return blockstoragev1.StorageProtocol_NFS
+	default:
+		return blockstoragev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED
+	}
 }
 
 func toVolumeStatusProto(st blockstorage.VolumeStatus) *blockstoragev1.VolumeStatus {

@@ -83,18 +83,24 @@ type CreateCommand struct {
 	// the VolumeAttachments it just created (see
 	// internal/compute/volume.go's createVolumeAttachments) -- same
 	// reasoning as Interfaces: compute-agent has no block-storage service
-	// client of its own, so the already-exported iSCSI connection info
-	// each attachment needs (internal/compute-agent/iscsi) travels here.
+	// client of its own, so what internal/compute-agent/volumeref needs to
+	// find the already-visible device/file on this host (kyuusha never
+	// logs in, mounts, or exports anything -- see docs/architecture.md
+	// 「訂正: 責務の境界を...」) travels here.
 	Volumes []VolumeAttachInfo `json:"volumes,omitempty"`
 }
 
-// VolumeAttachInfo is one VM Volume attachment, already resolved to a real
-// iSCSI export by block-storage's StorageBackend (storage-agent) --
-// TargetIQN/TargetPortal come straight from VolumeAttachmentStatus.
+// VolumeAttachInfo is one VM Volume attachment: the protocol/connection/
+// identifier straight off the Volume's own spec (see
+// internal/compute/volume.go's createVolumeAttachments), letting
+// internal/compute-agent/volumeref find the already-visible device/file on
+// the target host without kyuusha itself ever logging in, mounting, or
+// exporting anything.
 type VolumeAttachInfo struct {
-	AttachmentID string `json:"attachment_id"`
-	TargetIQN    string `json:"target_iqn"`
-	TargetPortal string `json:"target_portal"`
+	AttachmentID      string `json:"attachment_id"`
+	Protocol          string `json:"protocol"`
+	StorageConnection string `json:"storage_connection"`
+	Identifier        string `json:"identifier"`
 }
 
 // NetworkInterfaceInfo is one VM network attachment, already resolved to

@@ -170,7 +170,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 		// the ones that actually reached Attached (see createVolumeAttachments'
 		// doc) -- this VM boots without whichever didn't, rather than being
 		// blocked on them (attach-before-boot only, see docs/specs/volume.md).
-		volInfos, volRefs, err := createVolumeAttachments(ctx, r.svc.volumeAttachmentClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.Volumes)
+		volInfos, volRefs, err := createVolumeAttachments(ctx, r.svc.volumeClient, r.svc.volumeAttachmentClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.Volumes)
 		if err != nil {
 			slog.Error("provision: create volume attachments failed", "vm_id", vm.Meta.ID, "err", err)
 			return

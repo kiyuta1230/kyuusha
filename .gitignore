@@ -2,7 +2,9 @@
 *.test
 *.out
 
-# storage-agent's ZFS pool backing file (playground/docker-compose.yml
-# bind-mounts this at an identical host/container path -- see
-# internal/storage-agent's package doc comment for why).
-/playground/storage-agent-data/
+# The playground's "playground-nfs" storage connection fixture -- a plain
+# host directory standing in for a real NFS export, bind-mounted into every
+# compute-agent container (see playground/docker-compose.yml and
+# internal/compute-agent/volumeref). scenario.sh writes real Volume backing
+# files into it at runtime; nothing here should be committed.
+/playground/volume-data/

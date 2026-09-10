@@ -49,11 +49,18 @@ func volumeCreate(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	name := fs.String("name", "", "volume name (idempotency key)")
-	sizeGB := fs.Int64("size-gb", 0, "volume size in GB (required)")
+	sizeGB := fs.Int64("size-gb", 0, "volume size in GB, self-reported for quota only -- kyuusha never provisions storage, so it can't verify this (required)")
+	protocol := fs.String("protocol", "", "protocol this Volume is reachable over: ISCSI, NVME_OF, or NFS (required)")
+	storageConnection := fs.String("storage-connection", "", "name of the Hypervisor-side storage connection this Volume lives behind -- must match a StorageConnection a Hypervisor declared at registration (required)")
+	identifier := fs.String("identifier", "", "protocol-specific identifier: for ISCSI/NVME_OF, the block device's stable name under /dev/disk/by-id/; for NFS, a path relative to the connection's mount point (required)")
 	fs.Parse(args)
 
-	if *tenant == "" || *sizeGB == 0 {
-		fatal("-tenant and -size-gb are required")
+	if *tenant == "" || *sizeGB == 0 || *protocol == "" || *storageConnection == "" || *identifier == "" {
+		fatal("-tenant, -size-gb, -protocol, -storage-connection, and -identifier are required")
+	}
+	protoVal, ok := blockstoragev1.StorageProtocol_value[*protocol]
+	if !ok {
+		fatal("-protocol must be ISCSI, NVME_OF, or NFS, got %q", *protocol)
 	}
 
 	client := dialVolumes(*addr)
@@ -62,7 +69,12 @@ func volumeCreate(args []string) {
 	vol, err := client.Create(ctx, &blockstoragev1.CreateVolumeRequest{
 		TenantId: *tenant,
 		Name:     *name,
-		Spec:     &blockstoragev1.VolumeSpec{SizeGb: *sizeGB},
+		Spec: &blockstoragev1.VolumeSpec{
+			SizeGb:            *sizeGB,
+			Protocol:          blockstoragev1.StorageProtocol(protoVal),
+			StorageConnection: *storageConnection,
+			Identifier:        *identifier,
+		},
 	})
 	if err != nil {
 		fatal("create: %v", err)
@@ -168,7 +180,8 @@ func volumeDelete(args []string) {
 }
 
 func printVolume(vol *blockstoragev1.Volume) {
-	fmt.Printf("id=%s name=%s tenant=%s size_gb=%d phase=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s size_gb=%d protocol=%s storage_connection=%s identifier=%s phase=%s rv=%d\n",
 		vol.GetMeta().GetId(), vol.GetMeta().GetName(), vol.GetMeta().GetTenantId(),
-		vol.GetSpec().GetSizeGb(), vol.GetStatus().GetPhase(), vol.GetMeta().GetResourceVersion())
+		vol.GetSpec().GetSizeGb(), vol.GetSpec().GetProtocol(), vol.GetSpec().GetStorageConnection(), vol.GetSpec().GetIdentifier(),
+		vol.GetStatus().GetPhase(), vol.GetMeta().GetResourceVersion())
 }

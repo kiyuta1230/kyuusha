@@ -264,8 +264,13 @@ func (f *FakeVolumeClient) Get(ctx context.Context, req *blockstoragev1.GetVolum
 		return nil, status.Error(codes.NotFound, "volume: not found")
 	}
 	return &blockstoragev1.Volume{
-		Meta:   &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
-		Spec:   &blockstoragev1.VolumeSpec{SizeGb: 10},
+		Meta: &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
+		Spec: &blockstoragev1.VolumeSpec{
+			SizeGb:            10,
+			Protocol:          blockstoragev1.StorageProtocol_ISCSI,
+			StorageConnection: "test-connection",
+			Identifier:        "test-serial",
+		},
 		Status: &blockstoragev1.VolumeStatus{Phase: f.phase()},
 	}, nil
 }
@@ -288,15 +293,15 @@ func (f *FakeVolumeClient) Watch(context.Context, *blockstoragev1.WatchVolumesRe
 
 // FakeVolumeAttachmentClient is a minimal
 // blockstoragev1.VolumeAttachmentServiceClient for tests: Create always
-// succeeds Attached with a plausible fake iSCSI target (so
-// createVolumeAttachments' full VolumeAttachInfo path is exercised, not
-// just the Pending/no-export short-circuit); every other method panics
-// since compute.Service never calls them.
+// succeeds Attached (so createVolumeAttachments' full VolumeAttachInfo path
+// -- which now fetches the Volume itself via FakeVolumeClient for its
+// protocol/connection/identifier, VolumeAttachmentStatus no longer carrying
+// any of that -- is exercised, not just the Pending short-circuit); every
+// other method panics since compute.Service never calls them.
 type FakeVolumeAttachmentClient struct {
 	// Pending, if true, simulates the exclusive-attach constraint blocking
 	// this attachment (see docs/architecture.md「具体的な排他制御」): Create
-	// still succeeds, but the returned VolumeAttachment has no iSCSI target
-	// yet.
+	// still succeeds, but the returned VolumeAttachment stays Pending.
 	Pending bool
 }
 
@@ -309,13 +314,9 @@ func (f *FakeVolumeAttachmentClient) Create(ctx context.Context, req *blockstora
 		}, nil
 	}
 	return &blockstoragev1.VolumeAttachment{
-		Meta: &resourcev1.ObjectMeta{Id: "volattach-" + req.GetName(), TenantId: req.GetTenantId()},
-		Spec: req.GetSpec(),
-		Status: &blockstoragev1.VolumeAttachmentStatus{
-			Phase:        "Attached",
-			TargetIqn:    "iqn.2026-09.io.kyuusha.fake:" + req.GetSpec().GetVolumeId(),
-			TargetPortal: "fake-storage-agent:3260",
-		},
+		Meta:   &resourcev1.ObjectMeta{Id: "volattach-" + req.GetName(), TenantId: req.GetTenantId()},
+		Spec:   req.GetSpec(),
+		Status: &blockstoragev1.VolumeAttachmentStatus{Phase: "Attached"},
 	}, nil
 }
 

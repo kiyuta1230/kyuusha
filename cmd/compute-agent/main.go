@@ -27,6 +27,7 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/fcvmm"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/qemuvmm"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/volumeref"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
@@ -57,6 +58,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented when dialing compute (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
+	storageConnections := flag.String("storage-connections", "", "comma-separated storage connections this host already has established, name[:local_path][,name[:local_path]...] -- an iSCSI/NVMe-oF session already logged in (no local_path needed: Volumes on it are discovered under /dev/disk/by-id/) or an NFS export already mounted (local_path is its mount point). Sent to compute at self-registration and used locally by internal/compute-agent/volumeref to find each Volume's already-visible device/file at boot time; kyuusha never logs in, mounts, or exports anything itself (see docs/architecture.md「訂正: 責務の境界を...」)")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -75,6 +77,8 @@ func main() {
 		os.Exit(1)
 	}
 	bootstrapToken := strings.TrimSpace(string(bootstrapTokenBytes))
+
+	connections, connectionProtos := parseStorageConnections(*storageConnections)
 
 	// Must happen before any Firecracker process is ever forked (Boot's
 	// exec.Command): a child forked while this process still resides
@@ -163,20 +167,23 @@ func main() {
 		AllocatableVCPU:     int32(*vcpu),
 		AllocatableMemoryMB: *memoryMB,
 		SupportedDrivers:    strings.Split(*drivers, ","),
+		StorageConnections:  connectionProtos,
 		Drivers: map[string]vmm.VMM{
 			string(compute.VmmDriverFirecracker): &fcvmm.Manager{
-				BinPath:           *fcBin,
-				CacheDir:          *fcCacheDir,
-				RunDir:            *fcRunDir,
-				JailerBinPath:     *fcJailerBin,
-				JailChrootBaseDir: *fcJailChrootBaseDir,
-				JailUID:           uint32(*fcJailUID),
-				JailGID:           uint32(*fcJailGID),
+				BinPath:            *fcBin,
+				CacheDir:           *fcCacheDir,
+				RunDir:             *fcRunDir,
+				JailerBinPath:      *fcJailerBin,
+				JailChrootBaseDir:  *fcJailChrootBaseDir,
+				JailUID:            uint32(*fcJailUID),
+				JailGID:            uint32(*fcJailGID),
+				StorageConnections: connections,
 			},
 			string(compute.VmmDriverQEMU): &qemuvmm.Manager{
-				BinPath:  *qemuBin,
-				CacheDir: *qemuCacheDir,
-				RunDir:   *qemuRunDir,
+				BinPath:            *qemuBin,
+				CacheDir:           *qemuCacheDir,
+				RunDir:             *qemuRunDir,
+				StorageConnections: connections,
 			},
 		},
 	}
@@ -185,4 +192,31 @@ func main() {
 		slog.Error("agent stopped", "err", err)
 		os.Exit(1)
 	}
+}
+
+// parseStorageConnections turns -storage-connections' name[:local_path]
+// entries into both forms this compute-agent needs: a local
+// volumeref.Connections map (consumed by fcvmm/qemuvmm's Managers at VM
+// boot time) and the []*computev1.StorageConnection this same information
+// travels as in RegisterHypervisorRequest. Both are built from a single
+// flag value, rather than kept as two separately-specified inputs, since
+// they describe the exact same fact (what this host already has
+// connected) from two different callers' point of view.
+func parseStorageConnections(raw string) (volumeref.Connections, []*computev1.StorageConnection) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	conns := make(volumeref.Connections)
+	var protos []*computev1.StorageConnection
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, localPath, _ := strings.Cut(entry, ":")
+		conns[name] = localPath
+		protos = append(protos, &computev1.StorageConnection{Name: name, LocalPath: localPath})
+	}
+	return conns, protos
 }

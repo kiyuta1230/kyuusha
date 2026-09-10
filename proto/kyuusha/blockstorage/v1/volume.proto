@@ -11,17 +11,42 @@ import "kyuusha/resource/v1/common.proto";
 // Volume is a standalone resource that can outlive any single VirtualMachine;
 // VolumeAttachment represents the (temporary) binding between one Volume and
 // one VirtualMachine -- the same "make the binding itself a resource"
-// pattern as network's NetworkInterface. See docs/specs/volume.md for what
-// this first pass does and doesn't cover (there is no real StorageBackend
-// yet -- see docs/architecture.md "block-storageのバックエンド抽象化" for the
-// eventual ZFS/NVMe-oF design).
+// pattern as network's NetworkInterface.
+//
+// kyuusha does not provision or export storage itself (see docs/architecture.md
+// "block-storageのバックエンド抽象化"「訂正: 責務の境界を...」): a Volume is a
+// *reference* to a block device or file that already exists and is already
+// reachable from whichever Hypervisors declared the matching
+// storage_connection at registration time (see docs/specs/volume.md). The
+// operator provisions and connects storage using whatever tooling fits their
+// backend (ZFS/Ceph/a SAN vendor's own API/a shared NFS export); kyuusha's
+// job starts at referencing and attaching what's already there.
+enum StorageProtocol {
+  STORAGE_PROTOCOL_UNSPECIFIED = 0;
+  ISCSI = 1;
+  NVME_OF = 2;
+  NFS = 3;
+}
 
 message VolumeSpec {
-  int64 size_gb = 1;
+  int64 size_gb = 1; // self-reported (kyuusha never provisions, so it can't verify this) -- used for quota only
+  StorageProtocol protocol = 2;
+  // storage_connection names the Hypervisor-side connection this Volume
+  // lives behind -- must match a name a Hypervisor declared in its own
+  // -storage-connections at registration (docs/specs/hypervisor-bootstrap.md).
+  // Plain string match, not its own CRUD resource (this system's expected
+  // volume/connection count is small enough that the extra indirection
+  // isn't worth it yet).
+  string storage_connection = 3;
+  // identifier is protocol-specific: for ISCSI/NVME_OF, the block device's
+  // stable serial/WWN (as seen under /dev/disk/by-id/ once the Hypervisor's
+  // storage_connection session makes it visible); for NFS, a file path
+  // relative to wherever that Hypervisor mounted the connection.
+  string identifier = 4;
 }
 
 message VolumeStatus {
-  string phase = 1; // Pending(バックエンド確保中) / Ready / Deleting / Error
+  string phase = 1; // Ready（識別子の形式チェック＋quota判定が通れば即座） / Deleting / Error
   repeated kyuusha.resource.v1.Condition conditions = 2;
 }
 
@@ -90,12 +115,10 @@ message VolumeAttachmentSpec {
 }
 
 message VolumeAttachmentStatus {
-  string phase = 1; // Pending / Attaching / Attached / Detaching / Deleting / Error
+  string phase = 1; // Pending(排他制御待ち) / Attached / Deleting / Error
   repeated kyuusha.resource.v1.Condition conditions = 2;
   string device_path = 3; // compute-agent側でのローカルデバイスパス（まだ報告経路が無く常に空。既知の未実装事項）
   string hypervisor = 4;  // まだ空（VolumeAttachmentSpecにhypervisorを持たせていないため。既知の未実装事項）
-  string target_iqn = 5;    // Attached時のみ非空。実StorageBackend（storage-agent）がexportしたiSCSI target IQN
-  string target_portal = 6; // Attached時のみ非空。"host:port"形式のiSCSI portalアドレス
 }
 
 message VolumeAttachment {

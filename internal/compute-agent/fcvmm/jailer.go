@@ -91,3 +91,39 @@ func mknodDeviceLike(src, dst string, jailUID, jailGID uint32) error {
 	}
 	return os.Chown(dst, int(jailUID), int(jailGID))
 }
+
+// placeVolumeLike makes src -- an already-resolved Volume path from
+// internal/compute-agent/volumeref, either a block device (ISCSI/NVME_OF)
+// or a regular file inside an already-mounted NFS export -- visible at dst
+// inside the jail, in whichever way keeps the guest's writes landing on
+// the real backing store rather than a jail-local copy (persistence is the
+// entire point of a Volume, unlike the throwaway rootfs copy
+// placeWritableResource makes). mounted reports whether dst is now a bind
+// mount the caller must unmount on teardown (mknodDeviceLike's block
+// device special file needs no such cleanup: removing it removes only the
+// special file, never the real device behind it).
+//
+// Unlike mknodDeviceLike, the bind-mount path does NOT chown dst: a bind
+// mount is the same inode as src, so chowning it would chown the real file
+// on the NFS server too. The jail's uid/gid must already be able to
+// read/write it -- kyuusha doesn't provision or export this file, so it
+// isn't kyuusha's place to change its permissions either (see
+// docs/architecture.md「訂正: 責務の境界を...」).
+func placeVolumeLike(src, dst string, jailUID, jailGID uint32) (mounted bool, err error) {
+	var st syscall.Stat_t
+	if err := syscall.Stat(src, &st); err != nil {
+		return false, fmt.Errorf("stat %s: %w", src, err)
+	}
+	if st.Mode&syscall.S_IFMT == syscall.S_IFBLK {
+		return false, mknodDeviceLike(src, dst, jailUID, jailGID)
+	}
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return false, fmt.Errorf("create bind-mount target %s: %w", dst, err)
+	}
+	f.Close()
+	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
+		return false, fmt.Errorf("bind mount %s onto %s: %w", src, dst, err)
+	}
+	return true, nil
+}

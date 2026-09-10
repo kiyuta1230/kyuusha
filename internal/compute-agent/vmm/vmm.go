@@ -52,24 +52,26 @@ type BootSpec struct {
 	// meta-data and, if any NetworkInterfaces have an allocated IP,
 	// network-config.
 	UserData string
-	// Volumes are already-created, already-exported VolumeAttachments to
-	// attach as extra virtio-blk drives before boot (see
-	// internal/compute-agent/iscsi and docs/specs/volume.md) -- resolved
-	// the same "everything needed travels in the boot command, no separate
-	// service client" way as NetworkInterfaces. Attach-before-boot only:
-	// there is no hot-plug path for a Volume requested after the VM is
-	// already Running.
+	// Volumes are already-created VolumeAttachments to attach as extra
+	// virtio-blk drives before boot (see internal/compute-agent/volumeref
+	// and docs/specs/volume.md) -- resolved the same "everything needed
+	// travels in the boot command, no separate service client" way as
+	// NetworkInterfaces. Attach-before-boot only: there is no hot-plug path
+	// for a Volume requested after the VM is already Running.
 	Volumes []VolumeAttachInfo
 }
 
-// VolumeAttachInfo is one already-resolved Volume attachment: the iSCSI
-// connection info block-storage's real StorageBackend (storage-agent)
-// returned when exporting it. agent.go builds these from
-// compute.CreateCommand.Volumes.
+// VolumeAttachInfo is one already-resolved Volume attachment: the
+// protocol/connection/identifier a Volume's spec carries, letting
+// internal/compute-agent/volumeref find the already-visible device/file on
+// this host without kyuusha itself ever logging in, mounting, or
+// exporting anything (see docs/architecture.md「訂正: 責務の境界を...」).
+// agent.go builds these from compute.CreateCommand.Volumes.
 type VolumeAttachInfo struct {
-	AttachmentID string
-	TargetIQN    string
-	TargetPortal string
+	AttachmentID      string
+	Protocol          string
+	StorageConnection string
+	Identifier        string
 }
 
 // NetIface is one already-resolved network attachment Boot should wire for

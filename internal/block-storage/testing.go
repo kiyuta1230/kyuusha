@@ -11,7 +11,6 @@ import (
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
-	storageagentv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/storageagent/v1"
 )
 
 // UnlimitedQuota is a QuotaSpec generous enough that quota enforcement never
@@ -72,32 +71,4 @@ func (f *FakeTenantClient) Delete(context.Context, *identityv1.DeleteTenantReque
 
 func (f *FakeTenantClient) Watch(context.Context, *identityv1.WatchTenantsRequest, ...grpc.CallOption) (identityv1.TenantService_WatchClient, error) {
 	panic("FakeTenantClient: Watch not implemented; blockstorage.Service never calls it")
-}
-
-// FakeStorageAgentClient is a minimal
-// storageagentv1.StorageBackendServiceClient for tests that don't want a
-// real ZFS/iSCSI storage-agent: every call trivially succeeds (no real
-// backend, so nothing to actually create/export), so tests can exercise
-// blockstorage.Service's own logic (Quota, exclusive-attach, idempotency)
-// without depending on host kernel features. ExportVolume returns a fixed,
-// clearly-fake IQN/portal.
-type FakeStorageAgentClient struct{}
-
-func (f *FakeStorageAgentClient) CreateVolume(context.Context, *storageagentv1.CreateVolumeRequest, ...grpc.CallOption) (*storageagentv1.CreateVolumeResponse, error) {
-	return &storageagentv1.CreateVolumeResponse{}, nil
-}
-
-func (f *FakeStorageAgentClient) DeleteVolume(context.Context, *storageagentv1.DeleteVolumeRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
-	return &emptypb.Empty{}, nil
-}
-
-func (f *FakeStorageAgentClient) ExportVolume(ctx context.Context, req *storageagentv1.ExportVolumeRequest, opts ...grpc.CallOption) (*storageagentv1.ExportVolumeResponse, error) {
-	return &storageagentv1.ExportVolumeResponse{
-		TargetIqn: "iqn.2026-09.io.kyuusha.fake:" + req.GetVolumeId(),
-		Portal:    "fake-storage-agent:3260",
-	}, nil
-}
-
-func (f *FakeStorageAgentClient) UnexportVolume(context.Context, *storageagentv1.UnexportVolumeRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
-	return &emptypb.Empty{}, nil
 }

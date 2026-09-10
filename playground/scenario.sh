@@ -16,6 +16,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The "playground-nfs" storage connection every compute-agent declares
+# (see playground/docker-compose.yml and internal/compute-agent/volumeref):
+# a plain host directory bind-mounted identically into all three
+# containers, standing in for a real NFS export. World-writable so the
+# Firecracker jail's non-root uid (fcvmm's JailUID) can write into any file
+# placed here -- kyuusha never chowns a Volume's backing file itself (see
+# fcvmm/jailer.go's placeVolumeLike), so whoever plays the "operator" role
+# (this script, here) has to set permissions that already work.
+mkdir -p playground/volume-data
+chmod 0777 playground/volume-data
+
 echo "==> starting docker compose stack"
 docker compose -f playground/docker-compose.yml up -d --build
 
@@ -287,8 +298,8 @@ if [ "$ranged_ip" != "10.0.6.10" ] && [ "$ranged_ip" != "10.0.6.11" ]; then
 fi
 echo "    confirmed: ip_address stayed inside the configured allocatable_ip_ranges"
 
-echo "==> creating a Volume (block-storage; real ZFS zvol via storage-agent -- see docs/specs/volume.md)"
-volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume -size-gb=10)"
+echo "==> creating a Volume (block-storage; a reference to an already-existing file/device, not something kyuusha provisions -- see docs/architecture.md「訂正: 責務の境界を...」. This one is attached only to an already-Running VM below, so its identifier is never actually resolved on a real host and doesn't need to exist)"
+volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume -size-gb=10 -protocol=NFS -storage-connection=playground-nfs -identifier=scenario-volume.img)"
 echo "$volume_line"
 volume="$(echo "$volume_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 if [ -z "$volume" ] || ! echo "$volume_line" | grep -q 'phase=Ready'; then
@@ -324,7 +335,7 @@ fi
 # vm-1's other resources are no longer needed by anything later in this script)
 
 echo "==> confirming Volume Create enforces max_volume_gb quota"
-if go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume-over-quota -size-gb=99999 2>/tmp/kyuusha-volume-quota-check.log; then
+if go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume-over-quota -size-gb=99999 -protocol=NFS -storage-connection=playground-nfs -identifier=scenario-volume-over-quota.img 2>/tmp/kyuusha-volume-quota-check.log; then
   echo "!! expected ResourceExhausted but Volume creation over quota succeeded" >&2
   exit 1
 fi
@@ -452,8 +463,13 @@ else
 fi
 go run ./cmd/kyuusha vm delete -addr=localhost:8080 -tenant="$tenant" -id="$cloudinit_vm_id" # frees its quota slot for the persistence test below
 
-echo "==> creating a Volume and a VM that attaches it at boot (-volumes, real StorageBackend end-to-end: ZFS zvol -> iSCSI export -> compute-agent initiator -> extra virtio-blk drive -- see docs/specs/volume.md)"
-persist_volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-persist-volume -size-gb=1)"
+echo "==> playing the 'operator' role: creating the real backing file a Volume will reference, directly in the playground-nfs fixture (kyuusha itself never provisions this -- see docs/architecture.md「訂正: 責務の境界を...」)"
+persist_identifier="scenario-persist-volume.img"
+truncate -s 1M "playground/volume-data/$persist_identifier"
+chmod 0666 "playground/volume-data/$persist_identifier"
+
+echo "==> creating a Volume referencing it and a VM that attaches it at boot (-volumes, real end-to-end: internal/compute-agent/volumeref finds the file already visible under the playground-nfs connection -> extra virtio-blk drive -- see docs/specs/volume.md)"
+persist_volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-persist-volume -size-gb=1 -protocol=NFS -storage-connection=playground-nfs -identifier="$persist_identifier")"
 echo "$persist_volume_line"
 persist_volume="$(echo "$persist_volume_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 if [ -z "$persist_volume" ] || ! echo "$persist_volume_line" | grep -q 'phase=Ready'; then
@@ -478,7 +494,7 @@ for _ in $(seq 1 15); do
 done
 marker="$(echo "$vma_console" | grep -o 'kyuusha: volume data written: [^ ]*' | cut -d' ' -f5)"
 if [ -z "$marker" ]; then
-  echo "!! could not confirm the Volume was really attached and written to (no /dev/kvm on this host, or storage-agent unreachable? try: kyuusha vm console -tenant=$tenant -id=$vma_id): $vma_console" >&2
+  echo "!! could not confirm the Volume was really attached and written to (no /dev/kvm on this host? try: kyuusha vm console -tenant=$tenant -id=$vma_id): $vma_console" >&2
 else
   echo "    confirmed: real Volume attached at boot and written to by the guest ($marker)"
   echo "==> deleting vm-persist-a and creating a second VM attaching the SAME Volume -- proving the data actually persists (the whole point of a Volume vs. ephemeral rootfs)"

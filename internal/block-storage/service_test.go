@@ -9,11 +9,24 @@ import (
 
 func newTestService(t *testing.T, ctx context.Context) *Service {
 	t.Helper()
-	svc, err := NewService(ctx, &FakeTenantClient{}, &FakeStorageAgentClient{})
+	svc, err := NewService(ctx, &FakeTenantClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	return svc
+}
+
+// testVolumeSpec fills in the fields every valid VolumeSpec needs beyond
+// size_gb (protocol/storage_connection/identifier) with placeholder values
+// -- kyuusha never actually dials anything backed by these in tests, since
+// CreateVolume no longer makes an external call at all.
+func testVolumeSpec(sizeGB int64) VolumeSpec {
+	return VolumeSpec{
+		SizeGB:            sizeGB,
+		Protocol:          StorageProtocolISCSI,
+		StorageConnection: "test-connection",
+		Identifier:        "test-serial",
+	}
 }
 
 // playground: drives the Service the way a real client would: Create,
@@ -31,7 +44,7 @@ func TestPlayground_VolumeLifecycleOverWatch(t *testing.T) {
 		t.Fatalf("WatchVolumes: %v", err)
 	}
 
-	vol, err := svc.CreateVolume(ctx, tenant, "data-1", VolumeSpec{SizeGB: 10})
+	vol, err := svc.CreateVolume(ctx, tenant, "data-1", testVolumeSpec(10))
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)
 	}
@@ -40,7 +53,7 @@ func TestPlayground_VolumeLifecycleOverWatch(t *testing.T) {
 	}
 
 	// Idempotent re-Create with the same name must not mint a new ID.
-	again, err := svc.CreateVolume(ctx, tenant, "data-1", VolumeSpec{SizeGB: 10})
+	again, err := svc.CreateVolume(ctx, tenant, "data-1", testVolumeSpec(10))
 	if err != nil {
 		t.Fatalf("idempotent CreateVolume: %v", err)
 	}
@@ -69,7 +82,7 @@ func TestService_CreateVolumeRejectsEmptyTenant(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.CreateVolume(ctx, "", "x", VolumeSpec{SizeGB: 10}); !errors.Is(err, ErrValidation) {
+	if _, err := svc.CreateVolume(ctx, "", "x", testVolumeSpec(10)); !errors.Is(err, ErrValidation) {
 		t.Fatalf("empty tenant_id: got %v, want ErrValidation", err)
 	}
 }
@@ -90,7 +103,7 @@ func TestService_GetVolumeIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	vol, err := svc.CreateVolume(ctx, "tenant-a", "", VolumeSpec{SizeGB: 10})
+	vol, err := svc.CreateVolume(ctx, "tenant-a", "", testVolumeSpec(10))
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)
 	}

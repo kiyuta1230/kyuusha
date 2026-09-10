@@ -90,11 +90,9 @@ func toVolumeAttachmentSpec(s blockstorage.VolumeAttachmentSpec) *blockstoragev1
 
 func toVolumeAttachmentStatusProto(st blockstorage.VolumeAttachmentStatus) *blockstoragev1.VolumeAttachmentStatus {
 	out := &blockstoragev1.VolumeAttachmentStatus{
-		Phase:        string(st.Phase),
-		DevicePath:   st.DevicePath,
-		Hypervisor:   st.Hypervisor,
-		TargetIqn:    st.TargetIQN,
-		TargetPortal: st.TargetPortal,
+		Phase:      string(st.Phase),
+		DevicePath: st.DevicePath,
+		Hypervisor: st.Hypervisor,
 	}
 	for _, c := range st.Conditions {
 		out.Conditions = append(out.Conditions, toConditionProto(c))

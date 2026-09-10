@@ -20,6 +20,7 @@ Hypervisorはcompute内部のスケジューリング対象であり、KaaS向�
 | `status.allocatable_vcpu` / `allocatable_memory_mb` | 申告された総capacity |
 | `status.allocated_vcpu` / `allocated_memory_mb` | スケジューラによる予約合計 |
 | `status.supported_drivers` | 対応VMMドライバ一覧（例: `["FIRECRACKER", "QEMU"]`） |
+| `status.storage_connections` | このHypervisorが既に確立済みのストレージ接続一覧（`{name, local_path}`）。自己申告——kyuusha自身はここに何も接続しない。詳細は[Volume仕様](volume.md)「StorageConnection」参照。現状スケジューラは未使用（同参照） |
 | `status.available_devices` | PCIデバイス在庫（現状スケジューラは未使用） |
 
 ## 登録フロー
@@ -31,7 +32,7 @@ sequenceDiagram
 
     Note over A: 起動
     loop 最大30回・1秒間隔でリトライ
-        A->>C: Register(hypervisor, bootstrap_token, allocatable_vcpu,<br/>allocatable_memory_mb, supported_drivers)
+        A->>C: Register(hypervisor, bootstrap_token, allocatable_vcpu,<br/>allocatable_memory_mb, supported_drivers, storage_connections)
         C->>C: bootstrap_tokenを検証、zoneクレームを採用
         C-->>A: Hypervisor (成功時break)
     end

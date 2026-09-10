@@ -21,6 +21,23 @@ message PciDevice {
   bool allocated = 4;
 }
 
+// StorageConnection is one storage backend session this Hypervisor already
+// has established (an iSCSI/NVMe-oF login, or an NFS mount) -- a host-level
+// prerequisite compute-agent's own runtime never sets up itself, the same
+// "host already has it" contract as /dev/kvm (see docs/architecture.md
+// "block-storageのバックエンド抽象化"「訂正: 責務の境界を...」). A
+// VolumeSpec.storage_connection names one of these by name (plain string
+// match, not a separate CRUD resource).
+message StorageConnection {
+  string name = 1; // arbitrary operator-chosen name, e.g. "tank1-iscsi"
+  // local_path is only meaningful for NFS: the local mount point this
+  // connection's export is mounted at on *this* Hypervisor (other
+  // Hypervisors may mount the same export at a different local path).
+  // Ignored for ISCSI/NVME_OF, which discover devices by serial/WWN under
+  // /dev/disk/by-id/ instead of a path.
+  string local_path = 2;
+}
+
 // HypervisorSpec is operator intent, set only via SetSchedulable -- never
 // touched by Register, so an agent restart can't silently undo an
 // operator's maintenance action. Contrast HypervisorStatus, which is
@@ -39,6 +56,7 @@ message HypervisorStatus {
   int64 allocated_memory_mb = 7;
   repeated string supported_drivers = 8; // e.g. ["firecracker", "qemu"]
   repeated PciDevice available_devices = 9;
+  repeated StorageConnection storage_connections = 10;
 }
 
 message Hypervisor {
@@ -52,6 +70,7 @@ message RegisterHypervisorRequest {
   int32 allocatable_vcpu = 3;
   int64 allocatable_memory_mb = 4;
   repeated string supported_drivers = 5;
+  repeated StorageConnection storage_connections = 7;
   // Required: a zone-scoped JWT minted by `kyuusha hypervisor bootstrap-token
   // create -zone=...` (internal/bootstraptoken). Its `zone` claim -- not any
   // self-reported value from the agent -- becomes the registered

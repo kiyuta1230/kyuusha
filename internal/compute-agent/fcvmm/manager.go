@@ -36,10 +36,12 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/iscsi"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/netsetup"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/volumeref"
 )
 
 // var _ vmm.VMM = (*Manager)(nil) is checked in manager_test.go-equivalent
@@ -106,6 +108,13 @@ type Manager struct {
 	JailUID uint32
 	JailGID uint32
 
+	// StorageConnections is this host's declared set of storage
+	// connections (see internal/compute-agent/volumeref), the same value
+	// cmd/compute-agent/main.go also sends to RegisterHypervisor. Empty
+	// means this host has none -- any VM with Volumes then fails to boot,
+	// same as a missing kernel/rootfs URL would.
+	StorageConnections volumeref.Connections
+
 	downloadMu sync.Mutex // serializes ensureCached; fine at playground scale
 
 	mu      sync.Mutex
@@ -113,12 +122,15 @@ type Manager struct {
 }
 
 // runningVM tracks what Boot did for one VM, so Stop (and the exit-watch
-// goroutine Boot starts) can tear all of it down: the process itself, and
-// every tap device Wire created for it.
+// goroutine Boot starts) can tear all of it down: the process itself,
+// every tap device Wire created for it, and every Volume bind mount
+// placeVolumeLike made (a Volume placed via mknodDeviceLike needs no such
+// cleanup -- removing a block device special file never touches the real
+// device behind it).
 type runningVM struct {
-	cmd     *exec.Cmd
-	taps    []string
-	volumes []vmm.VolumeAttachInfo
+	cmd          *exec.Cmd
+	taps         []string
+	volumeMounts []string
 }
 
 func (m *Manager) binPath() string {
@@ -240,18 +252,18 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// Wire every real network interface before Firecracker starts (it opens
 	// each host_dev_name by name at boot, so the tap must already exist).
 	// On a failure partway through, cleanup() unwinds whatever's already
-	// been wired/attached rather than leaking tap devices or iSCSI sessions
-	// for a VM that never boots.
+	// been wired/placed rather than leaking tap devices or bind mounts for
+	// a VM that never boots.
 	var fcNetIfaces []fcNetworkInterface
 	var netArgs []string
 	var taps []string
-	var attachedVolumes []vmm.VolumeAttachInfo
+	var volumeMounts []string
 	cleanup := func() {
 		for _, t := range taps {
 			_ = netsetup.DeleteTap(t)
 		}
-		for _, v := range attachedVolumes {
-			_ = iscsi.Detach(v.TargetIQN, v.TargetPortal)
+		for _, p := range volumeMounts {
+			_ = unix.Unmount(p, 0)
 		}
 	}
 	for i, ni := range spec.NetworkInterfaces {
@@ -324,25 +336,28 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		})
 	}
 
-	// Attach every already-exported Volume before Firecracker starts (same
-	// reasoning as taps: the device must exist before a drive can
-	// reference it) -- see internal/compute-agent/iscsi and
+	// Discover every already-visible Volume before Firecracker starts (same
+	// reasoning as taps: the device/file must exist before a drive can
+	// reference it) -- see internal/compute-agent/volumeref and
 	// docs/specs/volume.md. Each becomes its own read-write virtio-block
-	// drive alongside rootfs/seed. mknod'd into the jail rather than
-	// hard-linked: a real block device special file and the jail's chroot
-	// tree are on different filesystems (see mknodDeviceLike's doc
-	// comment), so a hard link can't span them.
+	// drive alongside rootfs/seed, placed via placeVolumeLike (mknod for a
+	// block device, bind mount for an NFS file -- either way, guest writes
+	// land on the real backing store, not a jail-local copy).
 	for i, v := range spec.Volumes {
-		devPath, err := iscsi.Attach(ctx, v.TargetIQN, v.TargetPortal)
+		devPath, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("fcvmm: attach volume %d (%s): %w", i, v.AttachmentID, err)
+			return fmt.Errorf("fcvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
 		}
-		attachedVolumes = append(attachedVolumes, v)
 		volName := fmt.Sprintf("vol%d", i)
-		if err := mknodDeviceLike(devPath, filepath.Join(chroot, volName), jailUID, jailGID); err != nil {
+		dst := filepath.Join(chroot, volName)
+		mounted, err := placeVolumeLike(devPath, dst, jailUID, jailGID)
+		if err != nil {
 			cleanup()
-			return fmt.Errorf("fcvmm: mknod volume %d (%s) into jail: %w", i, v.AttachmentID, err)
+			return fmt.Errorf("fcvmm: place volume %d (%s) into jail: %w", i, v.AttachmentID, err)
+		}
+		if mounted {
+			volumeMounts = append(volumeMounts, dst)
 		}
 		drives = append(drives, fcDrive{
 			DriveID:      volName,
@@ -382,10 +397,11 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	//
 	// No --netns/--new-pid-ns: this VM's tap devices (see netsetup.Wire
 	// above) live in this compute-agent container's own network namespace,
-	// and iSCSI's initiator side (internal/compute-agent/iscsi) already has
-	// its own nsenter dance into the *host's* -- adding a third namespace
-	// into the mix here is deliberately out of scope for now (see the
-	// package doc comment). jailer execs straight into Firecracker without
+	// and every Volume this VM references is already visible in it too
+	// (kyuusha never logs in/mounts anything itself -- see
+	// internal/compute-agent/volumeref) -- adding a network namespace into
+	// the mix here is deliberately out of scope for now (see the package
+	// doc comment). jailer execs straight into Firecracker without
 	// forking when neither flag is given, so cmd.Process.Pid below still
 	// names the Firecracker process itself, same as it did calling it
 	// directly.
@@ -430,7 +446,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
-	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps, volumes: attachedVolumes}
+	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps, volumeMounts: volumeMounts}
 	m.mu.Unlock()
 
 	go func() {

@@ -51,6 +51,16 @@ type Agent struct {
 	AllocatableVCPU     int32
 	AllocatableMemoryMB int64
 	SupportedDrivers    []string
+	// StorageConnections declares which storage connections this host
+	// already has established (an iSCSI/NVMe-oF session already logged in,
+	// or an NFS export already mounted -- see internal/compute-agent/
+	// volumeref and docs/architecture.md「訂正: 責務の境界を...」), sent at
+	// self-registration so compute can eventually use it as a scheduling
+	// constraint (not yet implemented -- see docs/open-questions.md).
+	// cmd/compute-agent/main.go builds this from the same -storage-
+	// connections flag value it also uses to build the local
+	// volumeref.Connections map each VMM driver resolves Volumes against.
+	StorageConnections []*computev1.StorageConnection
 
 	// Drivers boots/tears down VMs, keyed by driver_hint (e.g.
 	// string(compute.VmmDriverFirecracker), string(compute.VmmDriverQEMU)).
@@ -140,6 +150,7 @@ func (a *Agent) register(ctx context.Context) error {
 		AllocatableVcpu:     a.AllocatableVCPU,
 		AllocatableMemoryMb: a.AllocatableMemoryMB,
 		SupportedDrivers:    a.SupportedDrivers,
+		StorageConnections:  a.StorageConnections,
 	}
 	var lastErr error
 	for attempt := 0; attempt < 30; attempt++ {
@@ -271,17 +282,18 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.Net
 }
 
 // buildVolumeInfos resolves cmd.Volumes (compute.VolumeAttachInfo, see
-// nats.go) into what a VMM driver's Boot needs to actually attach each
-// already-exported Volume: a straight field-for-field copy, since
-// block-storage already resolved everything (target IQN/portal) before
-// this ever reached compute-agent -- see internal/compute-agent/iscsi.
+// nats.go) into what a VMM driver's Boot needs to find each Volume's
+// already-visible device/file on this host: a straight field-for-field
+// copy -- see internal/compute-agent/volumeref, which is where the actual
+// discovery happens (at Boot time, inside each driver), not here.
 func buildVolumeInfos(infos []compute.VolumeAttachInfo) []vmm.VolumeAttachInfo {
 	out := make([]vmm.VolumeAttachInfo, len(infos))
 	for i, v := range infos {
 		out[i] = vmm.VolumeAttachInfo{
-			AttachmentID: v.AttachmentID,
-			TargetIQN:    v.TargetIQN,
-			TargetPortal: v.TargetPortal,
+			AttachmentID:      v.AttachmentID,
+			Protocol:          v.Protocol,
+			StorageConnection: v.StorageConnection,
+			Identifier:        v.Identifier,
 		}
 	}
 	return out

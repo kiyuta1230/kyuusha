@@ -40,9 +40,9 @@ import (
 	"time"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/iscsi"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/netsetup"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/volumeref"
 )
 
 var _ vmm.VMM = (*Manager)(nil)
@@ -89,6 +89,12 @@ type Manager struct {
 	// copy, console log, and cloud-init seed disk if any). Defaults to
 	// /var/lib/kyuusha/qemu-run.
 	RunDir string
+	// StorageConnections is this host's declared set of storage
+	// connections (see internal/compute-agent/volumeref), the same value
+	// cmd/compute-agent/main.go also sends to RegisterHypervisor. Empty
+	// means this host has none -- any VM with Volumes then fails to boot,
+	// same as a missing kernel/rootfs URL would.
+	StorageConnections volumeref.Connections
 
 	downloadMu sync.Mutex // serializes ensureCached; fine at playground scale
 
@@ -98,11 +104,13 @@ type Manager struct {
 
 // runningVM tracks what Boot did for one VM, so Stop (and the exit-watch
 // goroutine Boot starts) can tear all of it down: the process itself, and
-// every tap device Wire created for it.
+// every tap device Wire created for it. No Volume-side bookkeeping needed
+// here (unlike fcvmm's runningVM): QEMU opens a Volume's already-visible
+// device/file path directly via -drive, with no jail to place it into and
+// so nothing of this driver's own left to unwind at teardown.
 type runningVM struct {
-	cmd     *exec.Cmd
-	taps    []string
-	volumes []vmm.VolumeAttachInfo
+	cmd  *exec.Cmd
+	taps []string
 }
 
 func (m *Manager) binPath() string {
@@ -176,13 +184,9 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	var netArgs []string
 	var qemuNetArgs []string
 	var taps []string
-	var attachedVolumes []vmm.VolumeAttachInfo
 	cleanup := func() {
 		for _, t := range taps {
 			_ = netsetup.DeleteTap(t)
-		}
-		for _, v := range attachedVolumes {
-			_ = iscsi.Detach(v.TargetIQN, v.TargetPortal)
 		}
 	}
 	for i, ni := range spec.NetworkInterfaces {
@@ -237,17 +241,17 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		driveArgs = append(driveArgs, "-drive", fmt.Sprintf("file=%s,format=raw,if=virtio,readonly=on", seedImg))
 	}
 
-	// Attach every already-exported Volume before QEMU starts -- same
-	// reasoning as taps, see internal/compute-agent/iscsi and
+	// Discover every already-visible Volume before QEMU starts -- same
+	// reasoning as taps, see internal/compute-agent/volumeref and
 	// docs/specs/volume.md. Each becomes its own read-write virtio-blk
-	// drive alongside rootfs/seed.
+	// drive alongside rootfs/seed, referenced by its real path directly:
+	// unlike fcvmm, there's no jail here for the path to need placing into.
 	for i, v := range spec.Volumes {
-		devPath, err := iscsi.Attach(ctx, v.TargetIQN, v.TargetPortal)
+		devPath, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("qemuvmm: attach volume %d (%s): %w", i, v.AttachmentID, err)
+			return fmt.Errorf("qemuvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
 		}
-		attachedVolumes = append(attachedVolumes, v)
 		driveArgs = append(driveArgs, "-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", devPath))
 	}
 
@@ -318,7 +322,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
-	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps, volumes: attachedVolumes}
+	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps}
 	m.mu.Unlock()
 
 	go func() {

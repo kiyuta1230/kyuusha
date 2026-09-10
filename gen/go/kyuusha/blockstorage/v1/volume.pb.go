@@ -23,6 +23,72 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// See docs/architecture.md "block-storageサービスのリソース: Volume / VolumeAttachment".
+// Volume is a standalone resource that can outlive any single VirtualMachine;
+// VolumeAttachment represents the (temporary) binding between one Volume and
+// one VirtualMachine -- the same "make the binding itself a resource"
+// pattern as network's NetworkInterface.
+//
+// kyuusha does not provision or export storage itself (see docs/architecture.md
+// "block-storageのバックエンド抽象化"「訂正: 責務の境界を...」): a Volume is a
+// *reference* to a block device or file that already exists and is already
+// reachable from whichever Hypervisors declared the matching
+// storage_connection at registration time (see docs/specs/volume.md). The
+// operator provisions and connects storage using whatever tooling fits their
+// backend (ZFS/Ceph/a SAN vendor's own API/a shared NFS export); kyuusha's
+// job starts at referencing and attaching what's already there.
+type StorageProtocol int32
+
+const (
+	StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED StorageProtocol = 0
+	StorageProtocol_ISCSI                        StorageProtocol = 1
+	StorageProtocol_NVME_OF                      StorageProtocol = 2
+	StorageProtocol_NFS                          StorageProtocol = 3
+)
+
+// Enum value maps for StorageProtocol.
+var (
+	StorageProtocol_name = map[int32]string{
+		0: "STORAGE_PROTOCOL_UNSPECIFIED",
+		1: "ISCSI",
+		2: "NVME_OF",
+		3: "NFS",
+	}
+	StorageProtocol_value = map[string]int32{
+		"STORAGE_PROTOCOL_UNSPECIFIED": 0,
+		"ISCSI":                        1,
+		"NVME_OF":                      2,
+		"NFS":                          3,
+	}
+)
+
+func (x StorageProtocol) Enum() *StorageProtocol {
+	p := new(StorageProtocol)
+	*p = x
+	return p
+}
+
+func (x StorageProtocol) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (StorageProtocol) Descriptor() protoreflect.EnumDescriptor {
+	return file_kyuusha_blockstorage_v1_volume_proto_enumTypes[0].Descriptor()
+}
+
+func (StorageProtocol) Type() protoreflect.EnumType {
+	return &file_kyuusha_blockstorage_v1_volume_proto_enumTypes[0]
+}
+
+func (x StorageProtocol) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use StorageProtocol.Descriptor instead.
+func (StorageProtocol) EnumDescriptor() ([]byte, []int) {
+	return file_kyuusha_blockstorage_v1_volume_proto_rawDescGZIP(), []int{0}
+}
+
 type VolumeEvent_Type int32
 
 const (
@@ -62,11 +128,11 @@ func (x VolumeEvent_Type) String() string {
 }
 
 func (VolumeEvent_Type) Descriptor() protoreflect.EnumDescriptor {
-	return file_kyuusha_blockstorage_v1_volume_proto_enumTypes[0].Descriptor()
+	return file_kyuusha_blockstorage_v1_volume_proto_enumTypes[1].Descriptor()
 }
 
 func (VolumeEvent_Type) Type() protoreflect.EnumType {
-	return &file_kyuusha_blockstorage_v1_volume_proto_enumTypes[0]
+	return &file_kyuusha_blockstorage_v1_volume_proto_enumTypes[1]
 }
 
 func (x VolumeEvent_Type) Number() protoreflect.EnumNumber {
@@ -117,11 +183,11 @@ func (x VolumeAttachmentEvent_Type) String() string {
 }
 
 func (VolumeAttachmentEvent_Type) Descriptor() protoreflect.EnumDescriptor {
-	return file_kyuusha_blockstorage_v1_volume_proto_enumTypes[1].Descriptor()
+	return file_kyuusha_blockstorage_v1_volume_proto_enumTypes[2].Descriptor()
 }
 
 func (VolumeAttachmentEvent_Type) Type() protoreflect.EnumType {
-	return &file_kyuusha_blockstorage_v1_volume_proto_enumTypes[1]
+	return &file_kyuusha_blockstorage_v1_volume_proto_enumTypes[2]
 }
 
 func (x VolumeAttachmentEvent_Type) Number() protoreflect.EnumNumber {
@@ -134,8 +200,21 @@ func (VolumeAttachmentEvent_Type) EnumDescriptor() ([]byte, []int) {
 }
 
 type VolumeSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SizeGb        int64                  `protobuf:"varint,1,opt,name=size_gb,json=sizeGb,proto3" json:"size_gb,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	SizeGb   int64                  `protobuf:"varint,1,opt,name=size_gb,json=sizeGb,proto3" json:"size_gb,omitempty"` // self-reported (kyuusha never provisions, so it can't verify this) -- used for quota only
+	Protocol StorageProtocol        `protobuf:"varint,2,opt,name=protocol,proto3,enum=kyuusha.blockstorage.v1.StorageProtocol" json:"protocol,omitempty"`
+	// storage_connection names the Hypervisor-side connection this Volume
+	// lives behind -- must match a name a Hypervisor declared in its own
+	// -storage-connections at registration (docs/specs/hypervisor-bootstrap.md).
+	// Plain string match, not its own CRUD resource (this system's expected
+	// volume/connection count is small enough that the extra indirection
+	// isn't worth it yet).
+	StorageConnection string `protobuf:"bytes,3,opt,name=storage_connection,json=storageConnection,proto3" json:"storage_connection,omitempty"`
+	// identifier is protocol-specific: for ISCSI/NVME_OF, the block device's
+	// stable serial/WWN (as seen under /dev/disk/by-id/ once the Hypervisor's
+	// storage_connection session makes it visible); for NFS, a file path
+	// relative to wherever that Hypervisor mounted the connection.
+	Identifier    string `protobuf:"bytes,4,opt,name=identifier,proto3" json:"identifier,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -177,9 +256,30 @@ func (x *VolumeSpec) GetSizeGb() int64 {
 	return 0
 }
 
+func (x *VolumeSpec) GetProtocol() StorageProtocol {
+	if x != nil {
+		return x.Protocol
+	}
+	return StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED
+}
+
+func (x *VolumeSpec) GetStorageConnection() string {
+	if x != nil {
+		return x.StorageConnection
+	}
+	return ""
+}
+
+func (x *VolumeSpec) GetIdentifier() string {
+	if x != nil {
+		return x.Identifier
+	}
+	return ""
+}
+
 type VolumeStatus struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending(バックエンド確保中) / Ready / Deleting / Error
+	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Ready（識別子の形式チェック＋quota判定が通れば即座） / Deleting / Error
 	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -731,12 +831,10 @@ func (x *VolumeAttachmentSpec) GetDeviceHint() string {
 
 type VolumeAttachmentStatus struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Attaching / Attached / Detaching / Deleting / Error
+	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending(排他制御待ち) / Attached / Deleting / Error
 	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	DevicePath    string                 `protobuf:"bytes,3,opt,name=device_path,json=devicePath,proto3" json:"device_path,omitempty"`       // compute-agent側でのローカルデバイスパス（まだ報告経路が無く常に空。既知の未実装事項）
-	Hypervisor    string                 `protobuf:"bytes,4,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`                         // まだ空（VolumeAttachmentSpecにhypervisorを持たせていないため。既知の未実装事項）
-	TargetIqn     string                 `protobuf:"bytes,5,opt,name=target_iqn,json=targetIqn,proto3" json:"target_iqn,omitempty"`          // Attached時のみ非空。実StorageBackend（storage-agent）がexportしたiSCSI target IQN
-	TargetPortal  string                 `protobuf:"bytes,6,opt,name=target_portal,json=targetPortal,proto3" json:"target_portal,omitempty"` // Attached時のみ非空。"host:port"形式のiSCSI portalアドレス
+	DevicePath    string                 `protobuf:"bytes,3,opt,name=device_path,json=devicePath,proto3" json:"device_path,omitempty"` // compute-agent側でのローカルデバイスパス（まだ報告経路が無く常に空。既知の未実装事項）
+	Hypervisor    string                 `protobuf:"bytes,4,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`                   // まだ空（VolumeAttachmentSpecにhypervisorを持たせていないため。既知の未実装事項）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -795,20 +893,6 @@ func (x *VolumeAttachmentStatus) GetDevicePath() string {
 func (x *VolumeAttachmentStatus) GetHypervisor() string {
 	if x != nil {
 		return x.Hypervisor
-	}
-	return ""
-}
-
-func (x *VolumeAttachmentStatus) GetTargetIqn() string {
-	if x != nil {
-		return x.TargetIqn
-	}
-	return ""
-}
-
-func (x *VolumeAttachmentStatus) GetTargetPortal() string {
-	if x != nil {
-		return x.TargetPortal
 	}
 	return ""
 }
@@ -1257,10 +1341,15 @@ var File_kyuusha_blockstorage_v1_volume_proto protoreflect.FileDescriptor
 
 const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"\n" +
-	"$kyuusha/blockstorage/v1/volume.proto\x12\x17kyuusha.blockstorage.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"%\n" +
+	"$kyuusha/blockstorage/v1/volume.proto\x12\x17kyuusha.blockstorage.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xba\x01\n" +
 	"\n" +
 	"VolumeSpec\x12\x17\n" +
-	"\asize_gb\x18\x01 \x01(\x03R\x06sizeGb\"d\n" +
+	"\asize_gb\x18\x01 \x01(\x03R\x06sizeGb\x12D\n" +
+	"\bprotocol\x18\x02 \x01(\x0e2(.kyuusha.blockstorage.v1.StorageProtocolR\bprotocol\x12-\n" +
+	"\x12storage_connection\x18\x03 \x01(\tR\x11storageConnection\x12\x1e\n" +
+	"\n" +
+	"identifier\x18\x04 \x01(\tR\n" +
+	"identifier\"d\n" +
 	"\fVolumeStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -1303,7 +1392,7 @@ const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12\x13\n" +
 	"\x05vm_id\x18\x02 \x01(\tR\x04vmId\x12\x1f\n" +
 	"\vdevice_hint\x18\x03 \x01(\tR\n" +
-	"deviceHint\"\xf3\x01\n" +
+	"deviceHint\"\xaf\x01\n" +
 	"\x16VolumeAttachmentStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -1313,10 +1402,7 @@ const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"devicePath\x12\x1e\n" +
 	"\n" +
 	"hypervisor\x18\x04 \x01(\tR\n" +
-	"hypervisor\x12\x1d\n" +
-	"\n" +
-	"target_iqn\x18\x05 \x01(\tR\ttargetIqn\x12#\n" +
-	"\rtarget_portal\x18\x06 \x01(\tR\ftargetPortal\"\xd3\x01\n" +
+	"hypervisor\"\xd3\x01\n" +
 	"\x10VolumeAttachment\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x12A\n" +
 	"\x04spec\x18\x02 \x01(\v2-.kyuusha.blockstorage.v1.VolumeAttachmentSpecR\x04spec\x12G\n" +
@@ -1349,7 +1435,12 @@ const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"\x05ADDED\x10\x01\x12\f\n" +
 	"\bMODIFIED\x10\x02\x12\v\n" +
 	"\aDELETED\x10\x03\x12\f\n" +
-	"\bBOOKMARK\x10\x042\xcd\x03\n" +
+	"\bBOOKMARK\x10\x04*T\n" +
+	"\x0fStorageProtocol\x12 \n" +
+	"\x1cSTORAGE_PROTOCOL_UNSPECIFIED\x10\x00\x12\t\n" +
+	"\x05ISCSI\x10\x01\x12\v\n" +
+	"\aNVME_OF\x10\x02\x12\a\n" +
+	"\x03NFS\x10\x032\xcd\x03\n" +
 	"\rVolumeService\x12W\n" +
 	"\x06Create\x12,.kyuusha.blockstorage.v1.CreateVolumeRequest\x1a\x1f.kyuusha.blockstorage.v1.Volume\x12Q\n" +
 	"\x03Get\x12).kyuusha.blockstorage.v1.GetVolumeRequest\x1a\x1f.kyuusha.blockstorage.v1.Volume\x12a\n" +
@@ -1375,77 +1466,79 @@ func file_kyuusha_blockstorage_v1_volume_proto_rawDescGZIP() []byte {
 	return file_kyuusha_blockstorage_v1_volume_proto_rawDescData
 }
 
-var file_kyuusha_blockstorage_v1_volume_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_kyuusha_blockstorage_v1_volume_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_kyuusha_blockstorage_v1_volume_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_kyuusha_blockstorage_v1_volume_proto_goTypes = []any{
-	(VolumeEvent_Type)(0),                 // 0: kyuusha.blockstorage.v1.VolumeEvent.Type
-	(VolumeAttachmentEvent_Type)(0),       // 1: kyuusha.blockstorage.v1.VolumeAttachmentEvent.Type
-	(*VolumeSpec)(nil),                    // 2: kyuusha.blockstorage.v1.VolumeSpec
-	(*VolumeStatus)(nil),                  // 3: kyuusha.blockstorage.v1.VolumeStatus
-	(*Volume)(nil),                        // 4: kyuusha.blockstorage.v1.Volume
-	(*CreateVolumeRequest)(nil),           // 5: kyuusha.blockstorage.v1.CreateVolumeRequest
-	(*GetVolumeRequest)(nil),              // 6: kyuusha.blockstorage.v1.GetVolumeRequest
-	(*ListVolumesRequest)(nil),            // 7: kyuusha.blockstorage.v1.ListVolumesRequest
-	(*ListVolumesResponse)(nil),           // 8: kyuusha.blockstorage.v1.ListVolumesResponse
-	(*DeleteVolumeRequest)(nil),           // 9: kyuusha.blockstorage.v1.DeleteVolumeRequest
-	(*WatchVolumesRequest)(nil),           // 10: kyuusha.blockstorage.v1.WatchVolumesRequest
-	(*VolumeEvent)(nil),                   // 11: kyuusha.blockstorage.v1.VolumeEvent
-	(*VolumeAttachmentSpec)(nil),          // 12: kyuusha.blockstorage.v1.VolumeAttachmentSpec
-	(*VolumeAttachmentStatus)(nil),        // 13: kyuusha.blockstorage.v1.VolumeAttachmentStatus
-	(*VolumeAttachment)(nil),              // 14: kyuusha.blockstorage.v1.VolumeAttachment
-	(*CreateVolumeAttachmentRequest)(nil), // 15: kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest
-	(*GetVolumeAttachmentRequest)(nil),    // 16: kyuusha.blockstorage.v1.GetVolumeAttachmentRequest
-	(*ListVolumeAttachmentsRequest)(nil),  // 17: kyuusha.blockstorage.v1.ListVolumeAttachmentsRequest
-	(*ListVolumeAttachmentsResponse)(nil), // 18: kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse
-	(*DeleteVolumeAttachmentRequest)(nil), // 19: kyuusha.blockstorage.v1.DeleteVolumeAttachmentRequest
-	(*WatchVolumeAttachmentsRequest)(nil), // 20: kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest
-	(*VolumeAttachmentEvent)(nil),         // 21: kyuusha.blockstorage.v1.VolumeAttachmentEvent
-	(*v1.Condition)(nil),                  // 22: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),                 // 23: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),                 // 24: google.protobuf.Empty
+	(StorageProtocol)(0),                  // 0: kyuusha.blockstorage.v1.StorageProtocol
+	(VolumeEvent_Type)(0),                 // 1: kyuusha.blockstorage.v1.VolumeEvent.Type
+	(VolumeAttachmentEvent_Type)(0),       // 2: kyuusha.blockstorage.v1.VolumeAttachmentEvent.Type
+	(*VolumeSpec)(nil),                    // 3: kyuusha.blockstorage.v1.VolumeSpec
+	(*VolumeStatus)(nil),                  // 4: kyuusha.blockstorage.v1.VolumeStatus
+	(*Volume)(nil),                        // 5: kyuusha.blockstorage.v1.Volume
+	(*CreateVolumeRequest)(nil),           // 6: kyuusha.blockstorage.v1.CreateVolumeRequest
+	(*GetVolumeRequest)(nil),              // 7: kyuusha.blockstorage.v1.GetVolumeRequest
+	(*ListVolumesRequest)(nil),            // 8: kyuusha.blockstorage.v1.ListVolumesRequest
+	(*ListVolumesResponse)(nil),           // 9: kyuusha.blockstorage.v1.ListVolumesResponse
+	(*DeleteVolumeRequest)(nil),           // 10: kyuusha.blockstorage.v1.DeleteVolumeRequest
+	(*WatchVolumesRequest)(nil),           // 11: kyuusha.blockstorage.v1.WatchVolumesRequest
+	(*VolumeEvent)(nil),                   // 12: kyuusha.blockstorage.v1.VolumeEvent
+	(*VolumeAttachmentSpec)(nil),          // 13: kyuusha.blockstorage.v1.VolumeAttachmentSpec
+	(*VolumeAttachmentStatus)(nil),        // 14: kyuusha.blockstorage.v1.VolumeAttachmentStatus
+	(*VolumeAttachment)(nil),              // 15: kyuusha.blockstorage.v1.VolumeAttachment
+	(*CreateVolumeAttachmentRequest)(nil), // 16: kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest
+	(*GetVolumeAttachmentRequest)(nil),    // 17: kyuusha.blockstorage.v1.GetVolumeAttachmentRequest
+	(*ListVolumeAttachmentsRequest)(nil),  // 18: kyuusha.blockstorage.v1.ListVolumeAttachmentsRequest
+	(*ListVolumeAttachmentsResponse)(nil), // 19: kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse
+	(*DeleteVolumeAttachmentRequest)(nil), // 20: kyuusha.blockstorage.v1.DeleteVolumeAttachmentRequest
+	(*WatchVolumeAttachmentsRequest)(nil), // 21: kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest
+	(*VolumeAttachmentEvent)(nil),         // 22: kyuusha.blockstorage.v1.VolumeAttachmentEvent
+	(*v1.Condition)(nil),                  // 23: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),                 // 24: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),                 // 25: google.protobuf.Empty
 }
 var file_kyuusha_blockstorage_v1_volume_proto_depIdxs = []int32{
-	22, // 0: kyuusha.blockstorage.v1.VolumeStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	23, // 1: kyuusha.blockstorage.v1.Volume.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	2,  // 2: kyuusha.blockstorage.v1.Volume.spec:type_name -> kyuusha.blockstorage.v1.VolumeSpec
-	3,  // 3: kyuusha.blockstorage.v1.Volume.status:type_name -> kyuusha.blockstorage.v1.VolumeStatus
-	2,  // 4: kyuusha.blockstorage.v1.CreateVolumeRequest.spec:type_name -> kyuusha.blockstorage.v1.VolumeSpec
-	4,  // 5: kyuusha.blockstorage.v1.ListVolumesResponse.items:type_name -> kyuusha.blockstorage.v1.Volume
-	0,  // 6: kyuusha.blockstorage.v1.VolumeEvent.type:type_name -> kyuusha.blockstorage.v1.VolumeEvent.Type
-	4,  // 7: kyuusha.blockstorage.v1.VolumeEvent.volume:type_name -> kyuusha.blockstorage.v1.Volume
-	22, // 8: kyuusha.blockstorage.v1.VolumeAttachmentStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	23, // 9: kyuusha.blockstorage.v1.VolumeAttachment.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	12, // 10: kyuusha.blockstorage.v1.VolumeAttachment.spec:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentSpec
-	13, // 11: kyuusha.blockstorage.v1.VolumeAttachment.status:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentStatus
-	12, // 12: kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest.spec:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentSpec
-	14, // 13: kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse.items:type_name -> kyuusha.blockstorage.v1.VolumeAttachment
-	1,  // 14: kyuusha.blockstorage.v1.VolumeAttachmentEvent.type:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentEvent.Type
-	14, // 15: kyuusha.blockstorage.v1.VolumeAttachmentEvent.volume_attachment:type_name -> kyuusha.blockstorage.v1.VolumeAttachment
-	5,  // 16: kyuusha.blockstorage.v1.VolumeService.Create:input_type -> kyuusha.blockstorage.v1.CreateVolumeRequest
-	6,  // 17: kyuusha.blockstorage.v1.VolumeService.Get:input_type -> kyuusha.blockstorage.v1.GetVolumeRequest
-	7,  // 18: kyuusha.blockstorage.v1.VolumeService.List:input_type -> kyuusha.blockstorage.v1.ListVolumesRequest
-	9,  // 19: kyuusha.blockstorage.v1.VolumeService.Delete:input_type -> kyuusha.blockstorage.v1.DeleteVolumeRequest
-	10, // 20: kyuusha.blockstorage.v1.VolumeService.Watch:input_type -> kyuusha.blockstorage.v1.WatchVolumesRequest
-	15, // 21: kyuusha.blockstorage.v1.VolumeAttachmentService.Create:input_type -> kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest
-	16, // 22: kyuusha.blockstorage.v1.VolumeAttachmentService.Get:input_type -> kyuusha.blockstorage.v1.GetVolumeAttachmentRequest
-	17, // 23: kyuusha.blockstorage.v1.VolumeAttachmentService.List:input_type -> kyuusha.blockstorage.v1.ListVolumeAttachmentsRequest
-	19, // 24: kyuusha.blockstorage.v1.VolumeAttachmentService.Delete:input_type -> kyuusha.blockstorage.v1.DeleteVolumeAttachmentRequest
-	20, // 25: kyuusha.blockstorage.v1.VolumeAttachmentService.Watch:input_type -> kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest
-	4,  // 26: kyuusha.blockstorage.v1.VolumeService.Create:output_type -> kyuusha.blockstorage.v1.Volume
-	4,  // 27: kyuusha.blockstorage.v1.VolumeService.Get:output_type -> kyuusha.blockstorage.v1.Volume
-	8,  // 28: kyuusha.blockstorage.v1.VolumeService.List:output_type -> kyuusha.blockstorage.v1.ListVolumesResponse
-	24, // 29: kyuusha.blockstorage.v1.VolumeService.Delete:output_type -> google.protobuf.Empty
-	11, // 30: kyuusha.blockstorage.v1.VolumeService.Watch:output_type -> kyuusha.blockstorage.v1.VolumeEvent
-	14, // 31: kyuusha.blockstorage.v1.VolumeAttachmentService.Create:output_type -> kyuusha.blockstorage.v1.VolumeAttachment
-	14, // 32: kyuusha.blockstorage.v1.VolumeAttachmentService.Get:output_type -> kyuusha.blockstorage.v1.VolumeAttachment
-	18, // 33: kyuusha.blockstorage.v1.VolumeAttachmentService.List:output_type -> kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse
-	24, // 34: kyuusha.blockstorage.v1.VolumeAttachmentService.Delete:output_type -> google.protobuf.Empty
-	21, // 35: kyuusha.blockstorage.v1.VolumeAttachmentService.Watch:output_type -> kyuusha.blockstorage.v1.VolumeAttachmentEvent
-	26, // [26:36] is the sub-list for method output_type
-	16, // [16:26] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	0,  // 0: kyuusha.blockstorage.v1.VolumeSpec.protocol:type_name -> kyuusha.blockstorage.v1.StorageProtocol
+	23, // 1: kyuusha.blockstorage.v1.VolumeStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	24, // 2: kyuusha.blockstorage.v1.Volume.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	3,  // 3: kyuusha.blockstorage.v1.Volume.spec:type_name -> kyuusha.blockstorage.v1.VolumeSpec
+	4,  // 4: kyuusha.blockstorage.v1.Volume.status:type_name -> kyuusha.blockstorage.v1.VolumeStatus
+	3,  // 5: kyuusha.blockstorage.v1.CreateVolumeRequest.spec:type_name -> kyuusha.blockstorage.v1.VolumeSpec
+	5,  // 6: kyuusha.blockstorage.v1.ListVolumesResponse.items:type_name -> kyuusha.blockstorage.v1.Volume
+	1,  // 7: kyuusha.blockstorage.v1.VolumeEvent.type:type_name -> kyuusha.blockstorage.v1.VolumeEvent.Type
+	5,  // 8: kyuusha.blockstorage.v1.VolumeEvent.volume:type_name -> kyuusha.blockstorage.v1.Volume
+	23, // 9: kyuusha.blockstorage.v1.VolumeAttachmentStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	24, // 10: kyuusha.blockstorage.v1.VolumeAttachment.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	13, // 11: kyuusha.blockstorage.v1.VolumeAttachment.spec:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentSpec
+	14, // 12: kyuusha.blockstorage.v1.VolumeAttachment.status:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentStatus
+	13, // 13: kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest.spec:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentSpec
+	15, // 14: kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse.items:type_name -> kyuusha.blockstorage.v1.VolumeAttachment
+	2,  // 15: kyuusha.blockstorage.v1.VolumeAttachmentEvent.type:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentEvent.Type
+	15, // 16: kyuusha.blockstorage.v1.VolumeAttachmentEvent.volume_attachment:type_name -> kyuusha.blockstorage.v1.VolumeAttachment
+	6,  // 17: kyuusha.blockstorage.v1.VolumeService.Create:input_type -> kyuusha.blockstorage.v1.CreateVolumeRequest
+	7,  // 18: kyuusha.blockstorage.v1.VolumeService.Get:input_type -> kyuusha.blockstorage.v1.GetVolumeRequest
+	8,  // 19: kyuusha.blockstorage.v1.VolumeService.List:input_type -> kyuusha.blockstorage.v1.ListVolumesRequest
+	10, // 20: kyuusha.blockstorage.v1.VolumeService.Delete:input_type -> kyuusha.blockstorage.v1.DeleteVolumeRequest
+	11, // 21: kyuusha.blockstorage.v1.VolumeService.Watch:input_type -> kyuusha.blockstorage.v1.WatchVolumesRequest
+	16, // 22: kyuusha.blockstorage.v1.VolumeAttachmentService.Create:input_type -> kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest
+	17, // 23: kyuusha.blockstorage.v1.VolumeAttachmentService.Get:input_type -> kyuusha.blockstorage.v1.GetVolumeAttachmentRequest
+	18, // 24: kyuusha.blockstorage.v1.VolumeAttachmentService.List:input_type -> kyuusha.blockstorage.v1.ListVolumeAttachmentsRequest
+	20, // 25: kyuusha.blockstorage.v1.VolumeAttachmentService.Delete:input_type -> kyuusha.blockstorage.v1.DeleteVolumeAttachmentRequest
+	21, // 26: kyuusha.blockstorage.v1.VolumeAttachmentService.Watch:input_type -> kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest
+	5,  // 27: kyuusha.blockstorage.v1.VolumeService.Create:output_type -> kyuusha.blockstorage.v1.Volume
+	5,  // 28: kyuusha.blockstorage.v1.VolumeService.Get:output_type -> kyuusha.blockstorage.v1.Volume
+	9,  // 29: kyuusha.blockstorage.v1.VolumeService.List:output_type -> kyuusha.blockstorage.v1.ListVolumesResponse
+	25, // 30: kyuusha.blockstorage.v1.VolumeService.Delete:output_type -> google.protobuf.Empty
+	12, // 31: kyuusha.blockstorage.v1.VolumeService.Watch:output_type -> kyuusha.blockstorage.v1.VolumeEvent
+	15, // 32: kyuusha.blockstorage.v1.VolumeAttachmentService.Create:output_type -> kyuusha.blockstorage.v1.VolumeAttachment
+	15, // 33: kyuusha.blockstorage.v1.VolumeAttachmentService.Get:output_type -> kyuusha.blockstorage.v1.VolumeAttachment
+	19, // 34: kyuusha.blockstorage.v1.VolumeAttachmentService.List:output_type -> kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse
+	25, // 35: kyuusha.blockstorage.v1.VolumeAttachmentService.Delete:output_type -> google.protobuf.Empty
+	22, // 36: kyuusha.blockstorage.v1.VolumeAttachmentService.Watch:output_type -> kyuusha.blockstorage.v1.VolumeAttachmentEvent
+	27, // [27:37] is the sub-list for method output_type
+	17, // [17:27] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_blockstorage_v1_volume_proto_init() }
@@ -1458,7 +1551,7 @@ func file_kyuusha_blockstorage_v1_volume_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_blockstorage_v1_volume_proto_rawDesc), len(file_kyuusha_blockstorage_v1_volume_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   2,
