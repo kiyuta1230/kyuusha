@@ -12,7 +12,7 @@ VirtualMachineは、実際にどのVMM（Virtual Machine Monitor）で起動さ�
 このドキュメントには、**ドライバを問わず共通の**仕組みだけをまとめる。ドライバ固有の
 起動処理・引数・トレードオフはそれぞれのドキュメントを参照。`Pending`→`Scheduled`の
 配置先決定自体は[VMスケジュール仕様](vm-scheduling.md)、NetworkInterfaceの実際の
-tap配線は[network.md](network.md)、Volumeの実際のiSCSI接続は[Volume仕様](volume.md)
+tap配線は[network.md](network.md)、Volumeの実際の発見・配線は[Volume仕様](volume.md)
 を参照。
 
 ## computeからcompute-agentへ渡る情報（`CreateCommand`）
@@ -29,7 +29,7 @@ VMが`Scheduled`→`Provisioning`へ遷移する際（[VMスケジュール仕�
 | `kernel_url` / `rootfs_url` | 解決したImageの`spec.kernel.url` / `spec.rootfs.url`（`QCOW2`の場合は空） |
 | `boot_args` | Imageの`spec.boot_args`（空ならcompute-agent側のデフォルトを使う。デフォルト値自体はドライバごとに違う——[QEMU起動仕様](qemu-boot.md)「boot_argsのデフォルトがFirecrackerと違う理由」参照） |
 | `interfaces` | `network_interfaces`から作られたNetworkInterface+そのSubnetの情報（[network.md](network.md)参照）。空配列ならネットワークなしで起動する |
-| `volumes` | `volumes`から作られたVolumeAttachmentのうち、実際に`Attached`まで到達したものの実iSCSI接続情報（target_iqn/target_portal、[Volume仕様](volume.md)参照）。空配列ならVolumeなしで起動する——アタッチが`Pending`のまま（排他制御待ち）だったものはここに含まれない |
+| `volumes` | `volumes`から作られたVolumeAttachmentのうち、実際に`Attached`まで到達したものについて、そのVolume自身が持つ`protocol`/`storage_connection`/`identifier`（[Volume仕様](volume.md)参照。kyuushaはここで何もログイン/マウントしない——compute-agentが起動時にこの情報から既に見えているデバイス/ファイルを探すだけ）。空配列ならVolumeなしで起動する——アタッチが`Pending`のまま（排他制御待ち）だったものはここに含まれない |
 | `user_data` | `VirtualMachineSpec.user_data`そのまま。空なら何も注入しない（下記「UserData注入」参照） |
 
 `kernel_url`/`rootfs_url`が空、または`driver_hint`に対応する登録済みドライバがない場合

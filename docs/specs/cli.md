@@ -123,12 +123,14 @@ network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`
 ## `kyuusha volume <create|get|list|watch|delete>`
 
 block-storage向け（[Volume仕様](volume.md)参照）。`create`は`-tenant`を持つため
-admin-onlyではない。実バックエンドがまだ無いため`size_gb`のQuotaチェックさえ通れば
+admin-onlyではない。kyuushaはボリュームを作成/削除しない——既存の（iSCSI/NVMe-oF/NFS
+で到達可能な）ボリュームへの参照を登録するだけなので、外部呼び出し無しに
+`size_gb`/`protocol`/`storage_connection`/`identifier`のバリデーションさえ通れば
 即`Ready`になる。
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-size-gb`(必須) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-size-gb`(必須、自己申告値でQuota計算にのみ使う) `-protocol`(`ISCSI`/`NVME_OF`/`NFS`、必須) `-storage-connection`(必須) `-identifier`(必須) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
@@ -141,8 +143,9 @@ admin-onlyではない。実バックエンドがまだ無いため`size_gb`のQ
 block-storage向け（[Volume仕様](volume.md)参照）。`VolumeAttachmentService`のCLI名は
 `volattach`。同一`volume_id`について非`Deleting`なVolumeAttachmentは同時に1つまで
 （排他制御。他の有効なアタッチメントが残っている間のCreateは拒否ではなく`Pending`で
-受理され、10秒毎に再試行される）。`device_path`/`hypervisor`は実バックエンド/compute
-連携がまだないため常に空。
+受理され、10秒毎に再試行される）。`device_path`/`hypervisor`は、compute-agentが
+実際に見つけたローカルパスとどのHypervisorで起動したかをblock-storageへ報告し返す
+経路が無いため常に空（[Volume仕様](volume.md)「この実装がカバーしないもの」参照）。
 
 | サブコマンド | フラグ |
 |---|---|
