@@ -37,12 +37,18 @@ type StorageConnection struct {
 	LocalPath string
 }
 
-// HypervisorSpec is operator intent, set only via Service.SetSchedulable --
-// never touched by RegisterHypervisor, so an agent restart can't silently
-// undo an operator's maintenance action. Contrast HypervisorStatus, which
-// is entirely agent/heartbeat-derived.
+// HypervisorSpec is operator intent, set only via Service.SetSchedulable/
+// SetRevoked -- never touched by RegisterHypervisor, so an agent restart
+// can't silently undo an operator's maintenance action. Contrast
+// HypervisorStatus, which is entirely agent/heartbeat-derived.
 type HypervisorSpec struct {
 	Schedulable bool
+	// Revoked blocks this hypervisor id from ever registering again
+	// (RegisterHypervisor rejects it outright) -- for a decommissioned or
+	// compromised host. See Service.SetRevoked's own doc comment for the
+	// deliberate scope boundary (it blocks future registration only, not
+	// already-flowing east-west traffic).
+	Revoked bool
 }
 
 type HypervisorStatus struct {

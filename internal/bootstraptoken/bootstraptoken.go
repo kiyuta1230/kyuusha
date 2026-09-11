@@ -9,14 +9,20 @@
 // into.
 //
 // This is deliberately narrower than the full design docs/architecture.md
-// describes: it authenticates the *zone claim*, not the hypervisor's
-// identity, and issues no follow-up mTLS client certificate (every service
-// already shares one mTLS identity via internal/mtls, so there's no
-// per-hypervisor credential to hand out yet). A token isn't single-use --
-// the same token is meant to be embedded into every hypervisor provisioned
-// into that zone (e.g. via the same PXE/cloud-init image), so "single-use"
-// wouldn't even make sense here. See docs/specs/hypervisor-bootstrap.md for
-// the full list of what's still open.
+// describes: it authenticates claims the token carries, not the
+// hypervisor's cryptographic identity, and issues no follow-up mTLS client
+// certificate (every service already shares one mTLS identity via
+// internal/mtls, so there's no per-hypervisor credential to hand out).
+// HypervisorID (2026-09-11) is optional, not the token's primary axis: the
+// zone claim alone is still meant to be shared across every hypervisor
+// PXE/cloud-init-provisioned into the same zone with the same image, so
+// tokens still aren't single-use in the general case. An operator who
+// mints one *with* a HypervisorID gets individual identity (RegisterHypervisor
+// rejects a request whose own hypervisor field doesn't match it) and the
+// ability to revoke that specific id later (HypervisorSpec.revoked) -- but
+// still no continuous per-connection authentication beyond the shared mTLS,
+// see docs/specs/hypervisor-bootstrap.md for the deliberate scope
+// boundary.
 package bootstraptoken
 
 import (
@@ -35,18 +41,24 @@ var validSigningMethods = []string{"ES256", "RS256"}
 // Claims is a bootstrap token's payload.
 type Claims struct {
 	Zone string `json:"zone"`
+	// HypervisorID, if set, restricts this token to registering exactly one
+	// hypervisor id -- see the package doc comment.
+	HypervisorID string `json:"hypervisor_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
 // Mint signs a new bootstrap token authorizing self-registration into zone,
-// valid for ttl. Dev/CLI-only (`kyuusha hypervisor bootstrap-token create`);
-// nothing in a running kyuusha service holds a signing key.
-func Mint(key *ecdsa.PrivateKey, zone string, ttl time.Duration) (string, error) {
+// valid for ttl. hypervisorID is optional (see the package doc comment);
+// pass "" for the original zone-only, shareable-across-a-fleet behavior.
+// Dev/CLI-only (`kyuusha hypervisor bootstrap-token create`); nothing in a
+// running kyuusha service holds a signing key.
+func Mint(key *ecdsa.PrivateKey, zone, hypervisorID string, ttl time.Duration) (string, error) {
 	if zone == "" {
 		return "", errors.New("zone is required")
 	}
 	claims := Claims{
-		Zone: zone,
+		Zone:         zone,
+		HypervisorID: hypervisorID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),

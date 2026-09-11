@@ -113,8 +113,12 @@ allow if {
   別軸のまま未実装（`docs/architecture.md`「認可の粒度」参照）。`compute-agent`の`Register`は
   mTLSに加え、zoneスコープ付きbootstrapトークン（`internal/bootstraptoken`）でzoneクレームを
   検証するようになった——ハイパーバイザー自身が申告するzoneは信用せず、トークンのzoneだけを
-  採用する。ただし単位はzoneまでで「どのhypervisorか」の個体識別・失効はまだ無く、トークンは
-  使い捨てでもない（[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)参照）
+  採用する。2026-09-11、トークンに任意で`hypervisor_id`クレームも持たせられるようにし、
+  個体識別（`Register`時にリクエストの`hypervisor`と一致確認）と失効
+  （`HypervisorSpec.revoked`、`SetRevoked` RPC）を軽量に実現した——ただし将来の`Register`を
+  拒否するだけで、ハイパーバイザー専用のmTLS証明書は無いため、すでに確立している
+  東西通信をその場で強制切断することはできない。トークン自体は使い捨てでもない
+  （[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)「個体識別と失効」参照）
 - `UpdateVirtualMachineRequest`/`UpdateTenantRequest`は`vm.meta.tenant_id`/`tenant.meta.tenant_id`と別に、認可用の`tenant_id`をトップレベルに持つ。gRPCサーバー側でこの2つの一致を検証し、不一致は`InvalidArgument`で拒否する
 
 ## 将来の拡張: テナント内ロール/細粒度認可の設計方針（軸1・軸3は実装済み、軸2は未実装）

@@ -35,6 +35,8 @@ func hypervisorCmd(args []string) {
 		hypervisorWatch(args[1:])
 	case "set-schedulable":
 		hypervisorSetSchedulable(args[1:])
+	case "set-revoked":
+		hypervisorSetRevoked(args[1:])
 	case "bootstrap-token":
 		hypervisorBootstrapTokenCmd(args[1:])
 	default:
@@ -62,6 +64,7 @@ func hypervisorBootstrapTokenCreate(args []string) {
 	fs := flag.NewFlagSet("hypervisor bootstrap-token create", flag.ExitOnError)
 	keyPath := fs.String("key", "hack/devkeys/jwt-dev.key", "PEM private key to sign with (dev only; same key `token mint` uses)")
 	zone := fs.String("zone", "", "zone this token authorizes hypervisor self-registration into (required)")
+	hypervisor := fs.String("hypervisor", "", "restrict this token to registering exactly this hypervisor id (optional; omit for the original fleet-shareable, zone-only token -- see internal/bootstraptoken)")
 	ttl := fs.Duration("ttl", 24*time.Hour, "token lifetime")
 	fs.Parse(args)
 
@@ -72,7 +75,7 @@ func hypervisorBootstrapTokenCreate(args []string) {
 	if err != nil {
 		fatal("load signing key: %v", err)
 	}
-	token, err := bootstraptoken.Mint(key, *zone, *ttl)
+	token, err := bootstraptoken.Mint(key, *zone, *hypervisor, *ttl)
 	if err != nil {
 		fatal("mint bootstrap token: %v", err)
 	}
@@ -171,10 +174,34 @@ func hypervisorSetSchedulable(args []string) {
 	printHypervisor(h)
 }
 
+// hypervisorSetRevoked revokes (or un-revokes) a Hypervisor id, blocking any
+// future Register call under that id -- for a decommissioned or
+// compromised host. See HypervisorSpec.revoked's own doc comment for what
+// this does and doesn't cover (it never touches already-flowing traffic).
+func hypervisorSetRevoked(args []string) {
+	fs := flag.NewFlagSet("hypervisor set-revoked", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN); must carry role=admin")
+	id := fs.String("id", "", "hypervisor ID (required)")
+	revoked := fs.Bool("revoked", true, "true blocks this hypervisor id from ever registering again, and also forces schedulable=false")
+	fs.Parse(args)
+
+	if *id == "" {
+		fatal("-id is required")
+	}
+	client := dialHypervisors(*addr)
+	ctx := authedContext(context.Background(), *token)
+	h, err := client.SetRevoked(ctx, &computev1.SetRevokedRequest{Hypervisor: *id, Revoked: *revoked})
+	if err != nil {
+		fatal("set-revoked: %v", err)
+	}
+	printHypervisor(h)
+}
+
 func printHypervisor(h *computev1.Hypervisor) {
 	st := h.GetStatus()
-	fmt.Printf("id=%s phase=%s schedulable=%t zone=%s drivers=%v allocated=%d/%dvcpu %d/%dMB rv=%d\n",
-		h.GetMeta().GetId(), st.GetPhase(), h.GetSpec().GetSchedulable(), st.GetZone(), st.GetSupportedDrivers(),
+	fmt.Printf("id=%s phase=%s schedulable=%t revoked=%t zone=%s drivers=%v allocated=%d/%dvcpu %d/%dMB rv=%d\n",
+		h.GetMeta().GetId(), st.GetPhase(), h.GetSpec().GetSchedulable(), h.GetSpec().GetRevoked(), st.GetZone(), st.GetSupportedDrivers(),
 		st.GetAllocatedVcpu(), st.GetAllocatableVcpu(),
 		st.GetAllocatedMemoryMb(), st.GetAllocatableMemoryMb(),
 		h.GetMeta().GetResourceVersion())

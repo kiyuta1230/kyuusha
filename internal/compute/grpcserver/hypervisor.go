@@ -35,7 +35,10 @@ func NewHypervisorServer(svc *compute.Service, bootstrapTokenPublicKey crypto.Pu
 // Register verifies the caller's zone-scoped bootstrap token
 // (internal/bootstraptoken, docs/architecture.md "Hypervisor自己登録とzone割当")
 // and registers the Hypervisor into the token's zone -- never a
-// self-reported one, since the agent's own claim isn't trusted.
+// self-reported one, since the agent's own claim isn't trusted. If the
+// token also carries a hypervisor_id claim, it must match req.Hypervisor
+// exactly -- a token minted for one hypervisor can't be replayed to
+// register a different one under its name.
 func (s *HypervisorServer) Register(ctx context.Context, req *computev1.RegisterHypervisorRequest) (*computev1.Hypervisor, error) {
 	if req.GetHypervisor() == "" {
 		return nil, status.Error(codes.InvalidArgument, "hypervisor is required")
@@ -46,6 +49,9 @@ func (s *HypervisorServer) Register(ctx context.Context, req *computev1.Register
 	claims, err := bootstraptoken.VerifyWithKey(s.bootstrapTokenPublicKey, req.GetBootstrapToken())
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "invalid bootstrap_token: %v", err)
+	}
+	if claims.HypervisorID != "" && claims.HypervisorID != req.GetHypervisor() {
+		return nil, status.Errorf(codes.PermissionDenied, "bootstrap_token is scoped to hypervisor %q, not %q", claims.HypervisorID, req.GetHypervisor())
 	}
 	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), claims.Zone, req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers(), fromStorageConnectionsProto(req.GetStorageConnections()))
 	if err != nil {
@@ -85,6 +91,17 @@ func (s *HypervisorServer) SetSchedulable(ctx context.Context, req *computev1.Se
 	return toHypervisor(*h), nil
 }
 
+func (s *HypervisorServer) SetRevoked(ctx context.Context, req *computev1.SetRevokedRequest) (*computev1.Hypervisor, error) {
+	if req.GetHypervisor() == "" {
+		return nil, status.Error(codes.InvalidArgument, "hypervisor is required")
+	}
+	h, err := s.svc.SetRevoked(ctx, req.GetHypervisor(), req.GetRevoked())
+	if err != nil {
+		return nil, toHypervisorStatus(err)
+	}
+	return toHypervisor(*h), nil
+}
+
 func (s *HypervisorServer) Watch(req *computev1.WatchHypervisorsRequest, stream computev1.HypervisorService_WatchServer) error {
 	events, err := s.svc.WatchHypervisors(stream.Context(), req.GetSinceResourceVersion())
 	if err != nil {
@@ -106,6 +123,8 @@ func toHypervisorStatus(err error) error {
 		return status.Error(codes.Aborted, err.Error())
 	case errors.Is(err, compute.ErrHypervisorHistoryPruned):
 		return status.Error(codes.OutOfRange, err.Error())
+	case errors.Is(err, compute.ErrHypervisorRevoked):
+		return status.Error(codes.PermissionDenied, err.Error())
 	}
 	if status.Code(err) != codes.Unknown {
 		return err
@@ -166,7 +185,7 @@ func toHypervisor(h compute.Hypervisor) *computev1.Hypervisor {
 	}
 	return &computev1.Hypervisor{
 		Meta:   meta,
-		Spec:   &computev1.HypervisorSpec{Schedulable: h.Spec.Schedulable},
+		Spec:   &computev1.HypervisorSpec{Schedulable: h.Spec.Schedulable, Revoked: h.Spec.Revoked},
 		Status: toHypervisorStatusProto(h.Status),
 	}
 }

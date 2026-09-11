@@ -56,6 +56,52 @@ func TestService_RegisterHypervisorUpsertsPreservingReservations(t *testing.T) {
 	}
 }
 
+// TestService_SetRevokedBlocksReRegistrationAndForcesUnschedulable
+// exercises docs/specs/hypervisor-bootstrap.md's lightweight per-hypervisor
+// identity/revocation: revoking forces Schedulable false in the same call,
+// and a later RegisterHypervisor for that same id must be rejected outright
+// rather than silently reviving it.
+func TestService_SetRevokedBlocksReRegistrationAndForcesUnschedulable(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	h, err := svc.SetRevoked(ctx, "hypervisor-1", true)
+	if err != nil {
+		t.Fatalf("SetRevoked(true): %v", err)
+	}
+	if !h.Spec.Revoked {
+		t.Fatal("Revoked = false after SetRevoked(true)")
+	}
+	if h.Spec.Schedulable {
+		t.Fatal("Schedulable = true after SetRevoked(true), want forced false")
+	}
+
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); !errors.Is(err, ErrHypervisorRevoked) {
+		t.Fatalf("re-Register after revoke: got %v, want ErrHypervisorRevoked", err)
+	}
+
+	// Un-revoking must not silently restore Schedulable -- that's left as a
+	// separate, explicit operator decision.
+	h2, err := svc.SetRevoked(ctx, "hypervisor-1", false)
+	if err != nil {
+		t.Fatalf("SetRevoked(false): %v", err)
+	}
+	if h2.Spec.Revoked {
+		t.Fatal("Revoked = true after SetRevoked(false)")
+	}
+	if h2.Spec.Schedulable {
+		t.Fatal("Schedulable = true after un-revoke, want still false (not auto-restored)")
+	}
+
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+		t.Fatalf("re-Register after un-revoke: %v", err)
+	}
+}
+
 func TestService_ScheduleVMExcludesUnschedulable(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)

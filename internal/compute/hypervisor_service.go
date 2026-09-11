@@ -13,6 +13,7 @@ var (
 	ErrHypervisorConflict      = errors.New("hypervisor: resource_version conflict")
 	ErrHypervisorHistoryPruned = errors.New("hypervisor: watch resume point too old, relist required")
 	ErrUnschedulable           = errors.New("vm: no hypervisor satisfies scheduling constraints")
+	ErrHypervisorRevoked       = errors.New("hypervisor: this id has been revoked, registration rejected")
 )
 
 // HypervisorEvent is re-exported from the generic resource.Store, distinct
@@ -34,15 +35,18 @@ const (
 // restart) refreshes zone/capacity/drivers but preserves the in-flight
 // allocated_* reservations the scheduler already made against it.
 //
-// The doc's real design verifies a zone-scoped bootstrap token and issues an
-// mTLS client cert here, trusting the token's zone over the agent's own
-// claim. Neither exists yet (see hack/devkeys' JWT signer for the same kind
-// of "real thing is later" gap on the authn side): this accepts the agent's
-// self-reported zone/capacity directly, unauthenticated. Tracked in
-// docs/open-questions.md.
+// zone itself is verified by the caller (grpcserver.HypervisorServer.Register,
+// against a bootstrap token's zone claim -- internal/bootstraptoken) before
+// this is ever invoked; this trusts whatever zone it's handed, never the
+// agent's own separate claim. See docs/specs/hypervisor-bootstrap.md for
+// what's still open beyond that (individual hypervisor identity/revocation
+// -- see ErrHypervisorRevoked below -- and single-use tokens).
 func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone string, allocatableVCPU int32, allocatableMemoryMB int64, supportedDrivers []string, storageConnections []StorageConnection) (*Hypervisor, error) {
 	existing, err := s.hypervisors.Get(ctx, "", hypervisor)
 	hadExisting := err == nil
+	if hadExisting && existing.Spec.Revoked {
+		return nil, ErrHypervisorRevoked
+	}
 
 	// New Hypervisors default to schedulable, like a new Kubernetes Node.
 	// Schedulable is operator intent (see HypervisorSpec's doc comment) and
@@ -51,6 +55,7 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 	spec := HypervisorSpec{Schedulable: true}
 	if hadExisting {
 		spec.Schedulable = existing.Spec.Schedulable
+		spec.Revoked = existing.Spec.Revoked // always false here, but explicit: Register never clears it
 	}
 
 	status := HypervisorStatus{
@@ -81,6 +86,27 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 func (s *Service) SetSchedulable(ctx context.Context, hypervisor string, schedulable bool) (*Hypervisor, error) {
 	if err := s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) {
 		h.Spec.Schedulable = schedulable
+	}); err != nil {
+		return nil, err
+	}
+	return s.GetHypervisor(ctx, hypervisor)
+}
+
+// SetRevoked revokes (or un-revokes) a Hypervisor id, blocking any future
+// RegisterHypervisor call under that id -- for a decommissioned or
+// compromised host (see ErrHypervisorRevoked). Revoking also forces
+// Schedulable false in the same update (a revoked Hypervisor can't
+// meaningfully stay schedulable); un-revoking does not restore it --
+// that's left as a separate, explicit operator decision. This never
+// touches already-flowing east-west traffic: with no per-hypervisor mTLS
+// identity, there's nothing at that layer to revoke -- see
+// docs/specs/hypervisor-bootstrap.md for the deliberate scope boundary.
+func (s *Service) SetRevoked(ctx context.Context, hypervisor string, revoked bool) (*Hypervisor, error) {
+	if err := s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) {
+		h.Spec.Revoked = revoked
+		if revoked {
+			h.Spec.Schedulable = false
+		}
 	}); err != nil {
 		return nil, err
 	}

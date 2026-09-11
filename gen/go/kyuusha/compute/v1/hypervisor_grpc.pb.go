@@ -24,6 +24,7 @@ const (
 	HypervisorService_List_FullMethodName           = "/kyuusha.compute.v1.HypervisorService/List"
 	HypervisorService_Watch_FullMethodName          = "/kyuusha.compute.v1.HypervisorService/Watch"
 	HypervisorService_SetSchedulable_FullMethodName = "/kyuusha.compute.v1.HypervisorService/SetSchedulable"
+	HypervisorService_SetRevoked_FullMethodName     = "/kyuusha.compute.v1.HypervisorService/SetRevoked"
 )
 
 // HypervisorServiceClient is the client API for HypervisorService service.
@@ -40,6 +41,11 @@ type HypervisorServiceClient interface {
 	// Marks a Hypervisor schedulable or not (maintenance), independent of its
 	// heartbeat-derived phase. Admin-only.
 	SetSchedulable(ctx context.Context, in *SetSchedulableRequest, opts ...grpc.CallOption) (*Hypervisor, error)
+	// Revokes (or un-revokes) a Hypervisor id, blocking any future Register
+	// call under that id -- for a decommissioned or compromised host.
+	// Admin-only. See HypervisorSpec.revoked's own doc comment for what this
+	// does and doesn't cover.
+	SetRevoked(ctx context.Context, in *SetRevokedRequest, opts ...grpc.CallOption) (*Hypervisor, error)
 }
 
 type hypervisorServiceClient struct {
@@ -109,6 +115,16 @@ func (c *hypervisorServiceClient) SetSchedulable(ctx context.Context, in *SetSch
 	return out, nil
 }
 
+func (c *hypervisorServiceClient) SetRevoked(ctx context.Context, in *SetRevokedRequest, opts ...grpc.CallOption) (*Hypervisor, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Hypervisor)
+	err := c.cc.Invoke(ctx, HypervisorService_SetRevoked_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HypervisorServiceServer is the server API for HypervisorService service.
 // All implementations must embed UnimplementedHypervisorServiceServer
 // for forward compatibility.
@@ -123,6 +139,11 @@ type HypervisorServiceServer interface {
 	// Marks a Hypervisor schedulable or not (maintenance), independent of its
 	// heartbeat-derived phase. Admin-only.
 	SetSchedulable(context.Context, *SetSchedulableRequest) (*Hypervisor, error)
+	// Revokes (or un-revokes) a Hypervisor id, blocking any future Register
+	// call under that id -- for a decommissioned or compromised host.
+	// Admin-only. See HypervisorSpec.revoked's own doc comment for what this
+	// does and doesn't cover.
+	SetRevoked(context.Context, *SetRevokedRequest) (*Hypervisor, error)
 	mustEmbedUnimplementedHypervisorServiceServer()
 }
 
@@ -147,6 +168,9 @@ func (UnimplementedHypervisorServiceServer) Watch(*WatchHypervisorsRequest, grpc
 }
 func (UnimplementedHypervisorServiceServer) SetSchedulable(context.Context, *SetSchedulableRequest) (*Hypervisor, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetSchedulable not implemented")
+}
+func (UnimplementedHypervisorServiceServer) SetRevoked(context.Context, *SetRevokedRequest) (*Hypervisor, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetRevoked not implemented")
 }
 func (UnimplementedHypervisorServiceServer) mustEmbedUnimplementedHypervisorServiceServer() {}
 func (UnimplementedHypervisorServiceServer) testEmbeddedByValue()                           {}
@@ -252,6 +276,24 @@ func _HypervisorService_SetSchedulable_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HypervisorService_SetRevoked_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetRevokedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HypervisorServiceServer).SetRevoked(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HypervisorService_SetRevoked_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HypervisorServiceServer).SetRevoked(ctx, req.(*SetRevokedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HypervisorService_ServiceDesc is the grpc.ServiceDesc for HypervisorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -274,6 +316,10 @@ var HypervisorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetSchedulable",
 			Handler:    _HypervisorService_SetSchedulable_Handler,
+		},
+		{
+			MethodName: "SetRevoked",
+			Handler:    _HypervisorService_SetRevoked_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

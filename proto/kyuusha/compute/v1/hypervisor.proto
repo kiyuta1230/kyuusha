@@ -38,12 +38,20 @@ message StorageConnection {
   string local_path = 2;
 }
 
-// HypervisorSpec is operator intent, set only via SetSchedulable -- never
-// touched by Register, so an agent restart can't silently undo an
+// HypervisorSpec is operator intent, set only via SetSchedulable/SetRevoked --
+// never touched by Register, so an agent restart can't silently undo an
 // operator's maintenance action. Contrast HypervisorStatus, which is
 // entirely agent/heartbeat-derived.
 message HypervisorSpec {
   bool schedulable = 1; // false: excluded from scheduling regardless of phase (maintenance)
+  // revoked blocks this hypervisor id from ever registering again (Register
+  // rejects it outright) -- for a decommissioned or compromised host.
+  // Setting it true also forces schedulable=false in the same call; setting
+  // it back false does not restore schedulable on its own. This blocks
+  // future Register calls only, not already-flowing east-west traffic,
+  // which stays authenticated only by the shared mTLS identity every
+  // service presents -- see docs/specs/hypervisor-bootstrap.md.
+  bool revoked = 2;
 }
 
 message HypervisorStatus {
@@ -75,6 +83,9 @@ message RegisterHypervisorRequest {
   // create -zone=...` (internal/bootstraptoken). Its `zone` claim -- not any
   // self-reported value from the agent -- becomes the registered
   // Hypervisor's zone; see docs/architecture.md "Hypervisor自己登録とzone割当".
+  // If the token also carries a hypervisor_id claim (`-hypervisor=...` at
+  // mint time), it must match this request's own `hypervisor` field exactly
+  // -- see docs/specs/hypervisor-bootstrap.md.
   string bootstrap_token = 6;
 }
 
@@ -101,6 +112,13 @@ message SetSchedulableRequest {
   bool schedulable = 2;
 }
 
+// SetRevokedRequest carries no tenant_id, same reasoning as
+// SetSchedulableRequest above.
+message SetRevokedRequest {
+  string hypervisor = 1;
+  bool revoked = 2;
+}
+
 message HypervisorEvent {
   enum Type {
     TYPE_UNSPECIFIED = 0;
@@ -125,4 +143,9 @@ service HypervisorService {
   // Marks a Hypervisor schedulable or not (maintenance), independent of its
   // heartbeat-derived phase. Admin-only.
   rpc SetSchedulable(SetSchedulableRequest) returns (Hypervisor);
+  // Revokes (or un-revokes) a Hypervisor id, blocking any future Register
+  // call under that id -- for a decommissioned or compromised host.
+  // Admin-only. See HypervisorSpec.revoked's own doc comment for what this
+  // does and doesn't cover.
+  rpc SetRevoked(SetRevokedRequest) returns (Hypervisor);
 }

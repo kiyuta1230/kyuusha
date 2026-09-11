@@ -74,7 +74,7 @@ func (x HypervisorEvent_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HypervisorEvent_Type.Descriptor instead.
 func (HypervisorEvent_Type) EnumDescriptor() ([]byte, []int) {
-	return file_kyuusha_compute_v1_hypervisor_proto_rawDescGZIP(), []int{11, 0}
+	return file_kyuusha_compute_v1_hypervisor_proto_rawDescGZIP(), []int{12, 0}
 }
 
 type PciDevice struct {
@@ -209,13 +209,21 @@ func (x *StorageConnection) GetLocalPath() string {
 	return ""
 }
 
-// HypervisorSpec is operator intent, set only via SetSchedulable -- never
-// touched by Register, so an agent restart can't silently undo an
+// HypervisorSpec is operator intent, set only via SetSchedulable/SetRevoked --
+// never touched by Register, so an agent restart can't silently undo an
 // operator's maintenance action. Contrast HypervisorStatus, which is
 // entirely agent/heartbeat-derived.
 type HypervisorSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Schedulable   bool                   `protobuf:"varint,1,opt,name=schedulable,proto3" json:"schedulable,omitempty"` // false: excluded from scheduling regardless of phase (maintenance)
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Schedulable bool                   `protobuf:"varint,1,opt,name=schedulable,proto3" json:"schedulable,omitempty"` // false: excluded from scheduling regardless of phase (maintenance)
+	// revoked blocks this hypervisor id from ever registering again (Register
+	// rejects it outright) -- for a decommissioned or compromised host.
+	// Setting it true also forces schedulable=false in the same call; setting
+	// it back false does not restore schedulable on its own. This blocks
+	// future Register calls only, not already-flowing east-west traffic,
+	// which stays authenticated only by the shared mTLS identity every
+	// service presents -- see docs/specs/hypervisor-bootstrap.md.
+	Revoked       bool `protobuf:"varint,2,opt,name=revoked,proto3" json:"revoked,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -253,6 +261,13 @@ func (*HypervisorSpec) Descriptor() ([]byte, []int) {
 func (x *HypervisorSpec) GetSchedulable() bool {
 	if x != nil {
 		return x.Schedulable
+	}
+	return false
+}
+
+func (x *HypervisorSpec) GetRevoked() bool {
+	if x != nil {
+		return x.Revoked
 	}
 	return false
 }
@@ -444,6 +459,9 @@ type RegisterHypervisorRequest struct {
 	// create -zone=...` (internal/bootstraptoken). Its `zone` claim -- not any
 	// self-reported value from the agent -- becomes the registered
 	// Hypervisor's zone; see docs/architecture.md "Hypervisor自己登録とzone割当".
+	// If the token also carries a hypervisor_id claim (`-hypervisor=...` at
+	// mint time), it must match this request's own `hypervisor` field exactly
+	// -- see docs/specs/hypervisor-bootstrap.md.
 	BootstrapToken string `protobuf:"bytes,6,opt,name=bootstrap_token,json=bootstrapToken,proto3" json:"bootstrap_token,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -745,6 +763,60 @@ func (x *SetSchedulableRequest) GetSchedulable() bool {
 	return false
 }
 
+// SetRevokedRequest carries no tenant_id, same reasoning as
+// SetSchedulableRequest above.
+type SetRevokedRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Hypervisor    string                 `protobuf:"bytes,1,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`
+	Revoked       bool                   `protobuf:"varint,2,opt,name=revoked,proto3" json:"revoked,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetRevokedRequest) Reset() {
+	*x = SetRevokedRequest{}
+	mi := &file_kyuusha_compute_v1_hypervisor_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetRevokedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetRevokedRequest) ProtoMessage() {}
+
+func (x *SetRevokedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_compute_v1_hypervisor_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetRevokedRequest.ProtoReflect.Descriptor instead.
+func (*SetRevokedRequest) Descriptor() ([]byte, []int) {
+	return file_kyuusha_compute_v1_hypervisor_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SetRevokedRequest) GetHypervisor() string {
+	if x != nil {
+		return x.Hypervisor
+	}
+	return ""
+}
+
+func (x *SetRevokedRequest) GetRevoked() bool {
+	if x != nil {
+		return x.Revoked
+	}
+	return false
+}
+
 type HypervisorEvent struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Type            HypervisorEvent_Type   `protobuf:"varint,1,opt,name=type,proto3,enum=kyuusha.compute.v1.HypervisorEvent_Type" json:"type,omitempty"`
@@ -756,7 +828,7 @@ type HypervisorEvent struct {
 
 func (x *HypervisorEvent) Reset() {
 	*x = HypervisorEvent{}
-	mi := &file_kyuusha_compute_v1_hypervisor_proto_msgTypes[11]
+	mi := &file_kyuusha_compute_v1_hypervisor_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -768,7 +840,7 @@ func (x *HypervisorEvent) String() string {
 func (*HypervisorEvent) ProtoMessage() {}
 
 func (x *HypervisorEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_compute_v1_hypervisor_proto_msgTypes[11]
+	mi := &file_kyuusha_compute_v1_hypervisor_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -781,7 +853,7 @@ func (x *HypervisorEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HypervisorEvent.ProtoReflect.Descriptor instead.
 func (*HypervisorEvent) Descriptor() ([]byte, []int) {
-	return file_kyuusha_compute_v1_hypervisor_proto_rawDescGZIP(), []int{11}
+	return file_kyuusha_compute_v1_hypervisor_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *HypervisorEvent) GetType() HypervisorEvent_Type {
@@ -819,9 +891,10 @@ const file_kyuusha_compute_v1_hypervisor_proto_rawDesc = "" +
 	"\x11StorageConnection\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"local_path\x18\x02 \x01(\tR\tlocalPath\"2\n" +
+	"local_path\x18\x02 \x01(\tR\tlocalPath\"L\n" +
 	"\x0eHypervisorSpec\x12 \n" +
-	"\vschedulable\x18\x01 \x01(\bR\vschedulable\"\xef\x03\n" +
+	"\vschedulable\x18\x01 \x01(\bR\vschedulable\x12\x18\n" +
+	"\arevoked\x18\x02 \x01(\bR\arevoked\"\xef\x03\n" +
 	"\x10HypervisorStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x12\n" +
 	"\x04zone\x18\x02 \x01(\tR\x04zone\x12*\n" +
@@ -861,7 +934,12 @@ const file_kyuusha_compute_v1_hypervisor_proto_rawDesc = "" +
 	"\n" +
 	"hypervisor\x18\x01 \x01(\tR\n" +
 	"hypervisor\x12 \n" +
-	"\vschedulable\x18\x02 \x01(\bR\vschedulable\"\x8c\x02\n" +
+	"\vschedulable\x18\x02 \x01(\bR\vschedulable\"M\n" +
+	"\x11SetRevokedRequest\x12\x1e\n" +
+	"\n" +
+	"hypervisor\x18\x01 \x01(\tR\n" +
+	"hypervisor\x12\x18\n" +
+	"\arevoked\x18\x02 \x01(\bR\arevoked\"\x8c\x02\n" +
 	"\x0fHypervisorEvent\x12<\n" +
 	"\x04type\x18\x01 \x01(\x0e2(.kyuusha.compute.v1.HypervisorEvent.TypeR\x04type\x12>\n" +
 	"\n" +
@@ -873,13 +951,15 @@ const file_kyuusha_compute_v1_hypervisor_proto_rawDesc = "" +
 	"\x05ADDED\x10\x01\x12\f\n" +
 	"\bMODIFIED\x10\x02\x12\v\n" +
 	"\aDELETED\x10\x03\x12\f\n" +
-	"\bBOOKMARK\x10\x042\xda\x03\n" +
+	"\bBOOKMARK\x10\x042\xaf\x04\n" +
 	"\x11HypervisorService\x12Y\n" +
 	"\bRegister\x12-.kyuusha.compute.v1.RegisterHypervisorRequest\x1a\x1e.kyuusha.compute.v1.Hypervisor\x12O\n" +
 	"\x03Get\x12(.kyuusha.compute.v1.GetHypervisorRequest\x1a\x1e.kyuusha.compute.v1.Hypervisor\x12_\n" +
 	"\x04List\x12*.kyuusha.compute.v1.ListHypervisorsRequest\x1a+.kyuusha.compute.v1.ListHypervisorsResponse\x12[\n" +
 	"\x05Watch\x12+.kyuusha.compute.v1.WatchHypervisorsRequest\x1a#.kyuusha.compute.v1.HypervisorEvent0\x01\x12[\n" +
-	"\x0eSetSchedulable\x12).kyuusha.compute.v1.SetSchedulableRequest\x1a\x1e.kyuusha.compute.v1.HypervisorBCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1b\x06proto3"
+	"\x0eSetSchedulable\x12).kyuusha.compute.v1.SetSchedulableRequest\x1a\x1e.kyuusha.compute.v1.Hypervisor\x12S\n" +
+	"\n" +
+	"SetRevoked\x12%.kyuusha.compute.v1.SetRevokedRequest\x1a\x1e.kyuusha.compute.v1.HypervisorBCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1b\x06proto3"
 
 var (
 	file_kyuusha_compute_v1_hypervisor_proto_rawDescOnce sync.Once
@@ -894,7 +974,7 @@ func file_kyuusha_compute_v1_hypervisor_proto_rawDescGZIP() []byte {
 }
 
 var file_kyuusha_compute_v1_hypervisor_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kyuusha_compute_v1_hypervisor_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_kyuusha_compute_v1_hypervisor_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_kyuusha_compute_v1_hypervisor_proto_goTypes = []any{
 	(HypervisorEvent_Type)(0),         // 0: kyuusha.compute.v1.HypervisorEvent.Type
 	(*PciDevice)(nil),                 // 1: kyuusha.compute.v1.PciDevice
@@ -908,13 +988,14 @@ var file_kyuusha_compute_v1_hypervisor_proto_goTypes = []any{
 	(*ListHypervisorsResponse)(nil),   // 9: kyuusha.compute.v1.ListHypervisorsResponse
 	(*WatchHypervisorsRequest)(nil),   // 10: kyuusha.compute.v1.WatchHypervisorsRequest
 	(*SetSchedulableRequest)(nil),     // 11: kyuusha.compute.v1.SetSchedulableRequest
-	(*HypervisorEvent)(nil),           // 12: kyuusha.compute.v1.HypervisorEvent
-	(*v1.ObjectMeta)(nil),             // 13: kyuusha.resource.v1.ObjectMeta
+	(*SetRevokedRequest)(nil),         // 12: kyuusha.compute.v1.SetRevokedRequest
+	(*HypervisorEvent)(nil),           // 13: kyuusha.compute.v1.HypervisorEvent
+	(*v1.ObjectMeta)(nil),             // 14: kyuusha.resource.v1.ObjectMeta
 }
 var file_kyuusha_compute_v1_hypervisor_proto_depIdxs = []int32{
 	1,  // 0: kyuusha.compute.v1.HypervisorStatus.available_devices:type_name -> kyuusha.compute.v1.PciDevice
 	2,  // 1: kyuusha.compute.v1.HypervisorStatus.storage_connections:type_name -> kyuusha.compute.v1.StorageConnection
-	13, // 2: kyuusha.compute.v1.Hypervisor.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	14, // 2: kyuusha.compute.v1.Hypervisor.meta:type_name -> kyuusha.resource.v1.ObjectMeta
 	3,  // 3: kyuusha.compute.v1.Hypervisor.spec:type_name -> kyuusha.compute.v1.HypervisorSpec
 	4,  // 4: kyuusha.compute.v1.Hypervisor.status:type_name -> kyuusha.compute.v1.HypervisorStatus
 	2,  // 5: kyuusha.compute.v1.RegisterHypervisorRequest.storage_connections:type_name -> kyuusha.compute.v1.StorageConnection
@@ -926,13 +1007,15 @@ var file_kyuusha_compute_v1_hypervisor_proto_depIdxs = []int32{
 	8,  // 11: kyuusha.compute.v1.HypervisorService.List:input_type -> kyuusha.compute.v1.ListHypervisorsRequest
 	10, // 12: kyuusha.compute.v1.HypervisorService.Watch:input_type -> kyuusha.compute.v1.WatchHypervisorsRequest
 	11, // 13: kyuusha.compute.v1.HypervisorService.SetSchedulable:input_type -> kyuusha.compute.v1.SetSchedulableRequest
-	5,  // 14: kyuusha.compute.v1.HypervisorService.Register:output_type -> kyuusha.compute.v1.Hypervisor
-	5,  // 15: kyuusha.compute.v1.HypervisorService.Get:output_type -> kyuusha.compute.v1.Hypervisor
-	9,  // 16: kyuusha.compute.v1.HypervisorService.List:output_type -> kyuusha.compute.v1.ListHypervisorsResponse
-	12, // 17: kyuusha.compute.v1.HypervisorService.Watch:output_type -> kyuusha.compute.v1.HypervisorEvent
-	5,  // 18: kyuusha.compute.v1.HypervisorService.SetSchedulable:output_type -> kyuusha.compute.v1.Hypervisor
-	14, // [14:19] is the sub-list for method output_type
-	9,  // [9:14] is the sub-list for method input_type
+	12, // 14: kyuusha.compute.v1.HypervisorService.SetRevoked:input_type -> kyuusha.compute.v1.SetRevokedRequest
+	5,  // 15: kyuusha.compute.v1.HypervisorService.Register:output_type -> kyuusha.compute.v1.Hypervisor
+	5,  // 16: kyuusha.compute.v1.HypervisorService.Get:output_type -> kyuusha.compute.v1.Hypervisor
+	9,  // 17: kyuusha.compute.v1.HypervisorService.List:output_type -> kyuusha.compute.v1.ListHypervisorsResponse
+	13, // 18: kyuusha.compute.v1.HypervisorService.Watch:output_type -> kyuusha.compute.v1.HypervisorEvent
+	5,  // 19: kyuusha.compute.v1.HypervisorService.SetSchedulable:output_type -> kyuusha.compute.v1.Hypervisor
+	5,  // 20: kyuusha.compute.v1.HypervisorService.SetRevoked:output_type -> kyuusha.compute.v1.Hypervisor
+	15, // [15:21] is the sub-list for method output_type
+	9,  // [9:15] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -949,7 +1032,7 @@ func file_kyuusha_compute_v1_hypervisor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_compute_v1_hypervisor_proto_rawDesc), len(file_kyuusha_compute_v1_hypervisor_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

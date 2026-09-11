@@ -1002,6 +1002,12 @@ JWT署名・OAuth2/OIDCフロー・鍵ローテーションは自前実装が事
   サービス/ハイパーバイザー単位のアイデンティティ確認はできず、証明できるのは「何らかの正規の
   kyuushaサービスであること」だけ——直後の「内部サービス間の最小権限」がまだ無いのと同じ理由で、
   現状の被害範囲限定効果は「外部ネットワークからの盗聴・なりすましを防ぐ」までに留まる。
+
+  **2026-09-11、ハイパーバイザーについては上記の本格PKIを不採用と確定**（運用コストの重い
+  自前実装を避けるkyuusha全体の路線と合わないため）。代わりにbootstrapトークン
+  （`internal/bootstraptoken`）だけを軽く拡張し、個体識別・失効を実現した——ただし将来の
+  `Register`を拒否するだけで、既存セッションの強制切断はできない。詳細は
+  [Hypervisor登録・死活監視仕様](specs/hypervisor-bootstrap.md)「個体識別と失効」参照。
   per-service/per-hypervisor証明書の動的発行は、bootstrapトークン検証（後述）と合わせて
   今後の課題。
 
@@ -1954,7 +1960,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - block-storageのバックエンド方式（専用ストレージノード+NVMe-oF/TCP(ZFS)をv1デフォルトに、`StorageBackend`ドライバとして抽象化。Cephは将来オプション）
 - DRBDミラーリング導入タイミング（pet系ワークロードが本番相当で使われ始めた時点）
 - NATS JetStreamのsubject/stream設計（`ms.<service>.<cmd|evt>.<hypervisor>...`、CMD/EVTストリームの分離）
-- gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）
+- gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）。2026-09-11、ハイパーバイザー専用mTLS証明書の動的発行（本格PKI）は不採用と確定し、bootstrapトークンへの任意`hypervisor_id`クレーム+`HypervisorSpec.revoked`による軽量な個体識別・失効に代替（将来のRegisterを拒否するのみ、既存セッションの強制切断は不可という割り切り込み）
 - 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）。2026-09-11、`tenant_role=viewer`（テナント内read-only）と`role=storage-admin`（block-storageサービスのみにscopeしたadmin相当）を実装——静的な列挙のみで、動的カスタムロール定義は見送り
 - Watchの再開設計（resource_version + Bookmarkイベント、履歴保持は有限で古すぎたら再List）
 - Firecrackerのjailer/tapデバイス運用方針

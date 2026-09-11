@@ -104,7 +104,7 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate bootstrap token key: %v", err)
 	}
-	bootstrapToken, err := bootstraptoken.Mint(bootstrapKey, "zone-a", time.Hour)
+	bootstrapToken, err := bootstraptoken.Mint(bootstrapKey, "zone-a", "", time.Hour)
 	if err != nil {
 		t.Fatalf("mint bootstrap token: %v", err)
 	}
