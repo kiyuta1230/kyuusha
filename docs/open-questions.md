@@ -103,38 +103,29 @@ iSCSI/NVMe-oF/NFSは「Hypervisor単位の事前接続＋接続済みセッシ�
   安全という判断で、"バグ"ではなくトレードオフとして残している
 - Volume検証コマンドのリトライ間隔・上限（現状は無期限、10秒ごと）は未チューニング
 
-## QEMU用のjailer相当の隔離方式（自前実装 vs. libvirt）
+## QEMU用のjailer相当の隔離方式（2トラックに分割決定、下記参照）
 
 2026-09に`driver_hint=FIRECRACKER`のVMをjailer（chroot + uid/gid権限降格）でラップした
 （[Firecracker起動仕様](specs/firecracker-boot.md)「jailer」、docs/architecture.md
 「Firecracker: jailerとtapデバイス」参照）。jailer自体はFirecracker専用ツールで
 QEMUをラップできないため、`driver_hint=QEMU`にはまだ同等の隔離が無いまま。
 
-検討した選択肢:
+libvirt経由でQEMUを使う案は見送り（kyuusha全体の「運用コストの重い既製品を避ける」
+路線とズレる、コンテナ環境でのnamespace関連の深いバグを既に何度も踏んでいる実績から
+libvirt+SELinux/AppArmorでも同種の沼にハマるリスクが高い）。自前実装の方向で確定——
+ただしchroot/uid-drop（低リスク、`fcvmm/jailer.go`のパターンを流用できる）と
+namespace分離+seccomp（高リスク、標準ライブラリに無くlibseccompかBPF自前実装が要る）
+の難易度差が大きいため、2026-09-11に以下へ分割することを決定:
 
-1. **libvirt経由でQEMUを使う**: OpenStack Novaも採用している現実的な方式。SELinux/
-   AppArmorによる自動閉じ込め（svirt）、非root実行、PCI/VFIOパススルーの成熟した
-   サポートを一括で得られる。ただし: (a) libvirtd自体が新しい重量級の依存になり、
-   今の「Goから`exec.Command`で直接VMMを起動する」というシンプルな設計から離れる
-   （tap配線・console.log・QMP周りもlibvirtのdomain modelへ作り直しになる）、
-   (b) このプロジェクト全体の「運用コストの重い既製品を避ける」判断（Ceph不採用、
-   Kafkaの代わりに軽量NATS選択等）と路線がズレる、(c) このセッションだけでも
-   ZFSのmount namespace問題・iSCSIのnetwork namespace問題等、コンテナ環境特有の
-   深いバグを何度も踏んでおり、libvirt+SELinux/AppArmorをこの環境に入れると
-   同種の沼にハマるリスクが十分ある
-2. **自前でchroot/namespace/uid-drop相当を実装する**: Goの`syscall.SysProcAttr`
-   （`Chroot`/`Cloneflags`/`Credential`）で`fork+exec`境界にカーネルへ直接処理させる
-   経路があり、比較的安全に実装できる。ただしseccompフィルタは標準ライブラリに無く、
-   自前でBPFを組む/libseccompバインディングを使うしかない——ここは緩すぎても
-   厳しすぎても事故る、一番リスクの高い部分。Firecracker側は実際にAWS製の
-   `jailer`にそのまま乗ることでこのリスクを避けられたが、QEMU向けの同等の
-   既製品は無い
+1. **kyuusha本体**: chroot + uid/gid dropのみの軽い版（Firecracker側のjailerと
+   同じスコープ）。**まだ未着手**
+2. **別プロジェクト（新規に立ち上げ、別セッションで着手予定）**: namespace分離+
+   seccompまで含む本格的な「QEMU用jailer」を、Firecracker用`jailer`と同じ立ち位置
+   （汎用的な既製ツール）で育てる
 
-ユーザーの反応: 自前実装の方向に傾いているが未確定。libvirt依存については
-「そこまでクリティカルには感じていない」とのコメントあり——完全に却下したわけ
-ではなく、判断を先送りしている状態。もし自前実装を選ぶ場合は、chroot/namespace/
-uid-drop部分（低リスク）とseccomp部分（高リスク、最初は入れない/様子見という
-選択肢もある）を分けて考える方針で一致している。
+詳しい経緯・検討した選択肢・新プロジェクトが目指すべき機能・kyuusha側の参考実装は
+[QEMU jailerハンドオフ](qemu-jailer-handoff.md)に切り出した——別プロジェクトを
+立ち上げる新しいセッションは、まずそちらを読むこと。
 
 ## ロールベースの細かい認可（RPCメソッド・リソース種別単位）をやるべきか
 
