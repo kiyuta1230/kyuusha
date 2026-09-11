@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
@@ -133,13 +134,12 @@ func TestVolume_FailedVerificationStaysPendingNotError(t *testing.T) {
 	}
 }
 
-// TestVolume_SizeMismatchIsSurfacedAsCondition exercises the
-// SizeMatchesDeclaration condition (docs/open-questions.md「Volumeの申告
-// 内容...」): the same round-trip that confirms a Volume's identifier exists
-// also reports its real observed size, which must be compared against
-// spec.size_gb and surfaced -- not just logged, as it used to be (see
-// vmm.WarnIfSizeMismatch).
-func TestVolume_SizeMismatchIsSurfacedAsCondition(t *testing.T) {
+// TestVolume_SizeMismatchIsAutoCorrected exercises correctDeclaredSize
+// (docs/open-questions.md「Volumeの申告内容...」): the same round-trip that
+// confirms a Volume's identifier exists also reports its real observed
+// size; a declared size_gb that drifted beyond tolerance is corrected in
+// place (not just flagged), and tenant_usage.VolumeGB is adjusted to match.
+func TestVolume_SizeMismatchIsAutoCorrected(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx) // "test-connection" already forced Ready
 
@@ -155,23 +155,81 @@ func TestVolume_SizeMismatchIsSurfacedAsCondition(t *testing.T) {
 	if !hasCondition(got.Status.Conditions, conditionSizeMatchesDeclaration, resource.ConditionTrue) {
 		t.Fatalf("matching size: conditions = %+v, want SizeMatchesDeclaration=True", got.Status.Conditions)
 	}
+	if got.Spec.SizeGB != 10 {
+		t.Fatalf("matching size: spec.size_gb = %d, want unchanged 10 (already matched, nothing to correct)", got.Spec.SizeGB)
+	}
 
 	mismatched, err := svc.CreateVolume(ctx, "tenant-a", "vol-mismatched", testVolumeSpec(10))
 	if err != nil {
 		t.Fatalf("CreateVolume (mismatched): %v", err)
 	}
+	svc.usageMu.Lock()
+	usageBefore := svc.usage["tenant-a"].VolumeGB
+	svc.usageMu.Unlock()
+
 	svc.handleVerifyResult(ctx, VerifyVolumeResult{TenantID: "tenant-a", VolumeID: mismatched.Meta.ID, Success: true, SizeBytes: 1 << 30})
 	got, err = svc.GetVolume(ctx, "tenant-a", mismatched.Meta.ID)
 	if err != nil {
 		t.Fatalf("GetVolume (mismatched): %v", err)
 	}
-	if !hasCondition(got.Status.Conditions, conditionSizeMatchesDeclaration, resource.ConditionFalse) {
-		t.Fatalf("mismatched size: conditions = %+v, want SizeMatchesDeclaration=False", got.Status.Conditions)
+	// declared 10 GB, really 1 GiB (1<<30 bytes) -- corrected to 1 GB.
+	if got.Spec.SizeGB != 1 {
+		t.Fatalf("mismatched size: spec.size_gb = %d, want corrected to 1 (the real observed size)", got.Spec.SizeGB)
 	}
-	// A size mismatch is a warning, not a failure: existence was still
-	// confirmed, so the Volume must still reach Ready.
+	if !hasCondition(got.Status.Conditions, conditionSizeMatchesDeclaration, resource.ConditionTrue) {
+		t.Fatalf("mismatched size: conditions = %+v, want SizeMatchesDeclaration=True (declaration now equals the corrected value)", got.Status.Conditions)
+	}
+	if !hasCondition(got.Status.Conditions, conditionQuotaExceededAfterCorrection, resource.ConditionFalse) {
+		t.Fatalf("mismatched size: conditions = %+v, want QuotaExceededAfterCorrection=False (well within the unlimited test quota)", got.Status.Conditions)
+	}
+	// A size correction is not a failure: existence was still confirmed, so
+	// the Volume must still reach Ready.
 	if got.Status.Phase != VolumePhaseReady {
-		t.Fatalf("mismatched size: phase = %q, want still Ready (a size mismatch is surfaced, not fatal)", got.Status.Phase)
+		t.Fatalf("mismatched size: phase = %q, want still Ready (a size correction is not fatal)", got.Status.Phase)
+	}
+
+	svc.usageMu.Lock()
+	usageAfter := svc.usage["tenant-a"].VolumeGB
+	svc.usageMu.Unlock()
+	if usageAfter != usageBefore-10+1 {
+		t.Fatalf("tenant_usage.volume_gb after correction = %d, want %d (before %d, -10 declared +1 corrected)", usageAfter, usageBefore-10+1, usageBefore)
+	}
+}
+
+// TestVolume_SizeCorrectionExceedingQuotaIsFlaggedNotBlocked confirms
+// option A from the design discussion: a correction that pushes a tenant
+// over max_volume_gb is still applied (never retroactively destroys or
+// blocks an already-existing Volume) but is surfaced via
+// QuotaExceededAfterCorrection for an admin to notice.
+func TestVolume_SizeCorrectionExceedingQuotaIsFlaggedNotBlocked(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxVolumeGb: 5}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	mustCreateTestStorageConnection(t, ctx, svc, "test-connection", "test-zone")
+
+	// Declared small enough to fit under the 5 GB quota at Create time.
+	vol, err := svc.CreateVolume(ctx, "tenant-a", "vol-1", testVolumeSpec(2))
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+
+	// Real size turns out to be far larger than declared -- correction
+	// pushes tenant_usage past the 5 GB cap.
+	svc.handleVerifyResult(ctx, VerifyVolumeResult{TenantID: "tenant-a", VolumeID: vol.Meta.ID, Success: true, SizeBytes: 20 << 30})
+	got, err := svc.GetVolume(ctx, "tenant-a", vol.Meta.ID)
+	if err != nil {
+		t.Fatalf("GetVolume: %v", err)
+	}
+	if got.Spec.SizeGB != 20 {
+		t.Fatalf("spec.size_gb = %d, want corrected to 20 despite exceeding quota (correction is never blocked)", got.Spec.SizeGB)
+	}
+	if !hasCondition(got.Status.Conditions, conditionQuotaExceededAfterCorrection, resource.ConditionTrue) {
+		t.Fatalf("conditions = %+v, want QuotaExceededAfterCorrection=True", got.Status.Conditions)
+	}
+	if got.Status.Phase != VolumePhaseReady {
+		t.Fatalf("phase = %q, want still Ready (over-quota-after-correction is flagged, not fatal)", got.Status.Phase)
 	}
 }
 

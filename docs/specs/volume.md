@@ -21,7 +21,7 @@ Volumeはその接続の中で発見されるだけ」という形に統一し�
 
 | フィールド | 説明 |
 |---|---|
-| `Volume.spec.size_gb` | ボリュームサイズ(GB)。**自己申告値**——kyuusha自身が作らないため検証できない。Quota計算にのみ使う |
+| `Volume.spec.size_gb` | ボリュームサイズ(GB)。**Create時は自己申告値**——kyuusha自身が作らないため作成前には検証できない。Quota計算に使う。検証で実測値と10%以上ずれていた場合、kyuusha側が実測値へ補正する（ユーザー向けのUpdate RPCは無いが、この1点だけシステム自身が書き換える。下記「検証フロー」参照） |
 | `Volume.spec.protocol` | `ISCSI` / `NVME_OF` / `NFS`。このVolumeが到達可能なプロトコル |
 | `Volume.spec.storage_connection` | このVolumeが属するHypervisor側のStorageConnection名。Hypervisorが自己登録時に宣言した`storage_connections[].name`のいずれかと一致していなければならない（下記「StorageConnection」参照） |
 | `Volume.spec.identifier` | プロトコル固有の識別子。ISCSI/NVME_OFなら`/dev/disk/by-id/`配下のブロックデバイスの安定名（udevが振るserial/WWNベースの名前）、NFSならそのStorageConnectionのマウントポイントからの相対パス |
@@ -158,10 +158,20 @@ Image/NetworkInterface/VolumeAttachmentと同じ非同期パターンで確認�
    `StorageConnection`も`Ready`であれば`Ready`へ進む。**確認が取れなければ
    （identifier不在等）`Pending`のまま**——`Error`へは倒さない。失敗しても次のsweepで
    また聞きに行く（無期限リトライ、上限やバックオフは無い）。同じ結果に乗ってくる
-   実サイズ（`size_bytes`）も`spec.size_gb`と比較し、`SizeMatchesDeclaration`
-   （True/False）として同じ`conditions`に記録する（2026-09-11、`kyuusha volume get`の
-   `conditions=...`で見える）——不一致は警告であって存在確認の失敗ではないため、
-   `Ready`への昇格自体はブロックしない
+   実サイズ（`size_bytes`）が申告`spec.size_gb`と10%以上ずれていれば、
+   `correctDeclaredSize`（`internal/block-storage/verification.go`）が
+   **`spec.size_gb`自体を実測値へ書き換え、`tenant_usage.volume_gb`もその差分だけ
+   調整する**（2026-09-11）——単に警告を出すだけでなく実際に直す。ストレージ管理者が
+   手入力する`size_gb`は入力ミスが起きやすく、実測値が分かった時点でQuota会計を
+   ズレたままにしておく理由が無いという判断（kyuusha全体の「specは宣言、statusは
+   観測された実態、非同期でreconcileする」という設計をそのまま踏襲——`Ready`への
+   昇格自体はブロックしない、既存Volumeを壊したり止めたりもしない）。補正の結果
+   テナントのQuota(`max_volume_gb`)を超えてしまった場合も、補正自体は適用した上で
+   `conditions`の`QuotaExceededAfterCorrection`（True/False）で運用者に見えるように
+   するだけに留める——事後的にQuota超過を理由にVolumeを破棄・detachすることはしない。
+   `SizeMatchesDeclaration`（True/False）も同じ`conditions`に記録される
+   （`kyuusha volume get`の`conditions=...`で見える）が、補正が入ればその時点で
+   宣言＝実測になるため実質常にTrueになる
 
 **computeとblock-storageの依存が双方向にならないよう、この2つのやり取りは両方とも
 NATS直結**（computeのgRPCを経由しない）: block-storageが「どのHypervisorに聞けばよいか」
@@ -300,8 +310,10 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
   ただしVM削除時の能動的な削除（上記「VM削除時のVolumeAttachment後始末」）で
   実運用上のオーファン化はほぼカバーされている——NetworkInterfaceが一切触られず
   そのまま残り続ける（[network仕様](network.md)参照）のとは異なる状況
-- **Volumeのリサイズ**: `size_gb`は作成後不変。Update RPC自体を用意していない
-  （Imageと同じ判断——不変にすべきフィールドしかない段階でUpdateを開けない）
+- **Volumeのリサイズ**: `size_gb`はユーザー向けには作成後不変。Update RPC自体を
+  用意していない（Imageと同じ判断——不変にすべきフィールドしかない段階でUpdateを
+  開けない）。唯一の例外は検証フローによる自動補正（上記）——ユーザー操作ではなく、
+  申告と実測のズレをkyuusha自身が是正するものなので、この判断とは矛盾しない
 - **スケジューリング時のstorage_connectionフィルタリング**: 上記「検証フロー」の
   最後の段落参照
 - **ハイパーバイザ障害時のマウント/ログイン自動化**: Hypervisorが宣言した

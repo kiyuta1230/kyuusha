@@ -94,21 +94,32 @@ iSCSI/NVMe-oF/NFSは「Hypervisor単位の事前接続＋接続済みセッシ�
    `Ready`になる。詳細は`docs/architecture.md`「追記（2026-09-11）」と
    `docs/specs/volume.md`「検証フロー」参照
 
+**サイズ食い違いは検知だけでなく自動補正するところまで実装済み（2026-09-11、下記参照）**:
+`VerifyVolumeResult`の`size_bytes`（元々存在していたのに捨てられていた）を
+`handleVerifyResult`で`spec.size_gb`と比較し、10%以上ずれていれば
+`correctDeclaredSize`が**`spec.size_gb`自体を実測値へ書き換え、`tenant_usage`も
+その差分だけ調整する**（単に`Volume.status.conditions`へ`SizeMatchesDeclaration`
+として記録するだけの案から発展させた）。ストレージ管理者が手入力する`size_gb`は
+入力ミスが起きやすく、実測値が分かった時点でQuota会計をズレたままにしておく理由が
+無いという判断——`Volume.spec.size_gb`は元々「Create時は自己申告、検証できない」
+フィールドだったが、検証できるようになった以上は直すべき、という整理。補正で
+テナントのQuotaを超えてしまっても、補正自体は適用した上で`conditions`の
+`QuotaExceededAfterCorrection`で見えるようにするだけに留め、既存Volumeの破棄・
+detachはしない（すでに動いている可能性のあるリソースを事後的なQuota判断で
+壊さないという、他の場面と同じ判断）。詳細は`docs/specs/volume.md`「検証フロー」
+参照。`vmm.WarnIfSizeMismatch`（VM起動時のログ警告）はそのまま残す——こちらは
+Volume検証と独立にVM起動のたびに実際のアタッチ経路で発生するので、両方に意味がある
+
+**`device_path`/`status.hypervisor`（`VolumeAttachment`側）のAPI越しの可視化も
+解決済み（2026-09-11）**: compute-agentがVM起動時に実際に解決したVolumeの情報を
+`ms.blockstorage.evt.<hypervisor>.volume.attached`でblock-storageへ報告するように
+なった。詳細は`docs/specs/volume.md`「device_path/hypervisorの報告」参照
+
 **まだ解決されないまま残る部分**（別タスク）:
-- サイズ食い違いのAPI越しの可視化は解決済み（2026-09-11）: `VerifyVolumeResult`の
-  `size_bytes`（元々存在していたのに捨てられていた）を`handleVerifyResult`で
-  `spec.size_gb`と比較し、`Volume.status.conditions`に`SizeMatchesDeclaration`
-  （True/False）として記録するようにした。`kyuusha volume get`が`conditions=...`
-  を表示するようになったので、そこで見える（不一致でも`Ready`自体はブロックしない
-  ——警告であって存在確認の失敗ではないため）。`vmm.WarnIfSizeMismatch`（VM起動時の
-  ログ警告）はそのまま残す——こちらはVolume検証と独立にVM起動のたびに実際の
-  アタッチ経路で発生するので、両方に意味がある
-- `device_path`/`status.hypervisor`（`VolumeAttachment`側）のAPI越しの可視化は
-  まだ未解決——`VolumeAttachmentStatus`に`DevicePath`/`Hypervisor`フィールド自体は
-  あるが、compute-agentからの報告経路がまだ無い
 - VM起動が寛容に劣化しない件（`volumeref.Resolve`が失敗するとVM起動全体が失敗する）
   自体は変更していない——永続データを積むVolumeを黙って外すより失敗を明示する方が
   安全という判断で、"バグ"ではなくトレードオフとして残している
+- 検証コマンドのリトライ間隔・上限（現状は無期限、10秒ごと）は未チューニング
 - Volume検証コマンドのリトライ間隔・上限（現状は無期限、10秒ごと）は未チューニング
 
 ## QEMU用のjailer相当の隔離方式（2トラックに分割決定、下記参照）

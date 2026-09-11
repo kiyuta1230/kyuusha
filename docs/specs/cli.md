@@ -127,10 +127,13 @@ admin-onlyではない。kyuushaはボリュームを作成/削除しない—�
 で到達可能な）ボリュームへの参照を登録するだけ。`size_gb`/`protocol`/
 `storage_connection`/`identifier`のバリデーションと、参照する`StorageConnection`が
 実在することが通れば`Pending`で受理され、非同期の検証（[Volume仕様](volume.md)
-「検証フロー」）が終わり次第`Ready`になる。`get`/`list`/`watch`の出力の`conditions`には
-`IdentifierVerified`（実在確認）と`SizeMatchesDeclaration`（申告`size_gb`と実測サイズの
-一致、10%以上の乖離で`False`）が入る——後者が`False`でも`Ready`への昇格自体は
-ブロックしない（警告であって存在確認の失敗ではないため）。
+「検証フロー」）が終わり次第`Ready`になる。検証で実測サイズが`-size-gb`と10%以上
+ずれていた場合、`spec.size_gb`自体が実測値へ補正される（`get`/`list`/`watch`の
+出力にそのまま反映される）——ストレージ管理者の入力ミスを、システムが検知した
+時点で直すという判断（[Volume仕様](volume.md)「検証フロー」参照）。`conditions`には
+`IdentifierVerified`（実在確認）、`SizeMatchesDeclaration`（補正後は実質常にTrue）、
+`QuotaExceededAfterCorrection`（補正の結果Quotaを超えた場合のみTrue、この場合も
+`Ready`への昇格自体はブロックしない）が入る。
 
 | サブコマンド | フラグ |
 |---|---|

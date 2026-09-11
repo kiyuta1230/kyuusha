@@ -40,15 +40,26 @@ import (
 // StorageConnection's own phase.
 const conditionIdentifierVerified = "IdentifierVerified"
 
-// conditionSizeMatchesDeclaration is set alongside conditionIdentifierVerified
-// from the same round-trip's real observed size (VerifyVolumeResult.SizeBytes,
-// computed by internal/compute-agent/volumeref.Resolve) -- see
-// docs/open-questions.md「Volumeの申告内容...」. Never re-checked afterward
-// (the verification round-trip itself only ever runs once per Volume, same
-// as identifier existence -- see docs/open-questions.md's static-vs-dynamic
-// entry): if the real backing store is resized later, this condition goes
-// stale, same as everything else that flow confirms once.
+// conditionSizeMatchesDeclaration reflects whether spec.size_gb currently
+// matches the real observed size (VerifyVolumeResult.SizeBytes, computed by
+// internal/compute-agent/volumeref.Resolve) -- see docs/open-questions.md
+// 「Volumeの申告内容...」. A mismatch beyond sizeMismatchTolerance is
+// corrected in place (see correctDeclaredSize) rather than just flagged: a
+// storage admin mistyping size_gb is common and easy, and there is no value
+// in leaving Quota accounting wrong indefinitely once the real size is
+// known -- see that function's own doc comment for why this is safe given
+// kyuusha's declarative spec/status model. So in practice this condition is
+// True immediately after any correction; a stale False would only be
+// visible if the Update racing the correction itself failed.
 const conditionSizeMatchesDeclaration = "SizeMatchesDeclaration"
+
+// conditionQuotaExceededAfterCorrection is set True when correctDeclaredSize
+// finds the corrected size pushes the tenant over max_volume_gb. Purely
+// informational -- correction still applies regardless (see its own doc
+// comment): kyuusha doesn't retroactively destroy or detach an
+// already-existing, possibly already-attached Volume over a Quota
+// realization discovered after the fact.
+const conditionQuotaExceededAfterCorrection = "QuotaExceededAfterCorrection"
 
 // bytesPerGB/sizeMismatchTolerance mirror
 // internal/compute-agent/vmm.WarnIfSizeMismatch's own constants exactly, but
@@ -71,6 +82,68 @@ func sizeMatchesDeclaration(declaredSizeGB, observedBytes int64) bool {
 		diff = -diff
 	}
 	return float64(diff) <= float64(declaredBytes)*sizeMismatchTolerance
+}
+
+// ceilBytesToGB rounds up, matching the usual cloud/storage convention of
+// never under-billing a partial GB.
+func ceilBytesToGB(b int64) int64 {
+	return (b + bytesPerGB - 1) / bytesPerGB
+}
+
+// correctDeclaredSize brings vol.Spec.SizeGB and this tenant's tracked
+// tenant_usage.VolumeGB in line with observedBytes when they've drifted
+// beyond sizeMismatchTolerance, and reports (via
+// conditionQuotaExceededAfterCorrection) if the corrected total now exceeds
+// the tenant's max_volume_gb. Mutates vol in place; the caller is
+// responsible for the actual Update.
+//
+// Why correcting is safe here, unlike most places this codebase is careful
+// never to retroactively act on a Quota realization: size_gb is
+// Create-time-only accounting metadata a storage admin has to type by
+// hand (kyuusha never provisions, so there's no other source for it --
+// see docs/architecture.md「訂正: 責務の境界を...」), and typos are common
+// and easy. Once the real size is known there is no value in leaving the
+// declaration (and the Quota accounting derived from it) wrong forever --
+// this is exactly the kind of "spec was a best-effort declaration, status
+// now reflects reality" reconciliation this whole verification flow (and
+// kyuusha's object model generally) already embodies elsewhere. Unlike a
+// genuine over-quota Create rejection, this never destroys or blocks an
+// already-existing (possibly already-attached) Volume -- see
+// conditionQuotaExceededAfterCorrection's own doc comment.
+func (s *Service) correctDeclaredSize(ctx context.Context, vol *Volume, observedBytes int64) {
+	if vol.Spec.SizeGB <= 0 || observedBytes <= 0 || sizeMatchesDeclaration(vol.Spec.SizeGB, observedBytes) {
+		return
+	}
+
+	oldSizeGB := vol.Spec.SizeGB
+	correctedSizeGB := ceilBytesToGB(observedBytes)
+	vol.Spec.SizeGB = correctedSizeGB
+
+	s.usageMu.Lock()
+	usage := s.usage[vol.Meta.TenantID]
+	usage.VolumeGB += correctedSizeGB - oldSizeGB
+	s.usage[vol.Meta.TenantID] = usage
+	s.usageMu.Unlock()
+
+	slog.Info("block-storage: corrected volume's declared size_gb to its real observed size",
+		"id", vol.Meta.ID, "declared_gb", oldSizeGB, "corrected_gb", correctedSizeGB)
+
+	exceeded := resource.ConditionFalse
+	if limit, err := lookupQuota(ctx, s.identityClient, vol.Meta.TenantID); err == nil {
+		// usage.VolumeGB already includes this volume's own corrected share
+		// (just added above), so "usage minus that share, plus that share
+		// again" run through the same allow() the rest of Quota enforcement
+		// uses is exactly "is the corrected total within max_volume_gb" --
+		// reusing it rather than a hand-rolled comparison, per
+		// docs/architecture.md's own "Quota設計" instruction.
+		if allowed, err := s.quota.allow(ctx, tenantUsage{VolumeGB: usage.VolumeGB - correctedSizeGB}, correctedSizeGB, limit); err == nil && !allowed {
+			exceeded = resource.ConditionTrue
+			slog.Warn("block-storage: volume's corrected size exceeds tenant quota", "id", vol.Meta.ID, "tenant_id", vol.Meta.TenantID, "corrected_gb", correctedSizeGB, "usage_gb", usage.VolumeGB)
+		}
+	}
+	vol.Status.Conditions = upsertCondition(vol.Status.Conditions, resource.Condition{
+		Type: conditionQuotaExceededAfterCorrection, Status: exceeded, LastTransitionAt: time.Now(),
+	})
 }
 
 // hypervisorConnInfo is one Hypervisor's self-report, as last seen via
@@ -366,20 +439,17 @@ func (s *Service) handleVerifyResult(ctx context.Context, res VerifyVolumeResult
 
 	// The same round-trip that confirms the identifier exists also reports
 	// its real observed size (only meaningful on Success -- a failed lookup
-	// has no size to compare). vol.Spec.SizeGB<=0 can't happen for a real
-	// Volume (Create-time validation), but the check is here as a divide-
-	// safety guard, not a real-world case.
-	if res.Success && res.SizeBytes > 0 && vol.Spec.SizeGB > 0 {
-		sizeStatus := resource.ConditionFalse
-		sizeReason := "observed size does not match declared size_gb"
-		if sizeMatchesDeclaration(vol.Spec.SizeGB, res.SizeBytes) {
-			sizeStatus = resource.ConditionTrue
-			sizeReason = ""
-		}
+	// has no size to compare). correctDeclaredSize corrects spec.size_gb (and
+	// tenant_usage) in place if it's drifted beyond tolerance -- see its own
+	// doc comment for why that's safe here. vol.Spec.SizeGB<=0 can't happen
+	// for a real Volume (Create-time validation); correctDeclaredSize guards
+	// it anyway, defensively. Once corrected, spec.size_gb equals what was
+	// just observed by definition, so this condition is always True
+	// immediately afterward -- see its own doc comment.
+	if res.Success && res.SizeBytes > 0 {
+		s.correctDeclaredSize(ctx, &vol, res.SizeBytes)
 		vol.Status.Conditions = upsertCondition(vol.Status.Conditions, resource.Condition{
-			Type: conditionSizeMatchesDeclaration, Status: sizeStatus, Reason: sizeReason,
-			Message:          fmt.Sprintf("declared %d GB, observed %d bytes", vol.Spec.SizeGB, res.SizeBytes),
-			LastTransitionAt: time.Now(),
+			Type: conditionSizeMatchesDeclaration, Status: resource.ConditionTrue, LastTransitionAt: time.Now(),
 		})
 	}
 
