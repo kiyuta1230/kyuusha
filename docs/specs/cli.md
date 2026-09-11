@@ -127,7 +127,10 @@ admin-onlyではない。kyuushaはボリュームを作成/削除しない—�
 で到達可能な）ボリュームへの参照を登録するだけ。`size_gb`/`protocol`/
 `storage_connection`/`identifier`のバリデーションと、参照する`StorageConnection`が
 実在することが通れば`Pending`で受理され、非同期の検証（[Volume仕様](volume.md)
-「検証フロー」）が終わり次第`Ready`になる。
+「検証フロー」）が終わり次第`Ready`になる。`get`/`list`/`watch`の出力の`conditions`には
+`IdentifierVerified`（実在確認）と`SizeMatchesDeclaration`（申告`size_gb`と実測サイズの
+一致、10%以上の乖離で`False`）が入る——後者が`False`でも`Ready`への昇格自体は
+ブロックしない（警告であって存在確認の失敗ではないため）。
 
 | サブコマンド | フラグ |
 |---|---|
@@ -157,9 +160,10 @@ block-storage向け（[Volume仕様](volume.md)「StorageConnection」参照）�
 block-storage向け（[Volume仕様](volume.md)参照）。`VolumeAttachmentService`のCLI名は
 `volattach`。同一`volume_id`について非`Deleting`なVolumeAttachmentは同時に1つまで
 （排他制御。他の有効なアタッチメントが残っている間のCreateは拒否ではなく`Pending`で
-受理され、10秒毎に再試行される）。`device_path`/`hypervisor`は、compute-agentが
-実際に見つけたローカルパスとどのHypervisorで起動したかをblock-storageへ報告し返す
-経路が無いため常に空（[Volume仕様](volume.md)「この実装がカバーしないもの」参照）。
+受理され、10秒毎に再試行される）。`get`/`list`/`watch`の出力の`device_path`/`hypervisor`は、
+そのVolumeを使う実VMが一度でも起動していれば、compute-agentが見つけた実パスと起動先
+Hypervisorが入る（[Volume仕様](volume.md)「device_path/hypervisorの報告」参照）。
+まだどのVMも起動していなければ空。
 
 | サブコマンド | フラグ |
 |---|---|

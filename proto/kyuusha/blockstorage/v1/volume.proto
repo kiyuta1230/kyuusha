@@ -128,8 +128,13 @@ message VolumeAttachmentSpec {
 message VolumeAttachmentStatus {
   string phase = 1; // Pending(排他制御待ち) / Attached / Deleting / Error
   repeated kyuusha.resource.v1.Condition conditions = 2;
-  string device_path = 3; // compute-agent側でのローカルデバイスパス（まだ報告経路が無く常に空。既知の未実装事項）
-  string hypervisor = 4;  // まだ空（VolumeAttachmentSpecにhypervisorを持たせていないため。既知の未実装事項）
+  // device_path/hypervisor are purely informational, reported by
+  // compute-agent once a real VM boot actually resolves and wires in this
+  // Volume (see docs/specs/volume.md「status.device_path/status.hypervisor」)
+  // -- empty until then. Never gates phase: the exclusive-attach bookkeeping
+  // that sets Attached is unrelated to whether this report has arrived yet.
+  string device_path = 3; // compute-agent側の実ローカルデバイス/ファイルパス
+  string hypervisor = 4;  // 実際にアタッチされたHypervisor
 }
 
 message VolumeAttachment {

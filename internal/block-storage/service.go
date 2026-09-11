@@ -157,6 +157,9 @@ func (s *Service) Run(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 		if err := s.subscribeVerifyResults(ctx); err != nil {
 			return fmt.Errorf("subscribe verify results: %w", err)
 		}
+		if err := s.subscribeVolumeAttached(ctx); err != nil {
+			return fmt.Errorf("subscribe volume attached: %w", err)
+		}
 	}
 
 	ticker := time.NewTicker(pendingSweepInterval)

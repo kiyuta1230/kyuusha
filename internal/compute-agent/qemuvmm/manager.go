@@ -147,22 +147,22 @@ func (m *Manager) ConsoleLogPath(vmID string) string {
 // against them. It returns once QEMU has either exited immediately (an
 // error) or stayed up past bootGracePeriod (success) -- see that
 // constant's doc for exactly what "success" does and doesn't mean.
-func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
+func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume, error) {
 	if err := os.MkdirAll(m.cacheDir(), 0o755); err != nil {
-		return fmt.Errorf("qemuvmm: create cache dir: %w", err)
+		return nil, fmt.Errorf("qemuvmm: create cache dir: %w", err)
 	}
 	kernelPath, err := m.ensureCached(ctx, spec.KernelURL)
 	if err != nil {
-		return fmt.Errorf("qemuvmm: fetch kernel: %w", err)
+		return nil, fmt.Errorf("qemuvmm: fetch kernel: %w", err)
 	}
 	masterRootfs, err := m.ensureCached(ctx, spec.RootfsURL)
 	if err != nil {
-		return fmt.Errorf("qemuvmm: fetch rootfs: %w", err)
+		return nil, fmt.Errorf("qemuvmm: fetch rootfs: %w", err)
 	}
 
 	vmDir := filepath.Join(m.runDir(), spec.VMID)
 	if err := os.MkdirAll(vmDir, 0o755); err != nil {
-		return fmt.Errorf("qemuvmm: create run dir: %w", err)
+		return nil, fmt.Errorf("qemuvmm: create run dir: %w", err)
 	}
 
 	// QEMU's virtio-blk backend opens the drive read-write and writes guest
@@ -171,7 +171,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// the same Image.
 	rootfsCopy := filepath.Join(vmDir, "rootfs.raw")
 	if err := copyFile(masterRootfs, rootfsCopy); err != nil {
-		return fmt.Errorf("qemuvmm: copy rootfs: %w", err)
+		return nil, fmt.Errorf("qemuvmm: copy rootfs: %w", err)
 	}
 
 	// Wire every real network interface before QEMU starts (it opens each
@@ -184,6 +184,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	var netArgs []string
 	var qemuNetArgs []string
 	var taps []string
+	var attached []vmm.AttachedVolume
 	cleanup := func() {
 		for _, t := range taps {
 			_ = netsetup.DeleteTap(t)
@@ -199,7 +200,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		})
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("qemuvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
+			return nil, fmt.Errorf("qemuvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
 		}
 		taps = append(taps, wired.TapName)
 		netdevID := fmt.Sprintf("net%d", i)
@@ -232,7 +233,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		seedImg, err := vmm.BuildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("qemuvmm: build seed disk: %w", err)
+			return nil, fmt.Errorf("qemuvmm: build seed disk: %w", err)
 		}
 		// Read-only, non-root: the guest sees this as a second virtio-blk
 		// device (typically /dev/vdb) alongside its root disk, exactly what
@@ -250,16 +251,17 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		devPath, sizeBytes, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("qemuvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
+			return nil, fmt.Errorf("qemuvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
 		}
 		vmm.WarnIfSizeMismatch(v, sizeBytes)
+		attached = append(attached, vmm.AttachedVolume{AttachmentID: v.AttachmentID, TenantID: v.TenantID, DevicePath: devPath})
 		driveArgs = append(driveArgs, "-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", devPath))
 	}
 
 	consoleLog, err := os.Create(filepath.Join(vmDir, "console.log"))
 	if err != nil {
 		cleanup()
-		return fmt.Errorf("qemuvmm: create console log: %w", err)
+		return nil, fmt.Errorf("qemuvmm: create console log: %w", err)
 	}
 	defer consoleLog.Close()
 
@@ -296,7 +298,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	cmd.Stderr = consoleLog
 	if err := cmd.Start(); err != nil {
 		cleanup()
-		return fmt.Errorf("qemuvmm: start qemu: %w", err)
+		return nil, fmt.Errorf("qemuvmm: start qemu: %w", err)
 	}
 
 	// Best-effort: a host/container without usable cgroup v2 delegation just
@@ -315,7 +317,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("qemuvmm: removing cgroup after immediate exit", "vm_id", spec.VMID, "err", rmErr)
 		}
-		return fmt.Errorf("qemuvmm: qemu exited immediately (see %s): %w", consoleLog.Name(), err)
+		return nil, fmt.Errorf("qemuvmm: qemu exited immediately (see %s): %w", consoleLog.Name(), err)
 	case <-time.After(bootGracePeriod):
 	}
 
@@ -342,7 +344,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		}
 	}()
 
-	return nil
+	return attached, nil
 }
 
 // Stop tears down vmID's QEMU process if one is running. A no-op if this

@@ -55,6 +55,24 @@ type VerifyVolumeResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// EvtSubjectVolumeAttached is compute-agent's fire-and-forget report of
+// where a VolumeAttachment actually landed during a real VM boot -- see
+// docs/specs/volume.md "status.device_path/status.hypervisor". Unlike
+// VerifyVolumeCommand/Result above, there is no command side: compute-agent
+// publishes this proactively, whenever internal/compute-agent's VMM driver
+// successfully resolves and wires in a Volume, never on request.
+func EvtSubjectVolumeAttached(hypervisor string) string {
+	return fmt.Sprintf("ms.blockstorage.evt.%s.volume.attached", hypervisor)
+}
+
+// VolumeAttachedEvent is published to EvtSubjectVolumeAttached(Hypervisor).
+type VolumeAttachedEvent struct {
+	AttachmentID string `json:"attachment_id"`
+	TenantID     string `json:"tenant_id"`
+	Hypervisor   string `json:"hypervisor"`
+	DevicePath   string `json:"device_path"`
+}
+
 const (
 	cmdStreamName = "BLOCKSTORAGE_CMD"
 	evtStreamName = "BLOCKSTORAGE_EVT"

@@ -848,11 +848,16 @@ func (x *VolumeAttachmentSpec) GetDeviceHint() string {
 }
 
 type VolumeAttachmentStatus struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending(排他制御待ち) / Attached / Deleting / Error
-	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	DevicePath    string                 `protobuf:"bytes,3,opt,name=device_path,json=devicePath,proto3" json:"device_path,omitempty"` // compute-agent側でのローカルデバイスパス（まだ報告経路が無く常に空。既知の未実装事項）
-	Hypervisor    string                 `protobuf:"bytes,4,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`                   // まだ空（VolumeAttachmentSpecにhypervisorを持たせていないため。既知の未実装事項）
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Phase      string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending(排他制御待ち) / Attached / Deleting / Error
+	Conditions []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
+	// device_path/hypervisor are purely informational, reported by
+	// compute-agent once a real VM boot actually resolves and wires in this
+	// Volume (see docs/specs/volume.md「status.device_path/status.hypervisor」)
+	// -- empty until then. Never gates phase: the exclusive-attach bookkeeping
+	// that sets Attached is unrelated to whether this report has arrived yet.
+	DevicePath    string `protobuf:"bytes,3,opt,name=device_path,json=devicePath,proto3" json:"device_path,omitempty"` // compute-agent側の実ローカルデバイス/ファイルパス
+	Hypervisor    string `protobuf:"bytes,4,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`                   // 実際にアタッチされたHypervisor
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

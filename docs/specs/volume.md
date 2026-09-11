@@ -30,7 +30,7 @@ Volumeはその接続の中で発見されるだけ」という形に統一し�
 | `VolumeAttachment.spec.volume_id` / `vm_id` | 結びつけるVolumeとVirtualMachineのID |
 | `VolumeAttachment.spec.device_hint` | 省略可。デバイスパスの希望（現状使われていない） |
 | `VolumeAttachment.status.phase` | `Pending` / `Attaching` / `Attached` / `Detaching` / `Deleting` / `Error` |
-| `VolumeAttachment.status.device_path` / `hypervisor` | **常に空**（既知の未実装事項、下記参照） |
+| `VolumeAttachment.status.device_path` / `hypervisor` | 実際に真VMが起動してVolumeが解決された時点でcompute-agentが報告する（2026-09-11実装、下記「device_path/hypervisorの報告」参照）。まだどのVMも起動していなければ空 |
 | `StorageConnection.spec.zones` | ストレージ管理者が宣言する、このバックエンドが接続を許容するAvailability Zone一覧 |
 | `StorageConnection.spec.annotations` | `Volume.spec.annotations`と同じ位置付けの参考情報（製品バージョン等） |
 | `StorageConnection.status.phase` | `Pending` / `Ready`。`spec.zones`の**全ゾーン**が確認できて初めてReady（厳格）。`Error`は無い |
@@ -157,7 +157,11 @@ Image/NetworkInterface/VolumeAttachmentと同じ非同期パターンで確認�
    `Volume.status.conditions`の`IdentifierVerified`として記録され、そのVolumeの
    `StorageConnection`も`Ready`であれば`Ready`へ進む。**確認が取れなければ
    （identifier不在等）`Pending`のまま**——`Error`へは倒さない。失敗しても次のsweepで
-   また聞きに行く（無期限リトライ、上限やバックオフは無い）
+   また聞きに行く（無期限リトライ、上限やバックオフは無い）。同じ結果に乗ってくる
+   実サイズ（`size_bytes`）も`spec.size_gb`と比較し、`SizeMatchesDeclaration`
+   （True/False）として同じ`conditions`に記録する（2026-09-11、`kyuusha volume get`の
+   `conditions=...`で見える）——不一致は警告であって存在確認の失敗ではないため、
+   `Ready`への昇格自体はブロックしない
 
 **computeとblock-storageの依存が双方向にならないよう、この2つのやり取りは両方とも
 NATS直結**（computeのgRPCを経由しない）: block-storageが「どのHypervisorに聞けばよいか」
@@ -210,7 +214,25 @@ VM削除時（プロセスの実終了後）は、fcvmmがbind mountしたもの
 （`mknod`した特殊ファイルは削除しても実デバイスには影響しないため後始末不要）。
 tap配線の後始末と同じeventual-consistency、失敗しても致命的ではない。
 
-## compute側の統合
+### device_path/hypervisorの報告（2026-09-11実装）
+
+`VolumeAttachmentStatus.device_path`/`hypervisor`は元々「フィールドはあるが報告経路が無く
+常に空」という既知の未実装事項だった。`fcvmm`/`qemuvmm`の`Boot()`は元々`error`だけを
+返していたが、`volumeref.Resolve`が実際に見つけた実パス（`AttachedVolume{AttachmentID,
+TenantID, DevicePath}`）を成功時に併せて返すよう変更し、`internal/compute-agent/agent.go`
+（`reportAttachedVolumes`）がそれをVolumeごとに`ms.blockstorage.evt.<hypervisor>.
+volume.attached`（`blockstorage.VolumeAttachedEvent`、`internal/block-storage/nats.go`）
+へfire-and-forgetで発行する。block-storage側（`subscribeVolumeAttached`/
+`handleVolumeAttached`、`internal/block-storage/verification.go`）はこれを受けて
+該当`VolumeAttachment`の`status.device_path`/`hypervisor`を更新するだけ——**`status.phase`は
+一切触らない**（`Attached`への遷移は排他制御の予約が決めるもので、実際にVMが起動して
+この報告が届いたかどうかとは独立——上記「排他制御」節参照）。
+
+`VerifyVolumeCommand`/`Result`（上記「検証フロー」）と違い、こちらはcompute-agentからの
+一方向イベントのみで、block-storage側から何かを要求することはない。定期リトライも無い
+——実際のVM起動のたびにしか発火しない性質のものなので、Volume検証のような
+「確認が取れるまで無期限に聞き直す」設計は意味がない（この報告を取りこぼしても、
+次にそのVolumeを使うVMが起動すれば再度報告される）。
 
 `internal/compute/volume.go`が、`network_interfaces`の統合（[network仕様](network.md)
 「compute側の統合」）と全く同じ形で実装している:
@@ -278,9 +300,6 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
   ただしVM削除時の能動的な削除（上記「VM削除時のVolumeAttachment後始末」）で
   実運用上のオーファン化はほぼカバーされている——NetworkInterfaceが一切触られず
   そのまま残り続ける（[network仕様](network.md)参照）のとは異なる状況
-- **`status.device_path`/`status.hypervisor`**: 常に空のまま。compute-agentが知っている
-  実ローカルデバイスパスとどのHypervisorで実際にアタッチしたかをblock-storageへ
-  報告し返す経路が無い
 - **Volumeのリサイズ**: `size_gb`は作成後不変。Update RPC自体を用意していない
   （Imageと同じ判断——不変にすべきフィールドしかない段階でUpdateを開けない）
 - **スケジューリング時のstorage_connectionフィルタリング**: 上記「検証フロー」の
@@ -294,12 +313,8 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
 - **StorageConnectionの削除保護のみ、GC無し**: `StorageConnection`は参照している
   Volumeが残っている間は削除できない（`ErrValidation`）が、逆に参照されなくなった
   StorageConnectionの自動削除は無い（明示的に消すまで残り続ける）
-- **Volume/StorageConnectionの検証結果はAPI越しに詳細が見えない**: `Volume.status`は
-  `IdentifierVerified`という`Condition`は持つが、実際にcompute-agentが見つけた
-  `device_path`や検証に応じた`hypervisor`をblock-storageへ報告し返す経路（上記
-  `status.device_path`/`status.hypervisor`と同じ話）はまだ無い。検証コマンドの
-  リトライ間隔・上限（現状は無期限、`pendingSweepInterval`＝10秒ごと）も
-  チューニングされていない
+- **検証コマンドのリトライ間隔・上限は未チューニング**: 現状は無期限、
+  `pendingSweepInterval`＝10秒ごと
 
 ## エンドポイント
 

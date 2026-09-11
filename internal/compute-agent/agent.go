@@ -231,7 +231,7 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 	result := compute.CreateResult{VMID: cmd.VMID, Success: true}
 	if driver, ok := a.Drivers[cmd.DriverHint]; ok && driver != nil && cmd.KernelURL != "" && cmd.RootfsURL != "" {
 		slog.Info("compute-agent: booting VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "driver_hint", cmd.DriverHint, "interfaces", len(cmd.Interfaces))
-		if err := driver.Boot(ctx, vmm.BootSpec{
+		attached, err := driver.Boot(ctx, vmm.BootSpec{
 			VMID:              cmd.VMID,
 			VCPU:              cmd.VCPU,
 			MemoryMB:          cmd.MemoryMB,
@@ -240,11 +240,14 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 			BootArgs:          cmd.BootArgs,
 			NetworkInterfaces: buildNetIfaces(cmd.VMID, cmd.Interfaces),
 			UserData:          cmd.UserData,
-			Volumes:           buildVolumeInfos(cmd.Volumes),
-		}); err != nil {
+			Volumes:           buildVolumeInfos(cmd.TenantID, cmd.Volumes),
+		})
+		if err != nil {
 			span.RecordError(err)
 			slog.Error("compute-agent: boot failed", "vm_id", cmd.VMID, "err", err)
 			result = compute.CreateResult{VMID: cmd.VMID, Success: false, Error: err.Error()}
+		} else {
+			a.reportAttachedVolumes(ctx, attached)
 		}
 	} else {
 		slog.Info("compute-agent: stub-creating VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "driver_hint", cmd.DriverHint)
@@ -353,11 +356,12 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.Net
 // already-visible device/file on this host: a straight field-for-field
 // copy -- see internal/compute-agent/volumeref, which is where the actual
 // discovery happens (at Boot time, inside each driver), not here.
-func buildVolumeInfos(infos []compute.VolumeAttachInfo) []vmm.VolumeAttachInfo {
+func buildVolumeInfos(tenantID string, infos []compute.VolumeAttachInfo) []vmm.VolumeAttachInfo {
 	out := make([]vmm.VolumeAttachInfo, len(infos))
 	for i, v := range infos {
 		out[i] = vmm.VolumeAttachInfo{
 			AttachmentID:      v.AttachmentID,
+			TenantID:          tenantID,
 			Protocol:          v.Protocol,
 			StorageConnection: v.StorageConnection,
 			Identifier:        v.Identifier,
@@ -365,6 +369,33 @@ func buildVolumeInfos(infos []compute.VolumeAttachInfo) []vmm.VolumeAttachInfo {
 		}
 	}
 	return out
+}
+
+// reportAttachedVolumes tells block-storage where each Volume actually
+// landed (device_path) and on which Hypervisor -- see
+// docs/specs/volume.md "status.device_path/status.hypervisor", previously
+// always empty for lack of exactly this report-back path. Fire-and-forget,
+// same as the heartbeat: a dropped publish just means that one
+// VolumeAttachment's status stays unreported until the next VM using it
+// boots (there is no periodic retry, unlike the Volume verification flow,
+// since this only ever fires at an actual successful boot, not on a timer).
+func (a *Agent) reportAttachedVolumes(ctx context.Context, attached []vmm.AttachedVolume) {
+	for _, v := range attached {
+		payload, err := json.Marshal(blockstorage.VolumeAttachedEvent{
+			AttachmentID: v.AttachmentID,
+			TenantID:     v.TenantID,
+			Hypervisor:   a.Hypervisor,
+			DevicePath:   v.DevicePath,
+		})
+		if err != nil {
+			continue
+		}
+		msg := nats.NewMsg(blockstorage.EvtSubjectVolumeAttached(a.Hypervisor))
+		msg.Data = payload
+		if _, err := a.JS.PublishMsg(ctx, msg); err != nil {
+			slog.Warn("compute-agent: publish volume-attached event failed", "attachment_id", v.AttachmentID, "err", err)
+		}
+	}
 }
 
 func (a *Agent) publishHeartbeat() {

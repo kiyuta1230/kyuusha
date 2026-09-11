@@ -195,17 +195,17 @@ func (m *Manager) ConsoleLogPath(vmID string) string {
 // against them. It returns once Firecracker has either exited immediately
 // (an error) or stayed up past bootGracePeriod (success) -- see that
 // constant's doc for exactly what "success" does and doesn't mean.
-func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
+func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume, error) {
 	if err := os.MkdirAll(m.cacheDir(), 0o755); err != nil {
-		return fmt.Errorf("fcvmm: create cache dir: %w", err)
+		return nil, fmt.Errorf("fcvmm: create cache dir: %w", err)
 	}
 	kernelPath, err := m.ensureCached(ctx, spec.KernelURL)
 	if err != nil {
-		return fmt.Errorf("fcvmm: fetch kernel: %w", err)
+		return nil, fmt.Errorf("fcvmm: fetch kernel: %w", err)
 	}
 	masterRootfs, err := m.ensureCached(ctx, spec.RootfsURL)
 	if err != nil {
-		return fmt.Errorf("fcvmm: fetch rootfs: %w", err)
+		return nil, fmt.Errorf("fcvmm: fetch rootfs: %w", err)
 	}
 
 	// console.log is the only thing this VM still keeps outside the jail --
@@ -214,17 +214,17 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// descriptors survive it).
 	vmDir := filepath.Join(m.runDir(), spec.VMID)
 	if err := os.MkdirAll(vmDir, 0o755); err != nil {
-		return fmt.Errorf("fcvmm: create run dir: %w", err)
+		return nil, fmt.Errorf("fcvmm: create run dir: %w", err)
 	}
 
 	fcExecPath, err := resolveExecPath(m.binPath())
 	if err != nil {
-		return fmt.Errorf("fcvmm: resolve firecracker binary: %w", err)
+		return nil, fmt.Errorf("fcvmm: resolve firecracker binary: %w", err)
 	}
 	jailUID, jailGID := m.jailUID(), m.jailGID()
 	chroot := jailChrootDir(m.jailChrootBaseDir(), fcExecPath, spec.VMID)
 	if err := os.MkdirAll(chroot, 0o755); err != nil {
-		return fmt.Errorf("fcvmm: create jail chroot dir: %w", err)
+		return nil, fmt.Errorf("fcvmm: create jail chroot dir: %w", err)
 	}
 
 	// jailer copies the Firecracker binary itself in, but nothing else --
@@ -234,7 +234,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// path, not this container's own view of it.
 	kernelInJail := filepath.Join(chroot, "kernel")
 	if err := placeReadOnlyResource(kernelPath, kernelInJail); err != nil {
-		return fmt.Errorf("fcvmm: place kernel in jail: %w", err)
+		return nil, fmt.Errorf("fcvmm: place kernel in jail: %w", err)
 	}
 
 	// Firecracker opens its root drive read-write and writes guest changes
@@ -243,7 +243,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// Image.
 	rootfsCopy := filepath.Join(chroot, "rootfs.ext4")
 	if err := placeWritableResource(masterRootfs, rootfsCopy, jailUID, jailGID); err != nil {
-		return fmt.Errorf("fcvmm: copy rootfs into jail: %w", err)
+		return nil, fmt.Errorf("fcvmm: copy rootfs into jail: %w", err)
 	}
 
 	apiSock := filepath.Join(chroot, "api.sock")
@@ -258,6 +258,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	var netArgs []string
 	var taps []string
 	var volumeMounts []string
+	var attached []vmm.AttachedVolume
 	cleanup := func() {
 		for _, t := range taps {
 			_ = netsetup.DeleteTap(t)
@@ -276,7 +277,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		})
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("fcvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
+			return nil, fmt.Errorf("fcvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
 		}
 		taps = append(taps, wired.TapName)
 		fcNetIfaces = append(fcNetIfaces, fcNetworkInterface{
@@ -319,11 +320,11 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		seedImg, err := vmm.BuildSeedDisk(chroot, spec.VMID, spec.UserData, spec.NetworkInterfaces)
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("fcvmm: build seed disk: %w", err)
+			return nil, fmt.Errorf("fcvmm: build seed disk: %w", err)
 		}
 		if err := os.Chmod(seedImg, 0o644); err != nil {
 			cleanup()
-			return fmt.Errorf("fcvmm: chmod seed disk: %w", err)
+			return nil, fmt.Errorf("fcvmm: chmod seed disk: %w", err)
 		}
 		// Read-only, non-root: the guest sees this as a second
 		// virtio-block device (typically /dev/vdb) alongside its root
@@ -347,15 +348,16 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		devPath, sizeBytes, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("fcvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
+			return nil, fmt.Errorf("fcvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
 		}
 		vmm.WarnIfSizeMismatch(v, sizeBytes)
+		attached = append(attached, vmm.AttachedVolume{AttachmentID: v.AttachmentID, TenantID: v.TenantID, DevicePath: devPath})
 		volName := fmt.Sprintf("vol%d", i)
 		dst := filepath.Join(chroot, volName)
 		mounted, err := placeVolumeLike(devPath, dst, jailUID, jailGID)
 		if err != nil {
 			cleanup()
-			return fmt.Errorf("fcvmm: place volume %d (%s) into jail: %w", i, v.AttachmentID, err)
+			return nil, fmt.Errorf("fcvmm: place volume %d (%s) into jail: %w", i, v.AttachmentID, err)
 		}
 		if mounted {
 			volumeMounts = append(volumeMounts, dst)
@@ -378,17 +380,17 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	configBytes, err := json.Marshal(cfg)
 	if err != nil {
 		cleanup()
-		return fmt.Errorf("fcvmm: marshal config: %w", err)
+		return nil, fmt.Errorf("fcvmm: marshal config: %w", err)
 	}
 	if err := os.WriteFile(configPath, configBytes, 0o644); err != nil {
 		cleanup()
-		return fmt.Errorf("fcvmm: write config: %w", err)
+		return nil, fmt.Errorf("fcvmm: write config: %w", err)
 	}
 
 	consoleLog, err := os.Create(filepath.Join(vmDir, "console.log"))
 	if err != nil {
 		cleanup()
-		return fmt.Errorf("fcvmm: create console log: %w", err)
+		return nil, fmt.Errorf("fcvmm: create console log: %w", err)
 	}
 	defer consoleLog.Close()
 
@@ -420,7 +422,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	cmd.Stderr = consoleLog
 	if err := cmd.Start(); err != nil {
 		cleanup()
-		return fmt.Errorf("fcvmm: start jailer: %w", err)
+		return nil, fmt.Errorf("fcvmm: start jailer: %w", err)
 	}
 
 	// Best-effort: a host/container without usable cgroup v2 delegation just
@@ -439,7 +441,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("fcvmm: removing cgroup after immediate exit", "vm_id", spec.VMID, "err", rmErr)
 		}
-		return fmt.Errorf("fcvmm: firecracker exited immediately (see %s): %w", consoleLog.Name(), err)
+		return nil, fmt.Errorf("fcvmm: firecracker exited immediately (see %s): %w", consoleLog.Name(), err)
 	case <-time.After(bootGracePeriod):
 	}
 
@@ -466,7 +468,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 		}
 	}()
 
-	return nil
+	return attached, nil
 }
 
 // Stop tears down vmID's Firecracker process if one is running. A no-op if

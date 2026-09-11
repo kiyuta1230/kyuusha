@@ -518,7 +518,12 @@ persist_identifier="scenario-persist-volume.img"
 # find that old data and report "found" instead of "written", which the
 # check below doesn't expect on a first attach.
 rm -f "playground/volume-data/$persist_identifier"
-truncate -s 1M "playground/volume-data/$persist_identifier"
+# 1G, matching -size-gb=1 below -- a real mismatch here now actually gets
+# caught and surfaced (Volume.status.conditions' SizeMatchesDeclaration,
+# see docs/open-questions.md「Volumeの申告内容...」), so keep this fixture
+# honest rather than showing a spurious mismatch on every run. Sparse, so
+# this costs no real disk space up front.
+truncate -s 1G "playground/volume-data/$persist_identifier"
 chmod 0666 "playground/volume-data/$persist_identifier"
 
 echo "==> creating a Volume referencing it and a VM that attaches it at boot (-volumes, real end-to-end: internal/compute-agent/volumeref finds the file already visible under the playground-nfs connection -> extra virtio-blk drive -- see docs/specs/volume.md)"

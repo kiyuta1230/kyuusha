@@ -174,9 +174,9 @@ func volattachDelete(args []string) {
 }
 
 func printVolumeAttachment(a *blockstoragev1.VolumeAttachment) {
-	fmt.Printf("id=%s name=%s tenant=%s vm=%s volume=%s phase=%s device_path=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s vm=%s volume=%s phase=%s hypervisor=%s device_path=%s rv=%d\n",
 		a.GetMeta().GetId(), a.GetMeta().GetName(), a.GetMeta().GetTenantId(),
 		a.GetSpec().GetVmId(), a.GetSpec().GetVolumeId(),
-		a.GetStatus().GetPhase(), a.GetStatus().GetDevicePath(),
+		a.GetStatus().GetPhase(), a.GetStatus().GetHypervisor(), a.GetStatus().GetDevicePath(),
 		a.GetMeta().GetResourceVersion())
 }

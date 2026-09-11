@@ -25,8 +25,13 @@ type VMM interface {
 	// against them. It returns once the process has either exited
 	// immediately (an error) or stayed up past a driver-specific grace
 	// period (success) -- success does NOT mean the guest kernel finished
-	// booting, only that the VMM process itself launched.
-	Boot(ctx context.Context, spec BootSpec) error
+	// booting, only that the VMM process itself launched. On success, the
+	// returned []AttachedVolume covers every spec.Volumes entry that was
+	// actually resolved and wired in (agent.go reports these to block-
+	// storage -- see docs/specs/volume.md "status.device_path/
+	// status.hypervisor"); nil on any error, since nothing was attached for
+	// certain.
+	Boot(ctx context.Context, spec BootSpec) ([]AttachedVolume, error)
 	// Stop tears down vmID's VMM process if this driver has one running. A
 	// no-op if this driver never booted a real process for vmID (a stub-
 	// succeeded VM booted by a different driver, or one that already
@@ -71,7 +76,12 @@ type BootSpec struct {
 // exporting anything (see docs/architecture.md「訂正: 責務の境界を...」).
 // agent.go builds these from compute.CreateCommand.Volumes.
 type VolumeAttachInfo struct {
-	AttachmentID      string
+	AttachmentID string
+	// TenantID is the owning VM's tenant_id (VolumeAttachment lives in the
+	// same tenant) -- carried here only so agent.go's post-Boot report to
+	// block-storage (see AttachedVolume) can address the right
+	// VolumeAttachment; no driver ever interprets it itself.
+	TenantID          string
 	Protocol          string
 	StorageConnection string
 	Identifier        string
@@ -81,6 +91,17 @@ type VolumeAttachInfo struct {
 	// WarnIfSizeMismatch below, the one point where a real size is ever
 	// actually observed.
 	SizeGB int64
+}
+
+// AttachedVolume is one VolumeAttachInfo actually resolved and wired into a
+// VM by Boot -- see VMM.Boot's doc comment.
+type AttachedVolume struct {
+	AttachmentID string
+	TenantID     string
+	// DevicePath is the real, host-visible path volumeref.Resolve found
+	// (before any jail-local placement) -- a block device path for ISCSI/
+	// NVME_OF, or a file path for NFS.
+	DevicePath string
 }
 
 // bytesPerGB assumes the binary (1024-based) convention most storage

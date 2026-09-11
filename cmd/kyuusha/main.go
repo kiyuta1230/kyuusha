@@ -407,6 +407,19 @@ func deletedAtString(t *timestamppb.Timestamp) string {
 	return t.AsTime().Format(time.RFC3339)
 }
 
+// formatConditions renders conditions as a compact "Type=Status,..." list
+// (e.g. "IdentifierVerified=True,SizeMatchesDeclaration=False") -- shared by
+// every resource that carries resource.v1.Condition (Volume, Subnet,
+// StorageConnection, ...), none of which surfaced Conditions in the CLI at
+// all before this.
+func formatConditions(conditions []*resourcev1.Condition) string {
+	parts := make([]string, len(conditions))
+	for i, c := range conditions {
+		parts[i] = c.GetType() + "=" + c.GetStatus()
+	}
+	return strings.Join(parts, ",")
+}
+
 // vmAddFinalizer/vmRemoveFinalizer implement docs/architecture.md
 // "Finalizer": an external controller registers or clears its own holder
 // name in meta.finalizers via a plain Get-then-Update, exactly like any

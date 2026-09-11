@@ -40,6 +40,39 @@ import (
 // StorageConnection's own phase.
 const conditionIdentifierVerified = "IdentifierVerified"
 
+// conditionSizeMatchesDeclaration is set alongside conditionIdentifierVerified
+// from the same round-trip's real observed size (VerifyVolumeResult.SizeBytes,
+// computed by internal/compute-agent/volumeref.Resolve) -- see
+// docs/open-questions.md「Volumeの申告内容...」. Never re-checked afterward
+// (the verification round-trip itself only ever runs once per Volume, same
+// as identifier existence -- see docs/open-questions.md's static-vs-dynamic
+// entry): if the real backing store is resized later, this condition goes
+// stale, same as everything else that flow confirms once.
+const conditionSizeMatchesDeclaration = "SizeMatchesDeclaration"
+
+// bytesPerGB/sizeMismatchTolerance mirror
+// internal/compute-agent/vmm.WarnIfSizeMismatch's own constants exactly, but
+// are kept independent rather than shared: that package boots VMs and logs a
+// warning, this one is a separate service recording a Condition, and the two
+// have no other reason to depend on each other.
+const (
+	bytesPerGB            = 1 << 30
+	sizeMismatchTolerance = 0.10
+)
+
+// sizeMatchesDeclaration reports whether observedBytes is within
+// sizeMismatchTolerance of declaredSizeGB (loose enough to absorb ordinary
+// backend rounding/overhead, tight enough to catch a size_gb that's wildly
+// wrong) -- see vmm.WarnIfSizeMismatch's identical reasoning.
+func sizeMatchesDeclaration(declaredSizeGB, observedBytes int64) bool {
+	declaredBytes := declaredSizeGB * bytesPerGB
+	diff := observedBytes - declaredBytes
+	if diff < 0 {
+		diff = -diff
+	}
+	return float64(diff) <= float64(declaredBytes)*sizeMismatchTolerance
+}
+
 // hypervisorConnInfo is one Hypervisor's self-report, as last seen via
 // EvtSubjectHypervisorStorageConnections.
 type hypervisorConnInfo struct {
@@ -114,6 +147,52 @@ func (s *Service) subscribeVerifyResults(ctx context.Context) error {
 		s.handleVerifyResult(ctx, res)
 	})
 	return err
+}
+
+// subscribeVolumeAttached mirrors subscribeVerifyResults exactly, for
+// compute-agent's separate, proactive "here's where a Volume actually
+// landed" report -- see nats.go's EvtSubjectVolumeAttached doc comment and
+// docs/specs/volume.md "status.device_path/status.hypervisor".
+func (s *Service) subscribeVolumeAttached(ctx context.Context) error {
+	stream, err := s.js.Stream(ctx, evtStreamName)
+	if err != nil {
+		return err
+	}
+	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "block-storage-volume-attached",
+		FilterSubject: "ms.blockstorage.evt.*.volume.attached",
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = cons.Consume(func(msg jetstream.Msg) {
+		_ = msg.Ack()
+		var ev VolumeAttachedEvent
+		if jsonErr := json.Unmarshal(msg.Data(), &ev); jsonErr != nil {
+			slog.Warn("block-storage: bad volume-attached event", "err", jsonErr)
+			return
+		}
+		s.handleVolumeAttached(ctx, ev)
+	})
+	return err
+}
+
+// handleVolumeAttached records where a VolumeAttachment actually landed.
+// Purely informational: it never changes Phase (the exclusive-attach
+// bookkeeping in service.go's tryAttach already owns that -- see its own
+// doc comment) and silently no-ops if the VolumeAttachment is gone by the
+// time this arrives (deleted, or from some now-superseded earlier attach).
+func (s *Service) handleVolumeAttached(ctx context.Context, ev VolumeAttachedEvent) {
+	att, err := s.attachments.Get(ctx, ev.TenantID, ev.AttachmentID)
+	if err != nil {
+		return
+	}
+	att.Status.DevicePath = ev.DevicePath
+	att.Status.Hypervisor = ev.Hypervisor
+	if _, err := s.attachments.Update(ctx, att); err != nil {
+		slog.Warn("block-storage: record volume-attached report failed", "attachment_id", ev.AttachmentID, "err", err)
+	}
 }
 
 // recordHypervisorConnections updates this Service's in-memory view of
@@ -284,6 +363,26 @@ func (s *Service) handleVerifyResult(ctx context.Context, res VerifyVolumeResult
 	vol.Status.Conditions = upsertCondition(vol.Status.Conditions, resource.Condition{
 		Type: conditionIdentifierVerified, Status: status, Reason: reason, LastTransitionAt: time.Now(),
 	})
+
+	// The same round-trip that confirms the identifier exists also reports
+	// its real observed size (only meaningful on Success -- a failed lookup
+	// has no size to compare). vol.Spec.SizeGB<=0 can't happen for a real
+	// Volume (Create-time validation), but the check is here as a divide-
+	// safety guard, not a real-world case.
+	if res.Success && res.SizeBytes > 0 && vol.Spec.SizeGB > 0 {
+		sizeStatus := resource.ConditionFalse
+		sizeReason := "observed size does not match declared size_gb"
+		if sizeMatchesDeclaration(vol.Spec.SizeGB, res.SizeBytes) {
+			sizeStatus = resource.ConditionTrue
+			sizeReason = ""
+		}
+		vol.Status.Conditions = upsertCondition(vol.Status.Conditions, resource.Condition{
+			Type: conditionSizeMatchesDeclaration, Status: sizeStatus, Reason: sizeReason,
+			Message:          fmt.Sprintf("declared %d GB, observed %d bytes", vol.Spec.SizeGB, res.SizeBytes),
+			LastTransitionAt: time.Now(),
+		})
+	}
+
 	updated, err := s.volumes.Update(ctx, vol)
 	if err != nil {
 		return

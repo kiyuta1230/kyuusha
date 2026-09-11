@@ -95,9 +95,17 @@ iSCSI/NVMe-oF/NFSは「Hypervisor単位の事前接続＋接続済みセッシ�
    `docs/specs/volume.md`「検証フロー」参照
 
 **まだ解決されないまま残る部分**（別タスク）:
-- 検知した不整合（サイズ食い違い、`device_path`/`status.hypervisor`)を
-  `kyuusha volume get`/`kyuusha volattach get`等のAPI越しに見えるようにする経路は
-  まだ無い——ログでしか見えない
+- サイズ食い違いのAPI越しの可視化は解決済み（2026-09-11）: `VerifyVolumeResult`の
+  `size_bytes`（元々存在していたのに捨てられていた）を`handleVerifyResult`で
+  `spec.size_gb`と比較し、`Volume.status.conditions`に`SizeMatchesDeclaration`
+  （True/False）として記録するようにした。`kyuusha volume get`が`conditions=...`
+  を表示するようになったので、そこで見える（不一致でも`Ready`自体はブロックしない
+  ——警告であって存在確認の失敗ではないため）。`vmm.WarnIfSizeMismatch`（VM起動時の
+  ログ警告）はそのまま残す——こちらはVolume検証と独立にVM起動のたびに実際の
+  アタッチ経路で発生するので、両方に意味がある
+- `device_path`/`status.hypervisor`（`VolumeAttachment`側）のAPI越しの可視化は
+  まだ未解決——`VolumeAttachmentStatus`に`DevicePath`/`Hypervisor`フィールド自体は
+  あるが、compute-agentからの報告経路がまだ無い
 - VM起動が寛容に劣化しない件（`volumeref.Resolve`が失敗するとVM起動全体が失敗する）
   自体は変更していない——永続データを積むVolumeを黙って外すより失敗を明示する方が
   安全という判断で、"バグ"ではなくトレードオフとして残している

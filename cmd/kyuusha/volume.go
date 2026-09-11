@@ -183,10 +183,10 @@ func volumeDelete(args []string) {
 }
 
 func printVolume(vol *blockstoragev1.Volume) {
-	fmt.Printf("id=%s name=%s tenant=%s size_gb=%d protocol=%s storage_connection=%s identifier=%s phase=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s size_gb=%d protocol=%s storage_connection=%s identifier=%s phase=%s conditions=%s rv=%d\n",
 		vol.GetMeta().GetId(), vol.GetMeta().GetName(), vol.GetMeta().GetTenantId(),
 		vol.GetSpec().GetSizeGb(), vol.GetSpec().GetProtocol(), vol.GetSpec().GetStorageConnection(), vol.GetSpec().GetIdentifier(),
-		vol.GetStatus().GetPhase(), vol.GetMeta().GetResourceVersion())
+		vol.GetStatus().GetPhase(), formatConditions(vol.GetStatus().GetConditions()), vol.GetMeta().GetResourceVersion())
 }
 
 // parseAnnotations turns "-annotations=k1=v1,k2=v2" into a map -- shared by

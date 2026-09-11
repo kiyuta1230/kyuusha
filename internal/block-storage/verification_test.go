@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
@@ -129,6 +130,48 @@ func TestVolume_FailedVerificationStaysPendingNotError(t *testing.T) {
 	}
 	if got.Status.Phase != VolumePhaseReady {
 		t.Fatalf("phase = %q, want Ready after a subsequent successful verification", got.Status.Phase)
+	}
+}
+
+// TestVolume_SizeMismatchIsSurfacedAsCondition exercises the
+// SizeMatchesDeclaration condition (docs/open-questions.md「Volumeの申告
+// 内容...」): the same round-trip that confirms a Volume's identifier exists
+// also reports its real observed size, which must be compared against
+// spec.size_gb and surfaced -- not just logged, as it used to be (see
+// vmm.WarnIfSizeMismatch).
+func TestVolume_SizeMismatchIsSurfacedAsCondition(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx) // "test-connection" already forced Ready
+
+	matching, err := svc.CreateVolume(ctx, "tenant-a", "vol-matching", testVolumeSpec(10))
+	if err != nil {
+		t.Fatalf("CreateVolume (matching): %v", err)
+	}
+	svc.handleVerifyResult(ctx, VerifyVolumeResult{TenantID: "tenant-a", VolumeID: matching.Meta.ID, Success: true, SizeBytes: 10 << 30})
+	got, err := svc.GetVolume(ctx, "tenant-a", matching.Meta.ID)
+	if err != nil {
+		t.Fatalf("GetVolume (matching): %v", err)
+	}
+	if !hasCondition(got.Status.Conditions, conditionSizeMatchesDeclaration, resource.ConditionTrue) {
+		t.Fatalf("matching size: conditions = %+v, want SizeMatchesDeclaration=True", got.Status.Conditions)
+	}
+
+	mismatched, err := svc.CreateVolume(ctx, "tenant-a", "vol-mismatched", testVolumeSpec(10))
+	if err != nil {
+		t.Fatalf("CreateVolume (mismatched): %v", err)
+	}
+	svc.handleVerifyResult(ctx, VerifyVolumeResult{TenantID: "tenant-a", VolumeID: mismatched.Meta.ID, Success: true, SizeBytes: 1 << 30})
+	got, err = svc.GetVolume(ctx, "tenant-a", mismatched.Meta.ID)
+	if err != nil {
+		t.Fatalf("GetVolume (mismatched): %v", err)
+	}
+	if !hasCondition(got.Status.Conditions, conditionSizeMatchesDeclaration, resource.ConditionFalse) {
+		t.Fatalf("mismatched size: conditions = %+v, want SizeMatchesDeclaration=False", got.Status.Conditions)
+	}
+	// A size mismatch is a warning, not a failure: existence was still
+	// confirmed, so the Volume must still reach Ready.
+	if got.Status.Phase != VolumePhaseReady {
+		t.Fatalf("mismatched size: phase = %q, want still Ready (a size mismatch is surfaced, not fatal)", got.Status.Phase)
 	}
 }
 

@@ -18,6 +18,60 @@ func TestService_CreateVolumeAttachmentValidatesVolume(t *testing.T) {
 	}
 }
 
+// TestService_HandleVolumeAttachedRecordsDevicePathAndHypervisor exercises
+// the report-back path from docs/specs/volume.md
+// "status.device_path/status.hypervisor": compute-agent's proactive
+// VolumeAttachedEvent (fired at a real successful boot, see agent.go's
+// reportAttachedVolumes) must land on the right VolumeAttachment without
+// disturbing its Phase (that's exclusive-attach bookkeeping's job, not
+// this report's).
+func TestService_HandleVolumeAttachedRecordsDevicePathAndHypervisor(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	vol, err := svc.CreateVolume(ctx, "tenant-a", "data-1", testVolumeSpec(10))
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+	vol = forceVolumeVerified(t, ctx, svc, vol)
+	att, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
+		VMID: "vm-1", VolumeID: vol.Meta.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateVolumeAttachment: %v", err)
+	}
+
+	svc.handleVolumeAttached(ctx, VolumeAttachedEvent{
+		AttachmentID: att.Meta.ID, TenantID: "tenant-a", Hypervisor: "hypervisor-1", DevicePath: "/dev/disk/by-id/scsi-test-serial",
+	})
+
+	got, err := svc.GetVolumeAttachment(ctx, "tenant-a", att.Meta.ID)
+	if err != nil {
+		t.Fatalf("GetVolumeAttachment: %v", err)
+	}
+	if got.Status.Hypervisor != "hypervisor-1" {
+		t.Fatalf("Hypervisor = %q, want hypervisor-1", got.Status.Hypervisor)
+	}
+	if got.Status.DevicePath != "/dev/disk/by-id/scsi-test-serial" {
+		t.Fatalf("DevicePath = %q, want /dev/disk/by-id/scsi-test-serial", got.Status.DevicePath)
+	}
+	if got.Status.Phase != VolumeAttachmentPhaseAttached {
+		t.Fatalf("Phase = %q, want unchanged Attached (this report must not touch it)", got.Status.Phase)
+	}
+}
+
+// TestService_HandleVolumeAttachedIgnoresUnknownAttachment confirms a
+// report for an already-deleted (or never-existent) VolumeAttachment is a
+// silent no-op, not a panic or a spurious Create.
+func TestService_HandleVolumeAttachedIgnoresUnknownAttachment(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	svc.handleVolumeAttached(ctx, VolumeAttachedEvent{
+		AttachmentID: "volattach-does-not-exist", TenantID: "tenant-a", Hypervisor: "hypervisor-1", DevicePath: "/dev/sdz",
+	})
+}
+
 func TestService_VolumeAttachmentAttachesWhenVolumeIsFree(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
