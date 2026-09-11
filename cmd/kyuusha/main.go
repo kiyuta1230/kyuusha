@@ -18,9 +18,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
-	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 func main() {

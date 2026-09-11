@@ -9,11 +9,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/bootstraptoken"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
+	"github.com/kiyuta1230/kyuusha/internal/bootstraptoken"
+	"github.com/kiyuta1230/kyuusha/internal/compute"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
-	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 // HypervisorServer implements HypervisorServiceServer. It's a separate type

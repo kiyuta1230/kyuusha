@@ -1,4 +1,4 @@
-module gitlab.com/ki.yuta1230/kyuusha
+module github.com/kiyuta1230/kyuusha
 
 go 1.26.0
 

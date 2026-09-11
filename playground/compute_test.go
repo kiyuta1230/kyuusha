@@ -20,13 +20,13 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/bootstraptoken"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
-	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute/grpcserver"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
+	"github.com/kiyuta1230/kyuusha/internal/bootstraptoken"
+	"github.com/kiyuta1230/kyuusha/internal/compute"
+	computeagent "github.com/kiyuta1230/kyuusha/internal/compute-agent"
+	"github.com/kiyuta1230/kyuusha/internal/compute/grpcserver"
+	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
 func startNATS(t *testing.T) *nats.Conn {

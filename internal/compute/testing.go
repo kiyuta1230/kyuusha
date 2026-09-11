@@ -9,11 +9,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
-	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
-	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
-	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	blockstoragev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	imagev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
+	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 // UnlimitedQuota is a QuotaSpec generous enough that quota enforcement never

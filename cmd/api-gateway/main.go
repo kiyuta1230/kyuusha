@@ -17,17 +17,17 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/authz"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/gateway"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
+	"github.com/kiyuta1230/kyuusha/internal/authn"
+	"github.com/kiyuta1230/kyuusha/internal/authz"
+	"github.com/kiyuta1230/kyuusha/internal/gateway"
+	"github.com/kiyuta1230/kyuusha/internal/mtls"
+	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
-	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
-	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
-	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
+	blockstoragev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	imagev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
 
 func main() {

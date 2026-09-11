@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
 func TestService_CreateVolumeEnforcesQuota(t *testing.T) {

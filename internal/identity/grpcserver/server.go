@@ -11,11 +11,11 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/identity"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/identity"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
-	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 type Server struct {

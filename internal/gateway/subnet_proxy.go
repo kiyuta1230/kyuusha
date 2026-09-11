@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
+	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
 
 // SubnetProxy implements networkv1.SubnetServiceServer by forwarding every

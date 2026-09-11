@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func tenantCmd(args []string) {

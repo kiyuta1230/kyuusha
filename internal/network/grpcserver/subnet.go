@@ -13,11 +13,11 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/network"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/network"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 
-	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
-	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
+	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 type SubnetServer struct {

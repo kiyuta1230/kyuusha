@@ -22,17 +22,17 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/volumeref"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
 
-	blockstorage "gitlab.com/ki.yuta1230/kyuusha/internal/block-storage"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
+	blockstorage "github.com/kiyuta1230/kyuusha/internal/block-storage"
+	"github.com/kiyuta1230/kyuusha/internal/compute"
+	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
-var tracer = otel.Tracer("gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent")
+var tracer = otel.Tracer("github.com/kiyuta1230/kyuusha/internal/compute-agent")
 
 type Agent struct {
 	Hypervisor        string

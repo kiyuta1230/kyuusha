@@ -7,7 +7,7 @@
 package imagev1
 
 import (
-	v1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	v1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -973,7 +973,7 @@ const file_kyuusha_image_v1_image_proto_rawDesc = "" +
 	"\x04List\x12#.kyuusha.image.v1.ListImagesRequest\x1a$.kyuusha.image.v1.ListImagesResponse\x12F\n" +
 	"\x06Delete\x12$.kyuusha.image.v1.DeleteImageRequest\x1a\x16.google.protobuf.Empty\x12M\n" +
 	"\x05Watch\x12$.kyuusha.image.v1.WatchImagesRequest\x1a\x1c.kyuusha.image.v1.ImageEvent0\x01\x12U\n" +
-	"\rSetVisibility\x12+.kyuusha.image.v1.SetImageVisibilityRequest\x1a\x17.kyuusha.image.v1.ImageB@Z>gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1;imagev1b\x06proto3"
+	"\rSetVisibility\x12+.kyuusha.image.v1.SetImageVisibilityRequest\x1a\x17.kyuusha.image.v1.ImageB?Z=github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1;imagev1b\x06proto3"
 
 var (
 	file_kyuusha_image_v1_image_proto_rawDescOnce sync.Once

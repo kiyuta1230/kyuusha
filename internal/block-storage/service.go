@@ -11,9 +11,9 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 var (

@@ -7,7 +7,7 @@
 package computev1
 
 import (
-	v1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	v1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -1271,7 +1271,7 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x06Update\x12/.kyuusha.compute.v1.UpdateVirtualMachineRequest\x1a\".kyuusha.compute.v1.VirtualMachine\x12Q\n" +
 	"\x06Delete\x12/.kyuusha.compute.v1.DeleteVirtualMachineRequest\x1a\x16.google.protobuf.Empty\x12c\n" +
 	"\x05Watch\x12/.kyuusha.compute.v1.WatchVirtualMachinesRequest\x1a'.kyuusha.compute.v1.VirtualMachineEvent0\x01\x12]\n" +
-	"\rStreamConsole\x12(.kyuusha.compute.v1.StreamConsoleRequest\x1a .kyuusha.compute.v1.ConsoleChunk0\x01BDZBgitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1b\x06proto3"
+	"\rStreamConsole\x12(.kyuusha.compute.v1.StreamConsoleRequest\x1a .kyuusha.compute.v1.ConsoleChunk0\x01BCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1b\x06proto3"
 
 var (
 	file_kyuusha_compute_v1_vm_proto_rawDescOnce sync.Once

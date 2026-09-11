@@ -7,7 +7,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
+	"github.com/kiyuta1230/kyuusha/internal/authn"
 )
 
 type fakeReq struct{ tenantID string }

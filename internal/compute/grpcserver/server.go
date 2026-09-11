@@ -12,11 +12,11 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/compute"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
-	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 type Server struct {

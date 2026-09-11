@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	"github.com/kiyuta1230/kyuusha/internal/authn"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
 func newTestService(t *testing.T, ctx context.Context) *Service {

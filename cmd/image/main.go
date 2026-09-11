@@ -19,13 +19,13 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/etcdconn"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/image"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/image/grpcserver"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
+	"github.com/kiyuta1230/kyuusha/internal/etcdconn"
+	"github.com/kiyuta1230/kyuusha/internal/image"
+	"github.com/kiyuta1230/kyuusha/internal/image/grpcserver"
+	"github.com/kiyuta1230/kyuusha/internal/mtls"
+	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
-	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	imagev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
 // HypervisorProxy forwards Get/List/Watch/SetSchedulable to a real compute

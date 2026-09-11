@@ -30,8 +30,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/compute"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 )
 
 // conditionIdentifierVerified is the Volume.Status.Conditions type set once

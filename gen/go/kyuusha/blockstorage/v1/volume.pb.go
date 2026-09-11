@@ -7,7 +7,7 @@
 package blockstoragev1
 
 import (
-	v1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	v1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -1474,7 +1474,7 @@ const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"\x03Get\x123.kyuusha.blockstorage.v1.GetVolumeAttachmentRequest\x1a).kyuusha.blockstorage.v1.VolumeAttachment\x12u\n" +
 	"\x04List\x125.kyuusha.blockstorage.v1.ListVolumeAttachmentsRequest\x1a6.kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse\x12X\n" +
 	"\x06Delete\x126.kyuusha.blockstorage.v1.DeleteVolumeAttachmentRequest\x1a\x16.google.protobuf.Empty\x12q\n" +
-	"\x05Watch\x126.kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest\x1a..kyuusha.blockstorage.v1.VolumeAttachmentEvent0\x01BNZLgitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1;blockstoragev1b\x06proto3"
+	"\x05Watch\x126.kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest\x1a..kyuusha.blockstorage.v1.VolumeAttachmentEvent0\x01BMZKgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1;blockstoragev1b\x06proto3"
 
 var (
 	file_kyuusha_blockstorage_v1_volume_proto_rawDescOnce sync.Once

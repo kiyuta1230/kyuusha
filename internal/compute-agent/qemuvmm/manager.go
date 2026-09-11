@@ -39,10 +39,10 @@ import (
 	"syscall"
 	"time"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/netsetup"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/volumeref"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/netsetup"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
 )
 
 var _ vmm.VMM = (*Manager)(nil)

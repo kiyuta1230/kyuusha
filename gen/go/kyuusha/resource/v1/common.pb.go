@@ -288,7 +288,7 @@ const file_kyuusha_resource_v1_common_proto_rawDesc = "" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x18\n" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x12H\n" +
-	"\x12last_transition_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x10lastTransitionAtBFZDgitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1;resourcev1b\x06proto3"
+	"\x12last_transition_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x10lastTransitionAtBEZCgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1;resourcev1b\x06proto3"
 
 var (
 	file_kyuusha_resource_v1_common_proto_rawDescOnce sync.Once

@@ -3,7 +3,7 @@ package blockstorage
 import (
 	"time"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 )
 
 // StorageConnectionSpec is a storage admin's declaration of which

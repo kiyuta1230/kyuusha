@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	imagev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
 // ImageProxy implements imagev1.ImageServiceServer by forwarding every call

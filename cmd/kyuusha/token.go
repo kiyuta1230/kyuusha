@@ -7,7 +7,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
+	"github.com/kiyuta1230/kyuusha/internal/authn"
 )
 
 func tokenCmd(args []string) {

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package kyuusha.image.v1;
 
-option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1;imagev1";
+option go_package = "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1;imagev1";
 
 import "google/protobuf/empty.proto";
 import "kyuusha/resource/v1/common.proto";

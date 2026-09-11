@@ -8,10 +8,10 @@ import (
 	"os"
 	"time"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/bootstraptoken"
+	"github.com/kiyuta1230/kyuusha/internal/authn"
+	"github.com/kiyuta1230/kyuusha/internal/bootstraptoken"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
 // hypervisorCmd covers Get/List/Watch/SetSchedulable: Hypervisor is

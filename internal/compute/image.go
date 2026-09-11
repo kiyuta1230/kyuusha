@@ -7,7 +7,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	imagev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
 // validateImage implements docs/architecture.md's Create-time validation

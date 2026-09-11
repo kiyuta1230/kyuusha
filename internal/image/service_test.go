@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
+	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
 func TestService_CreateRejectsFormatArtifactMismatch(t *testing.T) {

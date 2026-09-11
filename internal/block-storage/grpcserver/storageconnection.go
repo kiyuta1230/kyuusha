@@ -5,9 +5,9 @@ import (
 
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	blockstorage "gitlab.com/ki.yuta1230/kyuusha/internal/block-storage"
+	blockstorage "github.com/kiyuta1230/kyuusha/internal/block-storage"
 
-	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
+	blockstoragev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
 )
 
 type StorageConnectionServer struct {

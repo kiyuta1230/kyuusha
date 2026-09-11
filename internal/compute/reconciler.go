@@ -13,14 +13,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
-	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
-	imagev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/image/v1"
+	blockstoragev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
+	imagev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
-var tracer = otel.Tracer("gitlab.com/ki.yuta1230/kyuusha/internal/compute")
+var tracer = otel.Tracer("github.com/kiyuta1230/kyuusha/internal/compute")
 
 // pendingSweepInterval implements docs/architecture.md's "Pendingのまま...
 // 報告し続け" retry: reconcile() only runs off VM Watch events, so a VM that

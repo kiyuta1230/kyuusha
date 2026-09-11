@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

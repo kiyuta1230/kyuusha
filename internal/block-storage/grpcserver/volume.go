@@ -13,11 +13,11 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	blockstorage "gitlab.com/ki.yuta1230/kyuusha/internal/block-storage"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	blockstorage "github.com/kiyuta1230/kyuusha/internal/block-storage"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 
-	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
-	resourcev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	blockstoragev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
+	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 type VolumeServer struct {

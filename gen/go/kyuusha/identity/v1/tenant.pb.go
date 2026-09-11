@@ -7,7 +7,7 @@
 package identityv1
 
 import (
-	v1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	v1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -811,7 +811,7 @@ const file_kyuusha_identity_v1_tenant_proto_rawDesc = "" +
 	"\x04List\x12'.kyuusha.identity.v1.ListTenantsRequest\x1a(.kyuusha.identity.v1.ListTenantsResponse\x12O\n" +
 	"\x06Update\x12(.kyuusha.identity.v1.UpdateTenantRequest\x1a\x1b.kyuusha.identity.v1.Tenant\x12J\n" +
 	"\x06Delete\x12(.kyuusha.identity.v1.DeleteTenantRequest\x1a\x16.google.protobuf.Empty\x12U\n" +
-	"\x05Watch\x12(.kyuusha.identity.v1.WatchTenantsRequest\x1a .kyuusha.identity.v1.TenantEvent0\x01BFZDgitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1;identityv1b\x06proto3"
+	"\x05Watch\x12(.kyuusha.identity.v1.WatchTenantsRequest\x1a .kyuusha.identity.v1.TenantEvent0\x01BEZCgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1;identityv1b\x06proto3"
 
 var (
 	file_kyuusha_identity_v1_tenant_proto_rawDescOnce sync.Once

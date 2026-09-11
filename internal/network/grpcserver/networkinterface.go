@@ -7,9 +7,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/network"
+	"github.com/kiyuta1230/kyuusha/internal/network"
 
-	networkv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1"
+	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
 
 type NetworkInterfaceServer struct {

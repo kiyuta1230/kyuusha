@@ -6,7 +6,7 @@ package compute
 import (
 	"time"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 )
 
 type RecoveryPolicy string

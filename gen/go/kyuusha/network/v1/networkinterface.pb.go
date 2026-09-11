@@ -7,7 +7,7 @@
 package networkv1
 
 import (
-	v1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	v1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -853,7 +853,7 @@ const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"\x04List\x120.kyuusha.network.v1.ListNetworkInterfacesRequest\x1a1.kyuusha.network.v1.ListNetworkInterfacesResponse\x12a\n" +
 	"\x06Update\x121.kyuusha.network.v1.UpdateNetworkInterfaceRequest\x1a$.kyuusha.network.v1.NetworkInterface\x12S\n" +
 	"\x06Delete\x121.kyuusha.network.v1.DeleteNetworkInterfaceRequest\x1a\x16.google.protobuf.Empty\x12g\n" +
-	"\x05Watch\x121.kyuusha.network.v1.WatchNetworkInterfacesRequest\x1a).kyuusha.network.v1.NetworkInterfaceEvent0\x01BDZBgitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1b\x06proto3"
+	"\x05Watch\x121.kyuusha.network.v1.WatchNetworkInterfacesRequest\x1a).kyuusha.network.v1.NetworkInterfaceEvent0\x01BCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1b\x06proto3"
 
 var (
 	file_kyuusha_network_v1_networkinterface_proto_rawDescOnce sync.Once

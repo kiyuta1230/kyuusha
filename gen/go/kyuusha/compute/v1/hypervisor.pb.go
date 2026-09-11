@@ -7,7 +7,7 @@
 package computev1
 
 import (
-	v1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	v1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -879,7 +879,7 @@ const file_kyuusha_compute_v1_hypervisor_proto_rawDesc = "" +
 	"\x03Get\x12(.kyuusha.compute.v1.GetHypervisorRequest\x1a\x1e.kyuusha.compute.v1.Hypervisor\x12_\n" +
 	"\x04List\x12*.kyuusha.compute.v1.ListHypervisorsRequest\x1a+.kyuusha.compute.v1.ListHypervisorsResponse\x12[\n" +
 	"\x05Watch\x12+.kyuusha.compute.v1.WatchHypervisorsRequest\x1a#.kyuusha.compute.v1.HypervisorEvent0\x01\x12[\n" +
-	"\x0eSetSchedulable\x12).kyuusha.compute.v1.SetSchedulableRequest\x1a\x1e.kyuusha.compute.v1.HypervisorBDZBgitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1b\x06proto3"
+	"\x0eSetSchedulable\x12).kyuusha.compute.v1.SetSchedulableRequest\x1a\x1e.kyuusha.compute.v1.HypervisorBCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1b\x06proto3"
 
 var (
 	file_kyuusha_compute_v1_hypervisor_proto_rawDescOnce sync.Once

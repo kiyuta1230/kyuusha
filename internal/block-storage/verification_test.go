@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
+	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
 // TestStorageConnection_ReadyRequiresAllDeclaredZones exercises the strict

@@ -7,7 +7,7 @@
 package blockstoragev1
 
 import (
-	v1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	v1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -667,7 +667,7 @@ const file_kyuusha_blockstorage_v1_storageconnection_proto_rawDesc = "" +
 	"\x03Get\x124.kyuusha.blockstorage.v1.GetStorageConnectionRequest\x1a*.kyuusha.blockstorage.v1.StorageConnection\x12w\n" +
 	"\x04List\x126.kyuusha.blockstorage.v1.ListStorageConnectionsRequest\x1a7.kyuusha.blockstorage.v1.ListStorageConnectionsResponse\x12Y\n" +
 	"\x06Delete\x127.kyuusha.blockstorage.v1.DeleteStorageConnectionRequest\x1a\x16.google.protobuf.Empty\x12s\n" +
-	"\x05Watch\x127.kyuusha.blockstorage.v1.WatchStorageConnectionsRequest\x1a/.kyuusha.blockstorage.v1.StorageConnectionEvent0\x01BNZLgitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1;blockstoragev1b\x06proto3"
+	"\x05Watch\x127.kyuusha.blockstorage.v1.WatchStorageConnectionsRequest\x1a/.kyuusha.blockstorage.v1.StorageConnectionEvent0\x01BMZKgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1;blockstoragev1b\x06proto3"
 
 var (
 	file_kyuusha_blockstorage_v1_storageconnection_proto_rawDescOnce sync.Once

@@ -21,17 +21,17 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
-	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/cgroup"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/fcvmm"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/qemuvmm"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/volumeref"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
+	"github.com/kiyuta1230/kyuusha/internal/compute"
+	computeagent "github.com/kiyuta1230/kyuusha/internal/compute-agent"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/fcvmm"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/qemuvmm"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
+	"github.com/kiyuta1230/kyuusha/internal/mtls"
+	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
 func main() {

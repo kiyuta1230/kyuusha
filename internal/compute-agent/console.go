@@ -9,7 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
+	"github.com/kiyuta1230/kyuusha/internal/compute"
 )
 
 const (

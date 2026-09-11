@@ -28,14 +28,14 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
-	blockstorage "gitlab.com/ki.yuta1230/kyuusha/internal/block-storage"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/block-storage/grpcserver"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/etcdconn"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
-	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
+	blockstorage "github.com/kiyuta1230/kyuusha/internal/block-storage"
+	"github.com/kiyuta1230/kyuusha/internal/block-storage/grpcserver"
+	"github.com/kiyuta1230/kyuusha/internal/etcdconn"
+	"github.com/kiyuta1230/kyuusha/internal/mtls"
+	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
-	blockstoragev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
-	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	blockstoragev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func main() {

@@ -13,7 +13,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
 // VirtualMachineProxy implements computev1.VirtualMachineServiceServer by

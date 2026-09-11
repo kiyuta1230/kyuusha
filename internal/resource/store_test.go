@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
+	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
 // thing is a minimal resource type used only to exercise the generic Store
