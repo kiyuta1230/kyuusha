@@ -247,11 +247,12 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// drive alongside rootfs/seed, referenced by its real path directly:
 	// unlike fcvmm, there's no jail here for the path to need placing into.
 	for i, v := range spec.Volumes {
-		devPath, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
+		devPath, sizeBytes, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
 		if err != nil {
 			cleanup()
 			return fmt.Errorf("qemuvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
 		}
+		vmm.WarnIfSizeMismatch(v, sizeBytes)
 		driveArgs = append(driveArgs, "-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", devPath))
 	}
 

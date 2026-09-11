@@ -101,6 +101,13 @@ type VolumeAttachInfo struct {
 	Protocol          string `json:"protocol"`
 	StorageConnection string `json:"storage_connection"`
 	Identifier        string `json:"identifier"`
+	// SizeGB is the Volume's own spec.size_gb, self-reported and
+	// unverifiable at Create time (kyuusha never provisions -- see
+	// docs/architecture.md「訂正: 責務の境界を...」). Carried this far only
+	// so compute-agent can log a warning if the real size it observes at
+	// boot time diverges from it (see docs/open-questions.md「Volumeの
+	// 申告内容...」) -- not used for anything else.
+	SizeGB int64 `json:"size_gb,omitempty"`
 }
 
 // NetworkInterfaceInfo is one VM network attachment, already resolved to

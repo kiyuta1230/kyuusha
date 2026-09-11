@@ -294,6 +294,7 @@ func buildVolumeInfos(infos []compute.VolumeAttachInfo) []vmm.VolumeAttachInfo {
 			Protocol:          v.Protocol,
 			StorageConnection: v.StorageConnection,
 			Identifier:        v.Identifier,
+			SizeGB:            v.SizeGB,
 		}
 	}
 	return out

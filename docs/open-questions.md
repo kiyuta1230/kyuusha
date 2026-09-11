@@ -112,7 +112,45 @@ Watchし、自分のゾーンに該当するものへ自動接続する。
 この節は設計討議の記録であって実装計画ではない——次に着手するときはまず
 上記の未決事項から詰める。
 
-## QEMU用のjailer相当の隔離方式（自前実装 vs. libvirt）
+## Volumeの申告内容（存在確認・サイズ）が一切検証されない（対応中、下記参照）
+
+上記の「参照+接続」責務境界の直接の帰結として、`CreateVolume`は
+`protocol`/`storage_connection`/`identifier`が空でないか・enumとして正しいか
+という**形式チェックのみ**で、外部呼び出しは一切無い。したがって:
+
+- **到達可能性は一度も検証されない**: どのHypervisorもその`storage_connection`を
+  宣言していなくても、`identifier`が指すファイル/デバイスが実在しなくても、
+  Volumeは即`Ready`になる。実際に試されるのは、VMがそのVolumeで実際に起動
+  しようとした瞬間（compute-agentの`volumeref.Resolve`）が初めて——それも失敗時は
+  IPが解決しなかったNetworkInterfaceのような寛容な劣化ではなく、**VM起動全体が
+  失敗する**（ただしこれは意図的に妥当な可能性もある——永続データを積むはずの
+  Volumeを黙って外して起動を続けるより、失敗を明示した方が「データがあるはずが
+  実は無い」という気づきにくい事故を防げるため。ここは変更が必要な"バグ"というより
+  トレードオフの再確認が必要な点）
+- **`size_gb`は完全な自己申告で検証不能**: kyuushaは何も作らないので、宣言値が
+  実際のボリュームサイズと合っているか確認する手段が無い。結果として
+  `max_volume_gb`のQuota強制が事実上の申告制（honor system）になっている——
+  実際は10TBのボリュームを繋ぐつもりでも`size_gb=1`と申告すればQuota上は1GBの
+  消費としてしか計上されず、検知する仕組みが無い
+
+**対応方針（2026-09-11、まず着手する最小スコープ）**: 完全な事前検証（Create時に
+どこかのHypervisorへ能動的に確認を取りに行く）は、上の「Hypervisor↔ストレージ
+バックエンドの接続自動化」がどの形に決まるか（どのHypervisorに聞けばいいか、
+zoneとどう紐づくか）に依存するため、今は着手しない。まず着手するのは
+**compute-agent側でのローカルな検知+可観測化**:
+
+- `internal/compute-agent/volumeref.Resolve`が見つけたパスの実サイズを
+  （ブロックデバイスも通常ファイルも同じ`Seek(0, io.SeekEnd)`で）取得する
+- 宣言された`size_gb`と大きく食い違う場合、compute-agentが構造化ログで警告する
+  （このプロジェクトの「専用の状態機械を作るのではなく既存のオブザーバビリティ
+  基盤に乗せる」という一貫した方針——Prometheus/Loki/Grafanaが既にある——に
+  沿った選択で、block-storage/proto側の変更は伴わない）
+
+**まだ解決されないまま残る部分**（別タスク、`docs/specs/volume.md`「この実装が
+カバーしないもの」の`status.device_path`/`status.hypervisor`と本質的に同じ話）:
+実際に検知した不整合を`kyuusha volattach get`等のAPI越しに見えるようにするには、
+compute-agent→compute→block-storageの報告経路（新しいproto フィールド+RPC）が
+要る——これは今回のログベースの対応より一段大きい話なので、別途着手する。
 
 2026-09に`driver_hint=FIRECRACKER`のVMをjailer（chroot + uid/gid権限降格）でラップした
 （[Firecracker起動仕様](specs/firecracker-boot.md)「jailer」、docs/architecture.md

@@ -344,11 +344,12 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) error {
 	// block device, bind mount for an NFS file -- either way, guest writes
 	// land on the real backing store, not a jail-local copy).
 	for i, v := range spec.Volumes {
-		devPath, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
+		devPath, sizeBytes, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
 		if err != nil {
 			cleanup()
 			return fmt.Errorf("fcvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
 		}
+		vmm.WarnIfSizeMismatch(v, sizeBytes)
 		volName := fmt.Sprintf("vol%d", i)
 		dst := filepath.Join(chroot, volName)
 		mounted, err := placeVolumeLike(devPath, dst, jailUID, jailGID)

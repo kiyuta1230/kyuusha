@@ -20,6 +20,7 @@ package volumeref
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -48,32 +49,56 @@ type Connections map[string]string
 // Polls briefly rather than failing on the first miss: the operator's own
 // connection setup and this Volume's registration aren't otherwise
 // ordered, so a path that doesn't exist *yet* isn't necessarily wrong.
-func Resolve(conns Connections, protocol, connection, identifier string) (string, error) {
+//
+// Also returns the path's real size in bytes -- the one point in the
+// whole system where a Volume's actual size is ever observed at all,
+// since kyuusha itself never provisions one (see
+// docs/open-questions.md「Volumeの申告内容（存在確認・サイズ）が一切検証
+// されない」). Callers use it to cross-check against the Volume's
+// (otherwise unverifiable) declared size_gb -- see vmm.WarnIfSizeMismatch.
+func Resolve(conns Connections, protocol, connection, identifier string) (path string, sizeBytes int64, err error) {
 	if connection == "" {
-		return "", fmt.Errorf("volumeref: empty storage_connection")
+		return "", 0, fmt.Errorf("volumeref: empty storage_connection")
 	}
 	if identifier == "" {
-		return "", fmt.Errorf("volumeref: empty identifier")
+		return "", 0, fmt.Errorf("volumeref: empty identifier")
 	}
 	localPath, ok := conns[connection]
 	if !ok {
-		return "", fmt.Errorf("volumeref: this host has no storage_connection %q declared (have: %v)", connection, connectionNames(conns))
+		return "", 0, fmt.Errorf("volumeref: this host has no storage_connection %q declared (have: %v)", connection, connectionNames(conns))
 	}
 
-	var path string
 	switch protocol {
 	case "ISCSI", "NVME_OF":
 		path = filepath.Join("/dev/disk/by-id", identifier)
 	case "NFS":
 		path = filepath.Join(localPath, identifier)
 	default:
-		return "", fmt.Errorf("volumeref: unknown protocol %q", protocol)
+		return "", 0, fmt.Errorf("volumeref: unknown protocol %q", protocol)
 	}
 
 	if err := waitForPath(path); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return path, nil
+	sizeBytes, err = realSize(path)
+	if err != nil {
+		return "", 0, fmt.Errorf("volumeref: determine size of %s: %w", path, err)
+	}
+	return path, sizeBytes, nil
+}
+
+// realSize works identically for a regular file (NFS) and a block device
+// special file (ISCSI/NVME_OF, via mknod) -- os.Stat's Size() only reports
+// something meaningful for the former, but Seek-to-end works for both,
+// since the kernel handles SEEK_END on a block device the same way it
+// does on a file.
+func realSize(path string) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	return f.Seek(0, io.SeekEnd)
 }
 
 func connectionNames(conns Connections) []string {

@@ -85,6 +85,7 @@ func createVolumeAttachments(ctx context.Context, volumeClient blockstoragev1.Vo
 				Protocol:          vol.GetSpec().GetProtocol().String(),
 				StorageConnection: vol.GetSpec().GetStorageConnection(),
 				Identifier:        vol.GetSpec().GetIdentifier(),
+				SizeGB:            vol.GetSpec().GetSizeGb(),
 			})
 		}
 	}
