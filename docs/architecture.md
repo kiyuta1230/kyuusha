@@ -1507,11 +1507,60 @@ Linuxカーネルの`nvmet`/`nvme-cli`で実装できる。iSCSIは、対象の�
 VirtualMachine/Hypervisor側のHA（`SELF_HEAL`、フェンシング）は丁寧に設計したが、`compute`/`network`/
 `block-storage`等のサービス自体が落ちたときの話が抜けていた。設計する。
 
-### 前提として有利な点: 状態は全てDBにある
+### 訂正（2026-09-11）: 「状態は全てDBにある」という前提が実は嘘だった
 
-宣言的spec/status＋reconcileループという設計のおかげで、サービスプロセスが落ちてもデータは
-失われない。プロセス再起動後、DBの状態から素直にreconcileを再開できる。これは宣言的
-アーキテクチャの副産物で、インメモリにキューや状態を持つ設計より本質的にクラッシュ耐性が高い。
+この節はもともと「宣言的spec/status＋reconcileループのおかげで、プロセスが落ちてもDBの
+状態から素直に再開できる」という前提で書かれていた。実際にコードを確認したところ、
+**`internal/resource.Store`は完全にオンメモリのmapで、DB自体がどこにも存在しなかった**
+——つまりcompute/network/identity/image/block-storageのどのサービスも、再起動・
+クラッシュで状態を100%失う設計になっていた。設計書だけが先にあり、実際のバッキング
+ストアに対して作られたことが一度も無い状態が続いていたことになる。この節の残りは
+この訂正を踏まえて書き直す。
+
+### 採用: バッキングストアに`etcd`を採用する
+
+**なぜetcdか**: `internal/resource.Store`の設計（`spec`/`status`分離、`resource_version`
+による楽観的並行性制御、`Watch`によるバックログ再生+ライブ配信）は、そもそも
+Kubernetesの`apiserver`+`etcd`の設計をそのまま踏襲したもの（[why-not-openstack.md](why-not-openstack.md)
+参照）。etcdは**まさにこの意味論のために作られたKVS**で、次の点がほぼ1対1で対応する:
+
+- etcdの`mod_revision`はキーごとではなく**キースペース全体で単調増加するグローバルな
+  リビジョン**——これが`resource_version`そのものになる（キー単位のリビジョンしか
+  持たないKVS——例えばNATS JetStreamのKey-Valueストア——では、この「コレクション全体で
+  単調増加」という前提が崩れるため候補から外した）
+- `clientv3.Watch(ctx, prefix, clientv3.WithRev(sinceRV+1))`が、指定リビジョン以降の
+  変更を「過去分の再生→そのままライブ配信」へシームレスに繋げてくれる——今の
+  `Store.Watch`が自前で実装している「バックログ→ライブ」の切り替えロジックが不要になる
+- 要求したリビジョンが既にcompaction済みなら`mvcc: required revision has been compacted`
+  エラーが返る——これは今の`ErrHistoryPruned`とそのまま対応する
+- `Txn`（Compare-And-Swap）が標準機能——`Update`の楽観的並行性チェック
+  （`resource_version`不一致で`Conflict`）や、`Create`の冪等性チェック（name重複時は
+  既存オブジェクトを返す）を、競合の心配なく実装できる
+- クラスタ構成・リーダー選出（`concurrency.NewElection`）が標準機能——後述の
+  reconcileリーダー選出もこれで解決する
+
+比較検討した他の選択肢（PostgreSQL/MySQL、NATS JetStream KV）とその判断理由は、
+このセッションの会話記録を参照——要点だけ書くと、リレーショナルDBは`Watch`の
+意味論を自前で作り込む必要がある点、NATS KVは前述のキー単位リビジョンの不一致で
+`resource_version`の意味が壊れる点が決め手になった。運用面では、ユーザー自身が
+etcdクラスタ運用の実経験を持っていることも、この選択の後押しになっている。
+
+**書き込み頻度に関する既知の注意点**: kyuushaはHypervisorのheartbeatを5秒おきに
+書き込んでいる（`compute.Service.Heartbeat`）。想定スケール上限（Hypervisor約500台）
+では理論上秒間100件程度の書き込みが発生し、etcdのMVCCはcompactionしない限り
+古いリビジョンを溜め込み続けるため、デフォルトのquota（2GB）に到達しうる。
+`--auto-compaction-mode=periodic`等の定期compaction設定は必須の運用要件とする
+（Kubernetes自身も同じ理由でこれを行っている）。将来的な最適化として、heartbeatの
+たびに毎回書き込むのではなく実際の状態遷移（Ready⇄NotReady等）の時だけ書き込む
+設計へ変更する余地もあるが、対象スケールでの絶対的なデータ量・書き込みスループットは
+etcdにとって軽微なので、まずは定期compactionの設定だけで様子を見る。
+
+### 前提として有利な点: 状態が全てetcdにある（訂正後、これは真）
+
+宣言的spec/status＋reconcileループという設計のおかげで、サービスプロセスが落ちても
+（etcd自体が生きていれば）データは失われない。プロセス再起動後、etcdの状態から
+素直にreconcileを再開できる。これは宣言的アーキテクチャの副産物で、インメモリに
+キューや状態を持つ設計より本質的にクラッシュ耐性が高い。
 
 問題になるのは「API面」と「reconcile面」の2つ。
 
@@ -1521,40 +1570,35 @@ VirtualMachine/Hypervisor側のHA（`SELF_HEAL`、フェンシング）は丁寧
 持たないため、複数レプリカをロードバランサ配下に並べるだけでHAを達成できる。api-gatewayは
 純粋なステートレスプロキシ＋JWT検証なので同様。特別な設計は不要。
 
-### Reconcile面: リーダー選出（k8s controller-managerと同じ発想）
+### Reconcile面: リーダー選出（etcdのconcurrency.Electionを使う）
 
 複数レプリカがそれぞれ独自にreconcileループ（`Pending`のVirtualMachineを見つけてスケジューリングする等）
 を回すと、二重処理・レースが発生する（`resource_version`の楽観的並行性制御で最悪の破損は
 防げるが、無駄な競合が常態化する）。
 
 k8sのcontroller-managerと同じ**リーダー選出**を採用する（オブジェクトモデルではなく、
-この種のコントローラー実行の一般的な手法として妥当なため借用）。
+この種のコントローラー実行の一般的な手法として妥当なため借用）。当初案は「新規依存を
+増やさず既存のDBでリースする」だったが、その既存DB自体が無かった（上記訂正参照）ため、
+今はバッキングストアに採用したetcd自身のリーダー選出プリミティブ
+（`go.etcd.io/etcd/client/v3/concurrency`の`Session`+`Election`）を使う——新規依存が
+増えるわけではなく、既に採用したetcdの標準機能を使うだけ。
 
 - 各サービスは複数レプリカを起動するが、reconcileループは1レプリカだけがアクティブ
   （リーダー）、他はホットスタンバイ
-- リーダー選出はetcd/Consul等の新規依存を増やさず、**既存のDBを使ったリース**で実現する
-
-```sql
--- 概念的なテーブル
-leader_lease(service_name PK, holder_id, expires_at)
-```
-
-```
-UPDATE leader_lease
-SET holder_id = $self, expires_at = now() + 15s
-WHERE service_name = $svc AND (holder_id = $self OR expires_at < now());
--- 更新できた(affected rows=1)ならリーダー。5秒ごとにrenewを試みる
-```
-
+- リーダーのセッションはetcdのLease（TTL付き）に紐づく——プロセスが落ちる/
+  ネットワーク分断されるとLeaseが切れ、他のレプリカが自動的に新リーダーに昇格する
 - GCスイープ（孤児リソース掃除）も同じリーダー選出済みプロセス内で実行する
 - リーダー切り替え時、NATS JetStreamのコマンドは永続化・work-queue化されているため、
   新リーダーはキューの続きから処理を再開できる。特別なハンドオフ処理は不要
 
-### 正直な残課題: DB自体の冗長化はスコープ外
+### 正直な残課題: etcdクラスタ自体の冗長化はデプロイ環境側の前提
 
-この設計は各サービスのDBが可用であることを前提にしている。DBのレプリケーション/フェイルオーバーは
-kyuushaのアプリケーション層の責務ではなく、デプロイ環境側の前提とする（block-storageハイパーバイザーの
-冗長化を運用チームの前提としたのと同じ整理）。
+この設計は各サービスが接続するetcdクラスタが可用であることを前提にしている。etcd自体の
+クラスタ構成（奇数台数、ディスクI/O要件等）はkyuushaのアプリケーション層の責務ではなく、
+デプロイ環境側の前提とする（block-storageハイパーバイザーの冗長化を運用チームの前提と
+したのと同じ整理）。ただしetcd自体が3台以上のRaftクラスタとして構成されていれば、
+このクラスタ自体の可用性はetcdの標準機能でカバーされる——「既存のDBの可用性は
+別問題」だった訂正前の整理より、実質的にカバー範囲は広い。
 
 ## Observability: OpenStack(Ceilometer)を反面教師にする
 
@@ -1901,7 +1945,8 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Image設計（`ImageFormat`: `KERNEL_ROOTFS`(直接カーネルブート系VMM用)/`QCOW2`(QEMU/libvirt用)、`driver_hint`との対応バリデーション、コンテンツアドレス型blobストア）
 - Flavor/machine_classという固定カタログの廃止（`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
 - UserData/cloud-init注入（NoCloud seed disk方式、HTTPメタデータサービスは不採用）
-- コントロールプレーンサービス自体の可用性（API面はステートレス複製、reconcile面はDBリースによるリーダー選出）
+- コントロールプレーンサービス自体の可用性（API面はステートレス複製、reconcile面はetcdの`concurrency.Election`によるリーダー選出）
+- バッキングストアにetcdを採用（2026-09-11訂正: `internal/resource.Store`がそれまで完全にオンメモリで、状態が一切永続化されていなかったことが判明したため。PostgreSQL/MySQL、NATS JetStream KVも比較検討し、`resource_version`のグローバル単調増加という意味論がetcdと最も自然に一致すること、リーダー選出も同じ依存で賄えることが決め手）
 - Imageのストレージ方針（`ImageArtifact{url, digest}`による外部URL参照のみ。kyuushaはblobを一切保管しない。オブジェクトストレージは任意の外部依存に格下げ）
 - ハイパーバイザー間の軽量ピアフェッチ（heartbeatでのキャッシュ済みdigest報告＋同一zone優先の直接HTTP転送。外部依存ではなくkyuusha自身の組み込み機能）
 - インフラ要件の「必須」「任意」の分類軸（必須: DB/NATS/ブロックストレージノード。任意: privateオブジェクトストレージ/Dragonfly）
