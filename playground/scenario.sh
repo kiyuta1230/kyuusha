@@ -465,6 +465,13 @@ go run ./cmd/kyuusha vm delete -addr=localhost:8080 -tenant="$tenant" -id="$clou
 
 echo "==> playing the 'operator' role: creating the real backing file a Volume will reference, directly in the playground-nfs fixture (kyuusha itself never provisions this -- see docs/architecture.md「訂正: 責務の境界を...」)"
 persist_identifier="scenario-persist-volume.img"
+# rm first, not just truncate -s: a stale marker left over by an earlier
+# run of this same script would otherwise still be sitting in the first
+# 64 bytes (truncate only changes the file's length, it doesn't zero
+# already-allocated bytes within the new size) -- vm-persist-a would then
+# find that old data and report "found" instead of "written", which the
+# check below doesn't expect on a first attach.
+rm -f "playground/volume-data/$persist_identifier"
 truncate -s 1M "playground/volume-data/$persist_identifier"
 chmod 0666 "playground/volume-data/$persist_identifier"
 
@@ -492,7 +499,12 @@ for _ in $(seq 1 15); do
   echo "$vma_console" | grep -q 'kyuusha: volume data written' && break
   sleep 1
 done
-marker="$(echo "$vma_console" | grep -o 'kyuusha: volume data written: [^ ]*' | cut -d' ' -f5)"
+# `|| true`: under `set -o pipefail`, grep matching nothing (e.g. the loop
+# above timed out) would otherwise make this whole assignment's exit
+# status non-zero and silently kill the script via `set -e` -- the `if`
+# right below is exactly how this case is meant to be handled, not a
+# script-ending failure.
+marker="$(echo "$vma_console" | grep -o 'kyuusha: volume data written: [^ ]*' | cut -d' ' -f5 || true)"
 if [ -z "$marker" ]; then
   echo "!! could not confirm the Volume was really attached and written to (no /dev/kvm on this host? try: kyuusha vm console -tenant=$tenant -id=$vma_id): $vma_console" >&2
 else
