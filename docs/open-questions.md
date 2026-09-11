@@ -112,7 +112,7 @@ Watchし、自分のゾーンに該当するものへ自動接続する。
 この節は設計討議の記録であって実装計画ではない——次に着手するときはまず
 上記の未決事項から詰める。
 
-## Volumeの申告内容（存在確認・サイズ）が一切検証されない（対応中、下記参照）
+## Volumeの申告内容（存在確認・サイズ）が一切検証されない（サイズの検知は解決済み、下記参照）
 
 上記の「参照+接続」責務境界の直接の帰結として、`CreateVolume`は
 `protocol`/`storage_connection`/`identifier`が空でないか・enumとして正しいか
@@ -133,24 +133,31 @@ Watchし、自分のゾーンに該当するものへ自動接続する。
   実際は10TBのボリュームを繋ぐつもりでも`size_gb=1`と申告すればQuota上は1GBの
   消費としてしか計上されず、検知する仕組みが無い
 
-**対応方針（2026-09-11、まず着手する最小スコープ）**: 完全な事前検証（Create時に
+**対応方針（2026-09-11に決定・実装済み: サイズの検知）**: 完全な事前検証（Create時に
 どこかのHypervisorへ能動的に確認を取りに行く）は、上の「Hypervisor↔ストレージ
 バックエンドの接続自動化」がどの形に決まるか（どのHypervisorに聞けばいいか、
-zoneとどう紐づくか）に依存するため、今は着手しない。まず着手するのは
-**compute-agent側でのローカルな検知+可観測化**:
+zoneとどう紐づくか）に依存するため、まだ着手していない。着手したのは
+**compute-agent側でのローカルな検知+可観測化**（commit `30409fb`）:
 
 - `internal/compute-agent/volumeref.Resolve`が見つけたパスの実サイズを
-  （ブロックデバイスも通常ファイルも同じ`Seek(0, io.SeekEnd)`で）取得する
-- 宣言された`size_gb`と大きく食い違う場合、compute-agentが構造化ログで警告する
-  （このプロジェクトの「専用の状態機械を作るのではなく既存のオブザーバビリティ
-  基盤に乗せる」という一貫した方針——Prometheus/Loki/Grafanaが既にある——に
-  沿った選択で、block-storage/proto側の変更は伴わない）
+  （ブロックデバイスも通常ファイルも同じ`Seek(0, io.SeekEnd)`で）取得するように
+  なった
+- 宣言された`size_gb`と10%以上食い違う場合、`vmm.WarnIfSizeMismatch`が構造化ログで
+  警告する（このプロジェクトの「専用の状態機械を作るのではなく既存の
+  オブザーバビリティ基盤に乗せる」という一貫した方針——Prometheus/Loki/Grafanaが
+  既にある——に沿った選択で、block-storage/proto側の変更は伴わない）。実機で
+  「正しいサイズ→警告なし」「50GB申告・実体1MB→警告あり」の両方をplaygroundで
+  ライブ確認済み
 
 **まだ解決されないまま残る部分**（別タスク、`docs/specs/volume.md`「この実装が
 カバーしないもの」の`status.device_path`/`status.hypervisor`と本質的に同じ話）:
-実際に検知した不整合を`kyuusha volattach get`等のAPI越しに見えるようにするには、
-compute-agent→compute→block-storageの報告経路（新しいproto フィールド+RPC）が
-要る——これは今回のログベースの対応より一段大きい話なので、別途着手する。
+- 実際に検知した不整合を`kyuusha volattach get`等のAPI越しに見えるようにするには、
+  compute-agent→compute→block-storageの報告経路（新しいproto フィールド+RPC）が
+  要る——これは今回のログベースの対応より一段大きい話なので、別途着手する
+- 到達可能性の事前検証自体は未着手のまま（VM起動が寛容に劣化しない件を含め、
+  こちらは"バグ"というよりトレードオフの再確認が必要な論点として残る）
+
+## QEMU用のjailer相当の隔離方式（自前実装 vs. libvirt）
 
 2026-09に`driver_hint=FIRECRACKER`のVMをjailer（chroot + uid/gid権限降格）でラップした
 （[Firecracker起動仕様](specs/firecracker-boot.md)「jailer」、docs/architecture.md
