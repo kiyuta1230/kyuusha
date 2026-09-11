@@ -124,19 +124,33 @@ network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`
 
 block-storage向け（[Volume仕様](volume.md)参照）。`create`は`-tenant`を持つため
 admin-onlyではない。kyuushaはボリュームを作成/削除しない——既存の（iSCSI/NVMe-oF/NFS
-で到達可能な）ボリュームへの参照を登録するだけなので、外部呼び出し無しに
-`size_gb`/`protocol`/`storage_connection`/`identifier`のバリデーションさえ通れば
-即`Ready`になる。
+で到達可能な）ボリュームへの参照を登録するだけ。`size_gb`/`protocol`/
+`storage_connection`/`identifier`のバリデーションと、参照する`StorageConnection`が
+実在することが通れば`Pending`で受理され、非同期の検証（[Volume仕様](volume.md)
+「検証フロー」）が終わり次第`Ready`になる。
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-size-gb`(必須、自己申告値でQuota計算にのみ使う) `-protocol`(`ISCSI`/`NVME_OF`/`NFS`、必須) `-storage-connection`(必須) `-identifier`(必須) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-size-gb`(必須、自己申告値でQuota計算にのみ使う) `-protocol`(`ISCSI`/`NVME_OF`/`NFS`、必須) `-storage-connection`(必須) `-identifier`(必須) `-annotations`(省略可、`k=v,k=v`形式、kyuusha自身は解釈しない参考情報) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
 | `delete` | `-tenant`(必須) `-id`(必須) |
 
 `update`（リサイズ等）自体が存在しない（[Volume仕様](volume.md)参照）。
+
+## `kyuusha storageconn <create|get|list|watch|delete>`（admin-only）
+
+block-storage向け（[Volume仕様](volume.md)「StorageConnection」参照）。テナント非
+スコープ（Hypervisorと同じ）なので、どのサブコマンドも`-tenant`を持たず、admin-only。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-name`(冪等キー、必須) `-zones`(カンマ区切りAZ一覧、必須) `-annotations`(省略可、`k=v,k=v`形式) |
+| `get` | `-id`(必須) |
+| `list` | （フラグ無し） |
+| `watch` | `-since-resource-version` |
+| `delete` | `-id`(必須) |
 
 ## `kyuusha volattach <create|get|list|watch|delete>`
 

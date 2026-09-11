@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package kyuusha.blockstorage.v1;
+
+option go_package = "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1;blockstoragev1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// StorageConnection declares which Availability Zones a storage backend may
+// be connected to from -- a storage admin registers one per storage node
+// (or per storage node per reachable AZ grouping), independent of whatever
+// Volumes end up referencing it by name in their own spec.storage_connection
+// (see volume.proto). kyuusha never establishes this connection itself (see
+// docs/architecture.md「訂正: 責務の境界を...」) -- it only tracks, per
+// declared zone, whether some Hypervisor in that zone has actually
+// self-reported having it (see docs/open-questions.md「Hypervisor↔ストレージ
+// バックエンドの接続確立をkyuusha側で自動化すべきか」「具体的な設計」).
+//
+// Not tenant-scoped, same as Hypervisor -- an operator-facing resource, not
+// a KaaS-facing one.
+message StorageConnectionSpec {
+  // zones is the storage admin's declaration of which AZs this connection
+  // may be used from -- independent of physical reality (a single-AZ
+  // backend, or one replicated/reachable across several) since only the
+  // storage admin actually knows which. Every zone here must eventually be
+  // confirmed (see status.verified_zones) before this connection -- and any
+  // Volume referencing it -- reaches Ready.
+  repeated string zones = 1;
+  // annotations is never interpreted by kyuusha itself -- purely a
+  // reference field for admins/users (e.g. the storage product/version).
+  // Same role as Kubernetes' annotations (not labels: nothing selects on
+  // this).
+  map<string, string> annotations = 2;
+}
+
+message StorageConnectionStatus {
+  // phase is Pending until every zone in spec.zones has been confirmed
+  // (strict: even one permanently-unconfirmed zone keeps this Pending
+  // forever, by design -- see docs/open-questions.md). Never Error: an
+  // unconfirmed zone isn't treated as a failure, since it may simply not
+  // have a Hypervisor registered yet.
+  string phase = 1; // Pending / Ready / Deleting
+  repeated string verified_zones = 2;
+  repeated kyuusha.resource.v1.Condition conditions = 3;
+}
+
+message StorageConnection {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  StorageConnectionSpec spec = 2;
+  StorageConnectionStatus status = 3;
+}
+
+message CreateStorageConnectionRequest {
+  string name = 1; // idempotency key: a repeated Create with the same name returns the existing StorageConnection
+  StorageConnectionSpec spec = 2;
+  bool dry_run = 3;
+}
+
+message GetStorageConnectionRequest {
+  string id = 1;
+}
+
+message ListStorageConnectionsRequest {}
+
+message ListStorageConnectionsResponse {
+  repeated StorageConnection items = 1;
+}
+
+message DeleteStorageConnectionRequest {
+  string id = 1;
+  bool dry_run = 2;
+}
+
+message WatchStorageConnectionsRequest {
+  int64 since_resource_version = 1;
+}
+
+message StorageConnectionEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  StorageConnection storage_connection = 2;
+  int64 resource_version = 3;
+}
+
+service StorageConnectionService {
+  rpc Create(CreateStorageConnectionRequest) returns (StorageConnection);
+  rpc Get(GetStorageConnectionRequest) returns (StorageConnection);
+  rpc List(ListStorageConnectionsRequest) returns (ListStorageConnectionsResponse);
+  rpc Delete(DeleteStorageConnectionRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchStorageConnectionsRequest) returns (stream StorageConnectionEvent);
+}

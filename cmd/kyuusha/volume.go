@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -53,6 +54,7 @@ func volumeCreate(args []string) {
 	protocol := fs.String("protocol", "", "protocol this Volume is reachable over: ISCSI, NVME_OF, or NFS (required)")
 	storageConnection := fs.String("storage-connection", "", "name of the Hypervisor-side storage connection this Volume lives behind -- must match a StorageConnection a Hypervisor declared at registration (required)")
 	identifier := fs.String("identifier", "", "protocol-specific identifier: for ISCSI/NVME_OF, the block device's stable name under /dev/disk/by-id/; for NFS, a path relative to the connection's mount point (required)")
+	annotations := fs.String("annotations", "", "comma-separated key=value pairs, never interpreted by kyuusha itself -- purely a reference field for admins/users (e.g. a QoS tier)")
 	fs.Parse(args)
 
 	if *tenant == "" || *sizeGB == 0 || *protocol == "" || *storageConnection == "" || *identifier == "" {
@@ -74,6 +76,7 @@ func volumeCreate(args []string) {
 			Protocol:          blockstoragev1.StorageProtocol(protoVal),
 			StorageConnection: *storageConnection,
 			Identifier:        *identifier,
+			Annotations:       parseAnnotations(*annotations),
 		},
 	})
 	if err != nil {
@@ -184,4 +187,24 @@ func printVolume(vol *blockstoragev1.Volume) {
 		vol.GetMeta().GetId(), vol.GetMeta().GetName(), vol.GetMeta().GetTenantId(),
 		vol.GetSpec().GetSizeGb(), vol.GetSpec().GetProtocol(), vol.GetSpec().GetStorageConnection(), vol.GetSpec().GetIdentifier(),
 		vol.GetStatus().GetPhase(), vol.GetMeta().GetResourceVersion())
+}
+
+// parseAnnotations turns "-annotations=k1=v1,k2=v2" into a map -- shared by
+// volume.go and storageconn.go, since both StorageConnection and Volume
+// carry the exact same kyuusha-opaque reference field.
+func parseAnnotations(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		k, v, _ := strings.Cut(pair, "=")
+		out[k] = v
+	}
+	return out
 }

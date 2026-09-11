@@ -30,6 +30,30 @@ func EvtSubjectHeartbeat(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.evt.%s.heartbeat", hypervisor)
 }
 
+// EvtSubjectHypervisorStorageConnections is published by the Reconciler
+// (see reconciler.go's publishHypervisorStorageConnections) whenever a
+// Hypervisor registers/re-registers, carrying its self-reported zone +
+// storage_connections. block-storage subscribes to this directly (wildcard
+// hypervisor) to learn, without ever dialing compute's gRPC (which would
+// make today's one-way compute->block-storage dependency bidirectional --
+// see docs/open-questions.md「Hypervisor↔ストレージバックエンドの接続確立を
+// kyuusha側で自動化すべきか」), which zones each declared storage_connection
+// name is actually backed by a Hypervisor in.
+func EvtSubjectHypervisorStorageConnections(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.evt.%s.storage-connections", hypervisor)
+}
+
+// HypervisorStorageConnectionsMsg is the payload of
+// EvtSubjectHypervisorStorageConnections. Only connection names travel here
+// (not local_path -- block-storage only needs to know *that* a zone can
+// reach a named connection, not compute-agent's own local mount point for
+// it).
+type HypervisorStorageConnectionsMsg struct {
+	Hypervisor         string   `json:"hypervisor"`
+	Zone               string   `json:"zone"`
+	StorageConnections []string `json:"storage_connections,omitempty"`
+}
+
 // ConsoleRequestSubject is deliberately NOT under `ms.compute.cmd.>`: console
 // access is ephemeral/live, not a durable work-queue command, so it must not
 // be captured (and retained) by the COMPUTE_CMD JetStream stream. Published

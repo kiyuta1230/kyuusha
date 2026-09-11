@@ -26,6 +26,7 @@ func TestService_VolumeAttachmentAttachesWhenVolumeIsFree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)
 	}
+	vol = forceVolumeVerified(t, ctx, svc, vol)
 	att, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
 		VMID: "vm-1", VolumeID: vol.Meta.ID,
 	})
@@ -52,6 +53,7 @@ func TestService_ExclusiveAttachBlocksSecondAttachmentThenRetrySucceeds(t *testi
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)
 	}
+	vol = forceVolumeVerified(t, ctx, svc, vol)
 	first, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
 		VMID: "vm-1", VolumeID: vol.Meta.ID,
 	})

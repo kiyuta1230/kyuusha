@@ -25,13 +25,19 @@ Volumeはその接続の中で発見されるだけ」という形に統一し�
 | `Volume.spec.protocol` | `ISCSI` / `NVME_OF` / `NFS`。このVolumeが到達可能なプロトコル |
 | `Volume.spec.storage_connection` | このVolumeが属するHypervisor側のStorageConnection名。Hypervisorが自己登録時に宣言した`storage_connections[].name`のいずれかと一致していなければならない（下記「StorageConnection」参照） |
 | `Volume.spec.identifier` | プロトコル固有の識別子。ISCSI/NVME_OFなら`/dev/disk/by-id/`配下のブロックデバイスの安定名（udevが振るserial/WWNベースの名前）、NFSならそのStorageConnectionのマウントポイントからの相対パス |
-| `Volume.status.phase` | `Pending`（実装上は一瞬） / `Ready` / `Deleting` / `Error` |
+| `Volume.spec.annotations` | kyuusha自身は一切解釈しない参考情報（QoSティア等）。K8sのannotationsと同じ位置付け |
+| `Volume.status.phase` | `Pending` / `Ready` / `Deleting`。参照する`StorageConnection`が`Ready`になり、かつ`identifier`の実在確認が取れて初めて`Ready`（非同期、下記「検証フロー」参照）。`Error`へは倒さない——確認できなければ`Pending`のまま |
 | `VolumeAttachment.spec.volume_id` / `vm_id` | 結びつけるVolumeとVirtualMachineのID |
 | `VolumeAttachment.spec.device_hint` | 省略可。デバイスパスの希望（現状使われていない） |
 | `VolumeAttachment.status.phase` | `Pending` / `Attaching` / `Attached` / `Detaching` / `Deleting` / `Error` |
 | `VolumeAttachment.status.device_path` / `hypervisor` | **常に空**（既知の未実装事項、下記参照） |
+| `StorageConnection.spec.zones` | ストレージ管理者が宣言する、このバックエンドが接続を許容するAvailability Zone一覧 |
+| `StorageConnection.spec.annotations` | `Volume.spec.annotations`と同じ位置付けの参考情報（製品バージョン等） |
+| `StorageConnection.status.phase` | `Pending` / `Ready`。`spec.zones`の**全ゾーン**が確認できて初めてReady（厳格）。`Error`は無い |
+| `StorageConnection.status.verified_zones` | 実際に確認が取れたゾーンのみ |
 
-どちらも`tenant_id`を持つテナントスコープのリソース。
+Volume/VolumeAttachmentは`tenant_id`を持つテナントスコープのリソース。StorageConnectionは
+Hypervisorと同じくテナント非スコープ（運用者向けリソース、`kyuusha storageconn`はadmin-only）。
 
 ## Quota強制（Volume Create時）
 
@@ -94,7 +100,16 @@ sequenceDiagram
   `tryAttach`自体が何かに失敗してErrorへ遷移する経路は無くなった——防御的/対称性のため
   残しているだけ）
 
-## StorageConnection（Hypervisor側）
+## StorageConnection
+
+`Volume.spec.storage_connection`が名前で参照する、独立したCRUD+Watchリソース
+（block-storageで管理、Hypervisorと同じくテナント非スコープ）。ストレージ管理者が
+「このバックエンドはどのAZから接続してよいか」を宣言する場所——物理的な冗長化構成
+（単一AZか、複数AZから到達可能に構成されているか）はストレージ管理者だけが知っている
+前提なので、kyuusha自身はそれを推測しない。`kyuusha storageconn create -name=... -zones=...`
+（admin-only）で登録する。
+
+### Hypervisor側の自己申告
 
 kyuusha自身は何も接続しない（上記「概要」参照）ため、あるHypervisorがどのVolumeを
 実際に見つけられるかは、そのHypervisorが自己登録時に宣言した`storage_connections`
@@ -109,12 +124,58 @@ kyuusha自身は何も接続しない（上記「概要」参照）ため、あ�
 ときに参照するローカルマップ）は、どちらもこの同じフラグ値から作られる——同じ事実
 （このホストが何に既に接続しているか）を2つの呼び出し元向けに表現しているだけなので。
 
+**静的な自己申告**（`docs/open-questions.md`「Hypervisorのストレージ接続自己申告を
+動的化すべきか」参照）: `local_path`が空でない（NFS想定の）エントリだけ、
+起動時に一度`os.Stat`でディレクトリとして実在するか確認し、失敗したものは警告つきで
+申告から除外する——「一度も確認しない」わけではないが、以降は再チェックしない、という
+意味での「静的」。ISCSI/NVME_OF想定のエントリ（`local_path`が空）は、この時点では
+接続固有に確認できるものが無いため素通りする。
+
+### 検証フロー（`internal/block-storage/verification.go`）
+
+`StorageConnection`/`Volume`とも即座に`Ready`にはならない——`Pending`で受理し、
+Image/NetworkInterface/VolumeAttachmentと同じ非同期パターンで確認が取れ次第
+`Ready`へ進める（`pendingSweepInterval`＝10秒ごとのsweepに相乗り）。検証は独立した
+2段階:
+
+1. **接続レベル**（`StorageConnection`単位、ゾーンごとに1回でよい・複数Volumeで共有できる）:
+   computeのReconcilerが、Hypervisorが登録/再登録されるたびにその`zone`+
+   `storage_connections`をNATSイベント（`ms.compute.evt.<hypervisor>.storage-connections`、
+   `compute.HypervisorStorageConnectionsMsg`）として発行する。block-storageはこれを
+   直接subscribeし（`recordHypervisorConnections`）、`StorageConnection.spec.zones`の
+   全ゾーンがどこかのHypervisorの自己申告でカバーされたら`Ready`にする
+   （`sweepStorageConnections`）。**一部のゾーンが恒久的に確認できなくても`Pending`の
+   まま**——`Error`へは倒さない
+2. **Volumeレベル**（Volume単位、接続とは別に毎回必要）: block-storageが、その
+   `storage_connection`を持つと自己申告しているHypervisorのうち任意の1台へ、
+   `VerifyVolumeCommand`（`identifier`等一式）をNATSで直接送る
+   （`ms.blockstorage.cmd.<hypervisor>.volume.verify`）。compute-agent側
+   （`internal/compute-agent`の`handleVerifyVolume`）はVM起動時と全く同じ
+   `volumeref.Resolve`を呼ぶだけ——ログイン/マウント/attachは一切せず、発見できるか
+   どうかと実サイズだけを`VerifyVolumeResult`として返す
+   （`ms.blockstorage.evt.<hypervisor>.volume.verify-result`）。結果は
+   `Volume.status.conditions`の`IdentifierVerified`として記録され、そのVolumeの
+   `StorageConnection`も`Ready`であれば`Ready`へ進む。**確認が取れなければ
+   （identifier不在等）`Pending`のまま**——`Error`へは倒さない。失敗しても次のsweepで
+   また聞きに行く（無期限リトライ、上限やバックオフは無い）
+
+**computeとblock-storageの依存が双方向にならないよう、この2つのやり取りは両方とも
+NATS直結**（computeのgRPCを経由しない）: block-storageが「どのHypervisorに聞けばよいか」
+を知るためにcomputeのHypervisor一覧をgRPCで取得すると、今の一方向
+（`compute → block-storage`、VM作成時のVolume検証）の依存が双方向になってしまうため。
+`BLOCKSTORAGE_CMD`/`BLOCKSTORAGE_EVT`という新しいJetStreamストリームをblock-storage側
+（`internal/block-storage/nats.go`）が持つ——compute-agentもこの2つのストリームの存在を
+`EnsureStreams`で保証する（block-storageと起動順序が前後してもよいように）。
+
 **スケジューリング時のフィルタリングは未実装**（`docs/open-questions.md`参照）:
 あるVolumeを要求するVMが、そのVolumeの`storage_connection`を宣言していないHypervisorへ
-スケジュールされる可能性は現状排除されていない。その場合、後述する
-`internal/compute-agent/volumeref.Resolve`がそのHypervisor上で失敗し、そのVolumeだけ
-アタッチされずにVMが起動する（IPが解決しなかったNetworkInterfaceと同じ「寛容な劣化」
-——今のところこれで実害は無いという判断だが、v1のスコープ外として明示的に先送り）。
+スケジュールされる可能性は現状排除されていない。その場合、`volumeref.Resolve`がその
+Hypervisor上で失敗し、そのVolumeだけアタッチされずにVMが起動する（IPが解決しなかった
+NetworkInterfaceと同じ「寛容な劣化」——今のところこれで実害は無いという判断だが、v1の
+スコープ外として明示的に先送り）。ただし、VolumeそのものはCreate時に既に
+`storage_connection`が存在するStorageConnectionを参照しているか検証されるため
+（下記「Create時のバリデーション」）、この寛容な劣化が起きるのは「Volumeは正しく
+登録されているが、たまたま繋がっていないHypervisorへスケジュールされた」場合のみ。
 
 ## compute-agent側の配線（`internal/compute-agent/volumeref`）
 
@@ -188,10 +249,12 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
 
 - `Volume.Create`は`spec.size_gb`が正の値であること、`spec.protocol`が
   `ISCSI`/`NVME_OF`/`NFS`のいずれかであること、`spec.storage_connection`/
-  `spec.identifier`がどちらも空でないことを検証する（すべて`ErrValidation`）。
-  Hypervisorが実際にその`storage_connection`を宣言しているか、`identifier`が指す
-  ファイル/デバイスが実在するかはここでは検証しない——そのHypervisorが実際にVMを
-  起動するまで分からない（上記「StorageConnection」参照）
+  `spec.identifier`がどちらも空でないこと、**かつ`spec.storage_connection`が指す
+  `StorageConnection`が実在すること**を検証する（すべて`ErrValidation`）。
+  `identifier`が指すファイル/デバイスが実在するか、どのHypervisorから到達可能かは
+  ここでは検証しない——非同期の検証フロー（上記「検証フロー」）に委ねる
+- `StorageConnection.Create`は`spec.zones`が最低1つ必要であることを検証する
+  （`ErrValidation`）
 - `VolumeAttachment.Create`は`spec.volume_id`が指す`Volume`が存在し、同じテナントに属し、
   `Ready`であることを検証する（存在しない/他テナント/未Readyなら`ErrValidation`）。
   compute/networkの既存Create時バリデーションと同じ「参照先が存在しない・使えない状態の
@@ -220,18 +283,32 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
   報告し返す経路が無い
 - **Volumeのリサイズ**: `size_gb`は作成後不変。Update RPC自体を用意していない
   （Imageと同じ判断——不変にすべきフィールドしかない段階でUpdateを開けない）
-- **スケジューリング時のstorage_connectionフィルタリング**: 上記「StorageConnection」
-  参照
+- **スケジューリング時のstorage_connectionフィルタリング**: 上記「検証フロー」の
+  最後の段落参照
 - **ハイパーバイザ障害時のマウント/ログイン自動化**: Hypervisorが宣言した
   `storage_connections`に従って、そのホスト自身が実際にiSCSIへログインしたり
   NFSをマウントしたりする処理自体は、現状kyuusha側には無い（そこもオペレータの
   仕事——上記「概要」参照）。将来的にこの部分をkyuusha側で自動化する余地はある
-  （`docs/open-questions.md`参照、まだ設計していない）
+  （`docs/open-questions.md`「Hypervisor↔ストレージバックエンドの接続確立を
+  kyuusha側で自動化すべきか」参照、まだ設計していない）
+- **StorageConnectionの削除保護のみ、GC無し**: `StorageConnection`は参照している
+  Volumeが残っている間は削除できない（`ErrValidation`）が、逆に参照されなくなった
+  StorageConnectionの自動削除は無い（明示的に消すまで残り続ける）
+- **Volume/StorageConnectionの検証結果はAPI越しに詳細が見えない**: `Volume.status`は
+  `IdentifierVerified`という`Condition`は持つが、実際にcompute-agentが見つけた
+  `device_path`や検証に応じた`hypervisor`をblock-storageへ報告し返す経路（上記
+  `status.device_path`/`status.hypervisor`と同じ話）はまだ無い。検証コマンドの
+  リトライ間隔・上限（現状は無期限、`pendingSweepInterval`＝10秒ごと）も
+  チューニングされていない
 
 ## エンドポイント
 
-`block-storage :8085`（`VolumeService`, `VolumeAttachmentService`）。api-gateway経由でのみ
-到達可能（[システム構成仕様](system-overview.md)参照）。CLIは`kyuusha volume`/
-`kyuusha volattach`（[CLI仕様](cli.md)参照）。block-storageが直接ダイヤルする実ストレージ
-サービスは存在しない——実データパス（iSCSI/NVMe-oF/NFS）はすべてHypervisorとストレージ
-バックエンドの間で完結し、kyuushaのどのコンポーネントもその経路に乗らない。
+`block-storage :8085`（`VolumeService`, `VolumeAttachmentService`, `StorageConnectionService`）。
+api-gateway経由でのみ到達可能（[システム構成仕様](system-overview.md)参照）。CLIは
+`kyuusha volume`/`kyuusha volattach`/`kyuusha storageconn`（`storageconn`はadmin-only、
+[CLI仕様](cli.md)参照）。block-storageが直接ダイヤルする実ストレージサービスは存在しない
+——実データパス（iSCSI/NVMe-oF/NFS）はすべてHypervisorとストレージバックエンドの間で
+完結し、kyuushaのどのコンポーネントもその経路に乗らない。block-storageはNATSにも
+直接つながる（`-nats-url`）——検証フロー用の`BLOCKSTORAGE_CMD`/`BLOCKSTORAGE_EVT`と、
+computeが発行する`ms.compute.evt.*.storage-connections`のsubscribe用（上記「検証フロー」
+参照）。

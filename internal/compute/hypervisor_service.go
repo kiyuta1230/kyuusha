@@ -40,7 +40,7 @@ const (
 // of "real thing is later" gap on the authn side): this accepts the agent's
 // self-reported zone/capacity directly, unauthenticated. Tracked in
 // docs/open-questions.md.
-func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone string, allocatableVCPU int32, allocatableMemoryMB int64, supportedDrivers []string) (*Hypervisor, error) {
+func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone string, allocatableVCPU int32, allocatableMemoryMB int64, supportedDrivers []string, storageConnections []StorageConnection) (*Hypervisor, error) {
 	existing, err := s.hypervisors.Get(ctx, "", hypervisor)
 	hadExisting := err == nil
 
@@ -60,6 +60,7 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 		AllocatableVCPU:     allocatableVCPU,
 		AllocatableMemoryMB: allocatableMemoryMB,
 		SupportedDrivers:    supportedDrivers,
+		StorageConnections:  storageConnections,
 	}
 	if hadExisting {
 		status.AllocatedVCPU = existing.Status.AllocatedVCPU

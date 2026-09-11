@@ -1409,10 +1409,68 @@ type StorageBackend interface {
 という統一モデルに収まり、プロトコルごとに別々の`StorageBackend`実装を厩舎が持つ必要が無くなる。
 
 この結果、上記`storage-agent`（`CreateVolume`/`ExportVolume`等を持つ専任サービス）は
-**この新しい境界の下では不要になる**見込み——block-storageはVolume/VolumeAttachmentの
-メタデータ管理サービスへ縮小し、専任のストレージノード常駐サービスという構成要素自体を
-畳む可能性が高い。具体的なリソース形・識別子の持たせ方・移行方針は設計継続中
-（docs/open-questions.md参照）。
+**この新しい境界の下で不要になった**——2026-09-10、実際に削除した。block-storageは
+Volume/VolumeAttachmentのメタデータ管理サービスへ縮小している（具体的なスキーマは
+[Volume仕様](specs/volume.md)参照）。
+
+### 追記（2026-09-11）: 「参照するだけ」の弱点——作成時の検証をStorageConnectionリソースで埋める
+
+上記の縮小の直接の帰結として、当初の実装は`CreateVolume`が`protocol`/`storage_connection`/
+`identifier`の形式チェックのみで即座に受理していた——実在するファイル/デバイスかどうか、
+どのHypervisorから到達可能かは一切検証されず、`size_gb`も完全な自己申告で
+`max_volume_gb`のQuota強制が事実上の申告制になっていた。この弱点を、block-storageが
+実マウント/ログインを自ら行う（＝この節が縮小したはずの責務が戻ってくる）のではなく、
+**既存の非同期Pending→Readyパターン（Image/NetworkInterface/VolumeAttachmentと同じ）に
+Volumeを乗せ、実際の確認はHypervisor（compute-agent）に委ねる**形で埋めた。
+
+**新しいリソース`StorageConnection`**（block-storageで管理、Hypervisorと同じくテナント
+非スコープ）:
+
+```
+StorageConnection.spec.zones          # ストレージ管理者が宣言: このバックエンドは
+                                       # どのAZから接続してよいか（物理的な冗長化構成が
+                                       # 単一AZかレプリケーションされているかは無関係——
+                                       # ストレージ管理者だけが知っている前提を宣言する）
+StorageConnection.spec.annotations    # 厩舎は一切解釈しない参考情報（製品バージョン等）
+StorageConnection.status.phase        # 全てのzonesが確認できて初めてReady（厳格）。
+                                       # 一部のzoneが恒久的に確認できなくてもErrorにはせず
+                                       # Pendingのまま——「まだ確認できていない」であって
+                                       # 「失敗」ではないため
+StorageConnection.status.verified_zones
+```
+
+Volume自身は`zones`を持たない——`storage_connection`（名前で参照）経由で間接的に決まる
+（同じ接続を複数のVolumeが共有するため、Volume側に重複して持たせない）。Volumeにも
+同じ理由で`annotations`（QoS等の参考情報）を追加した。
+
+**検証は2段階、検証主体もカーディナリティも異なる**:
+
+1. **接続レベル**（`StorageConnection`単位、ゾーンごとに1回でよい・複数Volumeで共有できる）:
+   Hypervisorの`storage_connections`自己申告（[Hypervisor起動仕様](specs/hypervisor-bootstrap.md)）
+   と、`StorageConnection.spec.zones`を突き合わせるだけ
+2. **Volumeレベル**（Volume単位、接続とは別に毎回必要）: その`identifier`が実在するか・
+   実サイズはいくつかを、実際にどこかのHypervisorへ聞きに行く（compute-agentの
+   `internal/compute-agent/volumeref.Resolve`が答える——VM起動時と全く同じ発見ロジック）
+
+Volume自体も、この2つが両方満たされて初めて`Ready`になる。こちらも同じ「確認できなければ
+`Error`ではなく`Pending`のまま」という辛抱強い方針——永続データを積むはずのVolumeを
+中途半端な状態のまま`Error`で放置するより、確認できるまで待ち続ける方が安全という判断
+（`docs/specs/volume.md`「この実装がカバーしないもの」参照）。
+
+**サービス間通信はNATSのみ、新しいgRPC依存を作らない**: block-storageが「どのHypervisorに
+聞けばいいか」を知るためにcomputeのHypervisor情報をgRPCで見に行くと、今の一方向
+（`compute → block-storage`、VM作成時のVolume検証）の依存が双方向になってしまう。
+代わりに、computeのReconcilerがHypervisorの`zone`+`storage_connections`をNATSイベントとして
+publishし（`ms.compute.evt.<hypervisor>.storage-connections`）、block-storageが直接
+subscribeして自分の中に「どのゾーンのどのHypervisorが何を持っているか」を構築する
+（接続レベルの検証に使う）。Volumeレベルの検証コマンド/応答も、block-storageと
+compute-agentの間で直接やり取りする専用のNATS stream（`BLOCKSTORAGE_CMD`/
+`BLOCKSTORAGE_EVT`）を新設し、computeを経由しない。
+
+**Hypervisorの自己申告は当面静的のまま**（起動時に一度、compute-agent自身が
+`local_path`の存在をチェックしてから宣言する——それ以降は再チェックしない）。
+定期的な自己チェックへの動的化は将来の検討事項として残している
+（docs/open-questions.md「Hypervisorのストレージ接続自己申告を動的化すべきか」）。
 
 ### 正直な弱点（訂正前の記述）: ストレージノード自体の冗長化は別問題
 

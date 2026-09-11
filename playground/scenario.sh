@@ -298,16 +298,62 @@ if [ "$ranged_ip" != "10.0.6.10" ] && [ "$ranged_ip" != "10.0.6.11" ]; then
 fi
 echo "    confirmed: ip_address stayed inside the configured allocatable_ip_ranges"
 
-echo "==> creating a Volume (block-storage; a reference to an already-existing file/device, not something kyuusha provisions -- see docs/architecture.md「訂正: 責務の境界を...」. This one is attached only to an already-Running VM below, so its identifier is never actually resolved on a real host and doesn't need to exist)"
+# wait_for_volume_ready polls until a Volume reaches Ready -- CreateVolume
+# itself only returns Pending now (see docs/open-questions.md「Hypervisor↔
+# ストレージバックエンドの接続確立をkyuusha側で自動化すべきか」「具体的な
+# 設計」): it becomes Ready only once its StorageConnection is itself Ready
+# (all declared zones confirmed) *and* compute-agent has confirmed the
+# specific identifier exists, both asynchronous over NATS.
+wait_for_volume_ready() {
+  local vol_id="$1" line=""
+  for _ in $(seq 1 20); do
+    line="$(go run ./cmd/kyuusha volume get -addr=localhost:8080 -tenant="$tenant" -id="$vol_id")"
+    if echo "$line" | grep -q 'phase=Ready'; then
+      echo "$line"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "$line"
+  return 1
+}
+
+echo "==> registering the 'playground-nfs' StorageConnection (admin-only; declares which AZs this backend may be connected from -- see docs/open-questions.md「Hypervisor↔ストレージバックエンドの接続確立をkyuusha側で自動化すべきか」)"
+sc_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha storageconn create -addr=localhost:8080 -name=playground-nfs -zones=zone-a)"
+echo "$sc_line"
+storageconn_id="$(echo "$sc_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+for _ in $(seq 1 20); do
+  sc_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha storageconn get -addr=localhost:8080 -id="$storageconn_id")"
+  echo "$sc_line" | grep -q 'phase=Ready' && break
+  sleep 1
+done
+echo "$sc_line"
+if ! echo "$sc_line" | grep -q 'phase=Ready'; then
+  echo "!! playground-nfs StorageConnection did not reach Ready (no Hypervisor reported it in zone-a?): $sc_line" >&2
+  exit 1
+fi
+echo "    confirmed: StorageConnection reached Ready once a Hypervisor in zone-a self-reported it"
+
+echo "==> playing the 'operator' role again: creating the real backing file this Volume will reference (Ready now requires it -- see docs/open-questions.md「Volumeの申告内容...」)"
+truncate -s 1M playground/volume-data/scenario-volume.img
+chmod 0666 playground/volume-data/scenario-volume.img
+
+echo "==> creating a Volume (block-storage; a reference to an already-existing file/device, not something kyuusha provisions -- see docs/architecture.md「訂正: 責務の境界を...」)"
 volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-volume -size-gb=10 -protocol=NFS -storage-connection=playground-nfs -identifier=scenario-volume.img)"
 echo "$volume_line"
 volume="$(echo "$volume_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
-if [ -z "$volume" ] || ! echo "$volume_line" | grep -q 'phase=Ready'; then
-  echo "!! volume was not created Ready: $volume_line" >&2
+if [ -z "$volume" ]; then
+  echo "!! volume was not created: $volume_line" >&2
+  exit 1
+fi
+volume_line="$(wait_for_volume_ready "$volume")"
+echo "$volume_line"
+if ! echo "$volume_line" | grep -q 'phase=Ready'; then
+  echo "!! volume did not reach Ready: $volume_line" >&2
   exit 1
 fi
 
-echo "==> attaching the Volume to already-Running vm-1 and confirming the exclusive-attach constraint (docs/architecture.md '具体的な排他制御'; real ExportVolume happens here too, but vm-1 already booted so nothing actually attaches inside the guest -- attach-before-boot only, see docs/specs/volume.md. That real end-to-end path is exercised separately below)"
+echo "==> attaching the Volume to already-Running vm-1 and confirming the exclusive-attach constraint (docs/architecture.md '具体的な排他制御'; vm-1 already booted so nothing actually attaches inside the guest -- attach-before-boot only, see docs/specs/volume.md. That real end-to-end path is exercised separately below)"
 first_attach_line="$(go run ./cmd/kyuusha volattach create -addr=localhost:8080 -tenant="$tenant" -name=scenario-attach-1 -vm="$vm1_id" -volume="$volume")"
 echo "$first_attach_line"
 if ! echo "$first_attach_line" | grep -q 'phase=Attached'; then
@@ -479,8 +525,14 @@ echo "==> creating a Volume referencing it and a VM that attaches it at boot (-v
 persist_volume_line="$(go run ./cmd/kyuusha volume create -addr=localhost:8080 -tenant="$tenant" -name=scenario-persist-volume -size-gb=1 -protocol=NFS -storage-connection=playground-nfs -identifier="$persist_identifier")"
 echo "$persist_volume_line"
 persist_volume="$(echo "$persist_volume_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
-if [ -z "$persist_volume" ] || ! echo "$persist_volume_line" | grep -q 'phase=Ready'; then
-  echo "!! persist-test volume was not created Ready: $persist_volume_line" >&2
+if [ -z "$persist_volume" ]; then
+  echo "!! persist-test volume was not created: $persist_volume_line" >&2
+  exit 1
+fi
+persist_volume_line="$(wait_for_volume_ready "$persist_volume")"
+echo "$persist_volume_line"
+if ! echo "$persist_volume_line" | grep -q 'phase=Ready'; then
+  echo "!! persist-test volume did not reach Ready: $persist_volume_line" >&2
   exit 1
 fi
 

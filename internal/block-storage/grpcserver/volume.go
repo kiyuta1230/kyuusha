@@ -82,11 +82,11 @@ func (s *VolumeServer) Watch(req *blockstoragev1.WatchVolumesRequest, stream blo
 
 func toStatus(err error) error {
 	switch {
-	case errors.Is(err, blockstorage.ErrVolumeNotFound), errors.Is(err, blockstorage.ErrVolumeAttachmentNotFound):
+	case errors.Is(err, blockstorage.ErrVolumeNotFound), errors.Is(err, blockstorage.ErrVolumeAttachmentNotFound), errors.Is(err, blockstorage.ErrStorageConnectionNotFound):
 		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, blockstorage.ErrVolumeConflict), errors.Is(err, blockstorage.ErrVolumeAttachmentConflict):
+	case errors.Is(err, blockstorage.ErrVolumeConflict), errors.Is(err, blockstorage.ErrVolumeAttachmentConflict), errors.Is(err, blockstorage.ErrStorageConnectionConflict):
 		return status.Error(codes.Aborted, err.Error())
-	case errors.Is(err, blockstorage.ErrVolumeHistoryPruned), errors.Is(err, blockstorage.ErrVolumeAttachmentHistoryPruned):
+	case errors.Is(err, blockstorage.ErrVolumeHistoryPruned), errors.Is(err, blockstorage.ErrVolumeAttachmentHistoryPruned), errors.Is(err, blockstorage.ErrStorageConnectionHistoryPruned):
 		return status.Error(codes.OutOfRange, err.Error())
 	case errors.Is(err, blockstorage.ErrQuotaExceeded):
 		return status.Error(codes.ResourceExhausted, err.Error())
@@ -103,6 +103,7 @@ func fromVolumeSpec(s *blockstoragev1.VolumeSpec) blockstorage.VolumeSpec {
 		Protocol:          fromStorageProtocol(s.GetProtocol()),
 		StorageConnection: s.GetStorageConnection(),
 		Identifier:        s.GetIdentifier(),
+		Annotations:       s.GetAnnotations(),
 	}
 }
 
@@ -112,6 +113,7 @@ func toVolumeSpec(s blockstorage.VolumeSpec) *blockstoragev1.VolumeSpec {
 		Protocol:          toStorageProtocol(s.Protocol),
 		StorageConnection: s.StorageConnection,
 		Identifier:        s.Identifier,
+		Annotations:       s.Annotations,
 	}
 }
 

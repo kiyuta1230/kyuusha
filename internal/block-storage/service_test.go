@@ -13,7 +13,46 @@ func newTestService(t *testing.T, ctx context.Context) *Service {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
+	mustCreateTestStorageConnection(t, ctx, svc, "test-connection", "test-zone")
 	return svc
+}
+
+// mustCreateTestStorageConnection creates a StorageConnection and forces it
+// straight to Ready -- tests run with no real NATS/compute-agent (s.js is
+// nil, see Service's own doc comment), so the normal Hypervisor-self-report
+// path that would verify it for real never fires on its own.
+func mustCreateTestStorageConnection(t *testing.T, ctx context.Context, svc *Service, name, zone string) {
+	t.Helper()
+	sc, err := svc.CreateStorageConnection(ctx, name, StorageConnectionSpec{Zones: []string{zone}})
+	if err != nil {
+		t.Fatalf("CreateStorageConnection: %v", err)
+	}
+	sc.Status.Phase = StorageConnectionPhaseReady
+	sc.Status.VerifiedZones = []string{zone}
+	if _, err := svc.storageConnections.Update(ctx, *sc); err != nil {
+		t.Fatalf("force StorageConnection ready: %v", err)
+	}
+}
+
+// forceVolumeVerified simulates compute-agent's real verify-volume-result
+// arriving and succeeding, so a test that needs a Ready Volume (to then
+// exercise VolumeAttachment logic, say) doesn't need a real NATS/
+// compute-agent round-trip -- exercises the real promotion logic
+// (handleVerifyResult), just with a synthetic result instead of one that
+// actually arrived over NATS.
+func forceVolumeVerified(t *testing.T, ctx context.Context, svc *Service, vol *Volume) *Volume {
+	t.Helper()
+	svc.handleVerifyResult(ctx, VerifyVolumeResult{
+		TenantID:  vol.Meta.TenantID,
+		VolumeID:  vol.Meta.ID,
+		Success:   true,
+		SizeBytes: vol.Spec.SizeGB * (1 << 30),
+	})
+	got, err := svc.GetVolume(ctx, vol.Meta.TenantID, vol.Meta.ID)
+	if err != nil {
+		t.Fatalf("forceVolumeVerified: GetVolume: %v", err)
+	}
+	return got
 }
 
 // testVolumeSpec fills in the fields every valid VolumeSpec needs beyond
@@ -48,8 +87,8 @@ func TestPlayground_VolumeLifecycleOverWatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateVolume: %v", err)
 	}
-	if vol.Status.Phase != VolumePhaseReady {
-		t.Fatalf("new Volume phase = %q, want Ready (no real backend to wait on yet)", vol.Status.Phase)
+	if vol.Status.Phase != VolumePhasePending {
+		t.Fatalf("new Volume phase = %q, want Pending (verification is async -- see verification.go)", vol.Status.Phase)
 	}
 
 	// Idempotent re-Create with the same name must not mint a new ID.

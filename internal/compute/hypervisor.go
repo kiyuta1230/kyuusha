@@ -26,6 +26,17 @@ type PciDevice struct {
 	Allocated  bool
 }
 
+// StorageConnection is one storage connection this Hypervisor self-reports
+// as already established (an iSCSI/NVMe-oF session already logged in, or
+// an NFS export already mounted -- see docs/architecture.md「訂正: 責務の
+// 境界を...」). Static self-report only: RegisterHypervisor stores whatever
+// compute-agent claims at startup and never re-verifies it here -- see
+// docs/open-questions.md「Hypervisorのストレージ接続自己申告を動的化すべきか」.
+type StorageConnection struct {
+	Name      string
+	LocalPath string
+}
+
 // HypervisorSpec is operator intent, set only via Service.SetSchedulable --
 // never touched by RegisterHypervisor, so an agent restart can't silently
 // undo an operator's maintenance action. Contrast HypervisorStatus, which
@@ -44,6 +55,14 @@ type HypervisorStatus struct {
 	AllocatedMemoryMB   int64
 	SupportedDrivers    []string
 	AvailableDevices    []PciDevice
+	// StorageConnections is this Hypervisor's self-reported set of already-
+	// established storage connections -- see the StorageConnection type's
+	// own doc comment. block-storage's own StorageConnection resource
+	// verification (docs/open-questions.md) learns about these via a NATS
+	// event the Reconciler publishes whenever this changes, not by
+	// block-storage dialing compute directly (kept one-way: compute already
+	// depends on block-storage for Volume validation).
+	StorageConnections []StorageConnection
 }
 
 type Hypervisor struct {

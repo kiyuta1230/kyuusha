@@ -158,16 +158,17 @@ func main() {
 	defer computeConn.Close()
 
 	agent := &computeagent.Agent{
-		Hypervisor:          *hypervisor,
-		NC:                  nc,
-		JS:                  js,
-		HeartbeatInterval:   *heartbeat,
-		Hypervisors:         computev1.NewHypervisorServiceClient(computeConn),
-		BootstrapToken:      bootstrapToken,
-		AllocatableVCPU:     int32(*vcpu),
-		AllocatableMemoryMB: *memoryMB,
-		SupportedDrivers:    strings.Split(*drivers, ","),
-		StorageConnections:  connectionProtos,
+		Hypervisor:              *hypervisor,
+		NC:                      nc,
+		JS:                      js,
+		HeartbeatInterval:       *heartbeat,
+		Hypervisors:             computev1.NewHypervisorServiceClient(computeConn),
+		BootstrapToken:          bootstrapToken,
+		AllocatableVCPU:         int32(*vcpu),
+		AllocatableMemoryMB:     *memoryMB,
+		SupportedDrivers:        strings.Split(*drivers, ","),
+		StorageConnections:      connectionProtos,
+		LocalStorageConnections: connections,
 		Drivers: map[string]vmm.VMM{
 			string(compute.VmmDriverFirecracker): &fcvmm.Manager{
 				BinPath:            *fcBin,
@@ -197,11 +198,22 @@ func main() {
 // parseStorageConnections turns -storage-connections' name[:local_path]
 // entries into both forms this compute-agent needs: a local
 // volumeref.Connections map (consumed by fcvmm/qemuvmm's Managers at VM
-// boot time) and the []*computev1.StorageConnection this same information
-// travels as in RegisterHypervisorRequest. Both are built from a single
-// flag value, rather than kept as two separately-specified inputs, since
-// they describe the exact same fact (what this host already has
-// connected) from two different callers' point of view.
+// boot time, and by handleVerifyVolume to answer block-storage) and the
+// []*computev1.StorageConnection this same information travels as in
+// RegisterHypervisorRequest. Both are built from a single flag value,
+// rather than kept as two separately-specified inputs, since they describe
+// the exact same fact (what this host already has connected) from two
+// different callers' point of view.
+//
+// "Static" (docs/open-questions.md「Hypervisorのストレージ接続自己申告を
+// 動的化すべきか」) means this is checked once, here, at startup -- not
+// never: an entry with a local_path (NFS-shaped; ISCSI/NVME_OF entries
+// have none, see volumeref.Resolve's fixed /dev/disk/by-id/ convention, so
+// there's nothing connection-specific to check for those at this level) is
+// verified to actually exist as a directory right now, and dropped (with a
+// warning, not a fatal error -- the other declared connections may still
+// be fine) if it doesn't. Never re-checked again afterward; that's the
+// "static" part.
 func parseStorageConnections(raw string) (volumeref.Connections, []*computev1.StorageConnection) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -215,6 +227,17 @@ func parseStorageConnections(raw string) (volumeref.Connections, []*computev1.St
 			continue
 		}
 		name, localPath, _ := strings.Cut(entry, ":")
+		if localPath != "" {
+			info, err := os.Stat(localPath)
+			if err != nil {
+				slog.Warn("compute-agent: dropping declared storage connection, local_path check failed", "name", name, "local_path", localPath, "err", err)
+				continue
+			}
+			if !info.IsDir() {
+				slog.Warn("compute-agent: dropping declared storage connection, local_path is not a directory", "name", name, "local_path", localPath)
+				continue
+			}
+		}
 		conns[name] = localPath
 		protos = append(protos, &computev1.StorageConnection{Name: name, LocalPath: localPath})
 	}

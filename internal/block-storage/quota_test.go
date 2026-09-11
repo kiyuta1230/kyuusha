@@ -14,6 +14,7 @@ func TestService_CreateVolumeEnforcesQuota(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
+	mustCreateTestStorageConnection(t, ctx, svc, "test-connection", "test-zone")
 	const tenant = "tenant-a"
 
 	first, err := svc.CreateVolume(ctx, tenant, "vol-1", testVolumeSpec(60))

@@ -162,10 +162,13 @@ services:
       target: block-storage
     command:
       - "-grpc-addr=:8085"
+      - "-nats-url=nats://nats:4222"
       - "-identity-addr=identity:8082"
       - "-metrics-addr=:9097"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
+      nats:
+        condition: service_healthy
       identity:
         condition: service_started
       jaeger:

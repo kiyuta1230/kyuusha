@@ -57,6 +57,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	}
 	go r.svc.runHealthSweep(ctx)
 	go r.runPendingSweep(ctx)
+	go r.publishHypervisorStorageConnections(ctx)
 
 	events, err := r.svc.Watch(ctx, "", 0, "") // all tenants, unfiltered: internal use only
 	if err != nil {
@@ -379,4 +380,42 @@ func (r *Reconciler) subscribeHeartbeats() error {
 		}
 	})
 	return err
+}
+
+// publishHypervisorStorageConnections republishes each Hypervisor's
+// self-reported zone+storage_connections as a durable NATS event on every
+// Added/Modified change, so block-storage can learn it without ever
+// dialing compute's gRPC -- see nats.go's
+// EvtSubjectHypervisorStorageConnections doc comment. Fires on every
+// heartbeat-driven Modified event too, not just genuine storage_connections
+// changes (Heartbeat() touches the same Hypervisor object) -- simpler than
+// tracking last-published state, and cheap enough at this system's target
+// scale (~500 hypervisors, docs/architecture.md「想定するユーザー像と
+// スケール」) not to bother. Started once from Run; blocks until ctx is done.
+func (r *Reconciler) publishHypervisorStorageConnections(ctx context.Context) {
+	events, err := r.svc.WatchHypervisors(ctx, 0)
+	if err != nil {
+		slog.Error("watch hypervisors for storage-connections publish failed", "err", err)
+		return
+	}
+	for e := range events {
+		if e.Type != EventAdded && e.Type != EventModified {
+			continue
+		}
+		h := e.Object
+		names := make([]string, len(h.Status.StorageConnections))
+		for i, c := range h.Status.StorageConnections {
+			names[i] = c.Name
+		}
+		payload, _ := json.Marshal(HypervisorStorageConnectionsMsg{
+			Hypervisor:         h.Meta.ID,
+			Zone:               h.Status.Zone,
+			StorageConnections: names,
+		})
+		msg := nats.NewMsg(EvtSubjectHypervisorStorageConnections(h.Meta.ID))
+		msg.Data = payload
+		if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+			slog.Warn("publish hypervisor storage-connections failed", "hypervisor", h.Meta.ID, "err", err)
+		}
+	}
 }

@@ -214,7 +214,11 @@ type VolumeSpec struct {
 	// stable serial/WWN (as seen under /dev/disk/by-id/ once the Hypervisor's
 	// storage_connection session makes it visible); for NFS, a file path
 	// relative to wherever that Hypervisor mounted the connection.
-	Identifier    string `protobuf:"bytes,4,opt,name=identifier,proto3" json:"identifier,omitempty"`
+	Identifier string `protobuf:"bytes,4,opt,name=identifier,proto3" json:"identifier,omitempty"`
+	// annotations is never interpreted by kyuusha itself -- purely a
+	// reference field for admins/users (e.g. a QoS tier). Same role as
+	// Kubernetes' annotations (not labels: nothing selects on this).
+	Annotations   map[string]string `protobuf:"bytes,5,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -277,10 +281,24 @@ func (x *VolumeSpec) GetIdentifier() string {
 	return ""
 }
 
+func (x *VolumeSpec) GetAnnotations() map[string]string {
+	if x != nil {
+		return x.Annotations
+	}
+	return nil
+}
+
 type VolumeStatus struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Ready（識別子の形式チェック＋quota判定が通れば即座） / Deleting / Error
-	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// phase is Pending until (1) the referenced StorageConnection
+	// (storageconnection.proto) is itself Ready, and (2) this Volume's own
+	// identifier has been confirmed to exist (with a real observed size) by
+	// some Hypervisor holding that connection -- see docs/open-questions.md
+	// 「Volumeの申告内容...」「Hypervisor↔ストレージバックエンドの接続確立を
+	// kyuusha側で自動化すべきか」. Never Error, by the same strict-but-patient
+	// design as StorageConnection: an unverified Volume just stays Pending.
+	Phase         string          `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Ready / Deleting
+	Conditions    []*v1.Condition `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1341,7 +1359,7 @@ var File_kyuusha_blockstorage_v1_volume_proto protoreflect.FileDescriptor
 
 const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"\n" +
-	"$kyuusha/blockstorage/v1/volume.proto\x12\x17kyuusha.blockstorage.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xba\x01\n" +
+	"$kyuusha/blockstorage/v1/volume.proto\x12\x17kyuusha.blockstorage.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xd2\x02\n" +
 	"\n" +
 	"VolumeSpec\x12\x17\n" +
 	"\asize_gb\x18\x01 \x01(\x03R\x06sizeGb\x12D\n" +
@@ -1349,7 +1367,11 @@ const file_kyuusha_blockstorage_v1_volume_proto_rawDesc = "" +
 	"\x12storage_connection\x18\x03 \x01(\tR\x11storageConnection\x12\x1e\n" +
 	"\n" +
 	"identifier\x18\x04 \x01(\tR\n" +
-	"identifier\"d\n" +
+	"identifier\x12V\n" +
+	"\vannotations\x18\x05 \x03(\v24.kyuusha.blockstorage.v1.VolumeSpec.AnnotationsEntryR\vannotations\x1a>\n" +
+	"\x10AnnotationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"d\n" +
 	"\fVolumeStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -1467,7 +1489,7 @@ func file_kyuusha_blockstorage_v1_volume_proto_rawDescGZIP() []byte {
 }
 
 var file_kyuusha_blockstorage_v1_volume_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_kyuusha_blockstorage_v1_volume_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_kyuusha_blockstorage_v1_volume_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_kyuusha_blockstorage_v1_volume_proto_goTypes = []any{
 	(StorageProtocol)(0),                  // 0: kyuusha.blockstorage.v1.StorageProtocol
 	(VolumeEvent_Type)(0),                 // 1: kyuusha.blockstorage.v1.VolumeEvent.Type
@@ -1492,53 +1514,55 @@ var file_kyuusha_blockstorage_v1_volume_proto_goTypes = []any{
 	(*DeleteVolumeAttachmentRequest)(nil), // 20: kyuusha.blockstorage.v1.DeleteVolumeAttachmentRequest
 	(*WatchVolumeAttachmentsRequest)(nil), // 21: kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest
 	(*VolumeAttachmentEvent)(nil),         // 22: kyuusha.blockstorage.v1.VolumeAttachmentEvent
-	(*v1.Condition)(nil),                  // 23: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),                 // 24: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),                 // 25: google.protobuf.Empty
+	nil,                                   // 23: kyuusha.blockstorage.v1.VolumeSpec.AnnotationsEntry
+	(*v1.Condition)(nil),                  // 24: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),                 // 25: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),                 // 26: google.protobuf.Empty
 }
 var file_kyuusha_blockstorage_v1_volume_proto_depIdxs = []int32{
 	0,  // 0: kyuusha.blockstorage.v1.VolumeSpec.protocol:type_name -> kyuusha.blockstorage.v1.StorageProtocol
-	23, // 1: kyuusha.blockstorage.v1.VolumeStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	24, // 2: kyuusha.blockstorage.v1.Volume.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	3,  // 3: kyuusha.blockstorage.v1.Volume.spec:type_name -> kyuusha.blockstorage.v1.VolumeSpec
-	4,  // 4: kyuusha.blockstorage.v1.Volume.status:type_name -> kyuusha.blockstorage.v1.VolumeStatus
-	3,  // 5: kyuusha.blockstorage.v1.CreateVolumeRequest.spec:type_name -> kyuusha.blockstorage.v1.VolumeSpec
-	5,  // 6: kyuusha.blockstorage.v1.ListVolumesResponse.items:type_name -> kyuusha.blockstorage.v1.Volume
-	1,  // 7: kyuusha.blockstorage.v1.VolumeEvent.type:type_name -> kyuusha.blockstorage.v1.VolumeEvent.Type
-	5,  // 8: kyuusha.blockstorage.v1.VolumeEvent.volume:type_name -> kyuusha.blockstorage.v1.Volume
-	23, // 9: kyuusha.blockstorage.v1.VolumeAttachmentStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	24, // 10: kyuusha.blockstorage.v1.VolumeAttachment.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	13, // 11: kyuusha.blockstorage.v1.VolumeAttachment.spec:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentSpec
-	14, // 12: kyuusha.blockstorage.v1.VolumeAttachment.status:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentStatus
-	13, // 13: kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest.spec:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentSpec
-	15, // 14: kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse.items:type_name -> kyuusha.blockstorage.v1.VolumeAttachment
-	2,  // 15: kyuusha.blockstorage.v1.VolumeAttachmentEvent.type:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentEvent.Type
-	15, // 16: kyuusha.blockstorage.v1.VolumeAttachmentEvent.volume_attachment:type_name -> kyuusha.blockstorage.v1.VolumeAttachment
-	6,  // 17: kyuusha.blockstorage.v1.VolumeService.Create:input_type -> kyuusha.blockstorage.v1.CreateVolumeRequest
-	7,  // 18: kyuusha.blockstorage.v1.VolumeService.Get:input_type -> kyuusha.blockstorage.v1.GetVolumeRequest
-	8,  // 19: kyuusha.blockstorage.v1.VolumeService.List:input_type -> kyuusha.blockstorage.v1.ListVolumesRequest
-	10, // 20: kyuusha.blockstorage.v1.VolumeService.Delete:input_type -> kyuusha.blockstorage.v1.DeleteVolumeRequest
-	11, // 21: kyuusha.blockstorage.v1.VolumeService.Watch:input_type -> kyuusha.blockstorage.v1.WatchVolumesRequest
-	16, // 22: kyuusha.blockstorage.v1.VolumeAttachmentService.Create:input_type -> kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest
-	17, // 23: kyuusha.blockstorage.v1.VolumeAttachmentService.Get:input_type -> kyuusha.blockstorage.v1.GetVolumeAttachmentRequest
-	18, // 24: kyuusha.blockstorage.v1.VolumeAttachmentService.List:input_type -> kyuusha.blockstorage.v1.ListVolumeAttachmentsRequest
-	20, // 25: kyuusha.blockstorage.v1.VolumeAttachmentService.Delete:input_type -> kyuusha.blockstorage.v1.DeleteVolumeAttachmentRequest
-	21, // 26: kyuusha.blockstorage.v1.VolumeAttachmentService.Watch:input_type -> kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest
-	5,  // 27: kyuusha.blockstorage.v1.VolumeService.Create:output_type -> kyuusha.blockstorage.v1.Volume
-	5,  // 28: kyuusha.blockstorage.v1.VolumeService.Get:output_type -> kyuusha.blockstorage.v1.Volume
-	9,  // 29: kyuusha.blockstorage.v1.VolumeService.List:output_type -> kyuusha.blockstorage.v1.ListVolumesResponse
-	25, // 30: kyuusha.blockstorage.v1.VolumeService.Delete:output_type -> google.protobuf.Empty
-	12, // 31: kyuusha.blockstorage.v1.VolumeService.Watch:output_type -> kyuusha.blockstorage.v1.VolumeEvent
-	15, // 32: kyuusha.blockstorage.v1.VolumeAttachmentService.Create:output_type -> kyuusha.blockstorage.v1.VolumeAttachment
-	15, // 33: kyuusha.blockstorage.v1.VolumeAttachmentService.Get:output_type -> kyuusha.blockstorage.v1.VolumeAttachment
-	19, // 34: kyuusha.blockstorage.v1.VolumeAttachmentService.List:output_type -> kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse
-	25, // 35: kyuusha.blockstorage.v1.VolumeAttachmentService.Delete:output_type -> google.protobuf.Empty
-	22, // 36: kyuusha.blockstorage.v1.VolumeAttachmentService.Watch:output_type -> kyuusha.blockstorage.v1.VolumeAttachmentEvent
-	27, // [27:37] is the sub-list for method output_type
-	17, // [17:27] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	23, // 1: kyuusha.blockstorage.v1.VolumeSpec.annotations:type_name -> kyuusha.blockstorage.v1.VolumeSpec.AnnotationsEntry
+	24, // 2: kyuusha.blockstorage.v1.VolumeStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	25, // 3: kyuusha.blockstorage.v1.Volume.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	3,  // 4: kyuusha.blockstorage.v1.Volume.spec:type_name -> kyuusha.blockstorage.v1.VolumeSpec
+	4,  // 5: kyuusha.blockstorage.v1.Volume.status:type_name -> kyuusha.blockstorage.v1.VolumeStatus
+	3,  // 6: kyuusha.blockstorage.v1.CreateVolumeRequest.spec:type_name -> kyuusha.blockstorage.v1.VolumeSpec
+	5,  // 7: kyuusha.blockstorage.v1.ListVolumesResponse.items:type_name -> kyuusha.blockstorage.v1.Volume
+	1,  // 8: kyuusha.blockstorage.v1.VolumeEvent.type:type_name -> kyuusha.blockstorage.v1.VolumeEvent.Type
+	5,  // 9: kyuusha.blockstorage.v1.VolumeEvent.volume:type_name -> kyuusha.blockstorage.v1.Volume
+	24, // 10: kyuusha.blockstorage.v1.VolumeAttachmentStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	25, // 11: kyuusha.blockstorage.v1.VolumeAttachment.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	13, // 12: kyuusha.blockstorage.v1.VolumeAttachment.spec:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentSpec
+	14, // 13: kyuusha.blockstorage.v1.VolumeAttachment.status:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentStatus
+	13, // 14: kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest.spec:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentSpec
+	15, // 15: kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse.items:type_name -> kyuusha.blockstorage.v1.VolumeAttachment
+	2,  // 16: kyuusha.blockstorage.v1.VolumeAttachmentEvent.type:type_name -> kyuusha.blockstorage.v1.VolumeAttachmentEvent.Type
+	15, // 17: kyuusha.blockstorage.v1.VolumeAttachmentEvent.volume_attachment:type_name -> kyuusha.blockstorage.v1.VolumeAttachment
+	6,  // 18: kyuusha.blockstorage.v1.VolumeService.Create:input_type -> kyuusha.blockstorage.v1.CreateVolumeRequest
+	7,  // 19: kyuusha.blockstorage.v1.VolumeService.Get:input_type -> kyuusha.blockstorage.v1.GetVolumeRequest
+	8,  // 20: kyuusha.blockstorage.v1.VolumeService.List:input_type -> kyuusha.blockstorage.v1.ListVolumesRequest
+	10, // 21: kyuusha.blockstorage.v1.VolumeService.Delete:input_type -> kyuusha.blockstorage.v1.DeleteVolumeRequest
+	11, // 22: kyuusha.blockstorage.v1.VolumeService.Watch:input_type -> kyuusha.blockstorage.v1.WatchVolumesRequest
+	16, // 23: kyuusha.blockstorage.v1.VolumeAttachmentService.Create:input_type -> kyuusha.blockstorage.v1.CreateVolumeAttachmentRequest
+	17, // 24: kyuusha.blockstorage.v1.VolumeAttachmentService.Get:input_type -> kyuusha.blockstorage.v1.GetVolumeAttachmentRequest
+	18, // 25: kyuusha.blockstorage.v1.VolumeAttachmentService.List:input_type -> kyuusha.blockstorage.v1.ListVolumeAttachmentsRequest
+	20, // 26: kyuusha.blockstorage.v1.VolumeAttachmentService.Delete:input_type -> kyuusha.blockstorage.v1.DeleteVolumeAttachmentRequest
+	21, // 27: kyuusha.blockstorage.v1.VolumeAttachmentService.Watch:input_type -> kyuusha.blockstorage.v1.WatchVolumeAttachmentsRequest
+	5,  // 28: kyuusha.blockstorage.v1.VolumeService.Create:output_type -> kyuusha.blockstorage.v1.Volume
+	5,  // 29: kyuusha.blockstorage.v1.VolumeService.Get:output_type -> kyuusha.blockstorage.v1.Volume
+	9,  // 30: kyuusha.blockstorage.v1.VolumeService.List:output_type -> kyuusha.blockstorage.v1.ListVolumesResponse
+	26, // 31: kyuusha.blockstorage.v1.VolumeService.Delete:output_type -> google.protobuf.Empty
+	12, // 32: kyuusha.blockstorage.v1.VolumeService.Watch:output_type -> kyuusha.blockstorage.v1.VolumeEvent
+	15, // 33: kyuusha.blockstorage.v1.VolumeAttachmentService.Create:output_type -> kyuusha.blockstorage.v1.VolumeAttachment
+	15, // 34: kyuusha.blockstorage.v1.VolumeAttachmentService.Get:output_type -> kyuusha.blockstorage.v1.VolumeAttachment
+	19, // 35: kyuusha.blockstorage.v1.VolumeAttachmentService.List:output_type -> kyuusha.blockstorage.v1.ListVolumeAttachmentsResponse
+	26, // 36: kyuusha.blockstorage.v1.VolumeAttachmentService.Delete:output_type -> google.protobuf.Empty
+	22, // 37: kyuusha.blockstorage.v1.VolumeAttachmentService.Watch:output_type -> kyuusha.blockstorage.v1.VolumeAttachmentEvent
+	28, // [28:38] is the sub-list for method output_type
+	18, // [18:28] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_blockstorage_v1_volume_proto_init() }
@@ -1552,7 +1576,7 @@ func file_kyuusha_blockstorage_v1_volume_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_blockstorage_v1_volume_proto_rawDesc), len(file_kyuusha_blockstorage_v1_volume_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   20,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

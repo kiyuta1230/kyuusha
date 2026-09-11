@@ -47,7 +47,7 @@ func (s *HypervisorServer) Register(ctx context.Context, req *computev1.Register
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "invalid bootstrap_token: %v", err)
 	}
-	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), claims.Zone, req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers())
+	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), claims.Zone, req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers(), fromStorageConnectionsProto(req.GetStorageConnections()))
 	if err != nil {
 		return nil, toHypervisorStatus(err)
 	}
@@ -131,6 +131,23 @@ func toHypervisorStatusProto(st compute.HypervisorStatus) *computev1.HypervisorS
 			DeviceId:   d.DeviceID,
 			Allocated:  d.Allocated,
 		})
+	}
+	for _, c := range st.StorageConnections {
+		out.StorageConnections = append(out.StorageConnections, &computev1.StorageConnection{
+			Name:      c.Name,
+			LocalPath: c.LocalPath,
+		})
+	}
+	return out
+}
+
+func fromStorageConnectionsProto(in []*computev1.StorageConnection) []compute.StorageConnection {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]compute.StorageConnection, len(in))
+	for i, c := range in {
+		out[i] = compute.StorageConnection{Name: c.GetName(), LocalPath: c.GetLocalPath()}
 	}
 	return out
 }

@@ -7,6 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
@@ -21,6 +24,10 @@ var (
 	ErrVolumeAttachmentConflict      = errors.New("volume_attachment: resource_version conflict")
 	ErrVolumeAttachmentHistoryPruned = errors.New("volume_attachment: watch resume point too old, relist required")
 
+	ErrStorageConnectionNotFound      = errors.New("storage_connection: not found")
+	ErrStorageConnectionConflict      = errors.New("storage_connection: resource_version conflict")
+	ErrStorageConnectionHistoryPruned = errors.New("storage_connection: watch resume point too old, relist required")
+
 	ErrValidation    = errors.New("block-storage: validation failed")
 	ErrQuotaExceeded = errors.New("block-storage: tenant quota exceeded")
 )
@@ -28,6 +35,7 @@ var (
 type EventType = resource.EventType
 type VolumeEvent = resource.Event[Volume]
 type VolumeAttachmentEvent = resource.Event[VolumeAttachment]
+type StorageConnectionEvent = resource.Event[StorageConnection]
 
 const (
 	EventAdded    = resource.EventAdded
@@ -63,8 +71,9 @@ const pendingSweepInterval = 10 * time.Second
 // "look up idempotency, fetch quota, check, charge, create" sequence
 // globally, across all tenants.
 type Service struct {
-	volumes     *resource.Store[Volume, *Volume]
-	attachments *resource.Store[VolumeAttachment, *VolumeAttachment]
+	volumes            *resource.Store[Volume, *Volume]
+	attachments        *resource.Store[VolumeAttachment, *VolumeAttachment]
+	storageConnections *resource.Store[StorageConnection, *StorageConnection]
 
 	identityClient identityv1.TenantServiceClient
 	quota          *quotaChecker
@@ -82,6 +91,20 @@ type Service struct {
 	// keeps the fix in the one place both call sites (CreateVolumeAttachment
 	// and retryPendingAttachments) already funnel through.
 	attachMu sync.Mutex
+
+	// nc/js are nil until Run starts (see verification.go) -- CreateVolume
+	// and the sweeps all tolerate that (a test that never calls Run just
+	// never gets a Volume past Pending via verification, which is fine:
+	// tests that need a Ready Volume force it directly, see testing.go).
+	nc *nats.Conn
+	js jetstream.JetStream
+
+	// hcMu guards hypervisorConnections, this Service's in-memory view of
+	// "which Hypervisor, in which zone, self-reports which storage
+	// connection names" -- rebuilt entirely from NATS events (see
+	// verification.go's recordHypervisorConnections), never persisted.
+	hcMu                  sync.Mutex
+	hypervisorConnections map[string]hypervisorConnInfo
 }
 
 func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient) (*Service, error) {
@@ -100,6 +123,11 @@ func NewService(ctx context.Context, identityClient identityv1.TenantServiceClie
 			Conflict:      ErrVolumeAttachmentConflict,
 			HistoryPruned: ErrVolumeAttachmentHistoryPruned,
 		}),
+		storageConnections: resource.NewStore[StorageConnection, *StorageConnection]("storageconnection", resource.StoreErrors{
+			NotFound:      ErrStorageConnectionNotFound,
+			Conflict:      ErrStorageConnectionConflict,
+			HistoryPruned: ErrStorageConnectionHistoryPruned,
+		}),
 		identityClient: identityClient,
 		quota:          quota,
 		usage:          make(map[string]tenantUsage),
@@ -108,9 +136,28 @@ func NewService(ctx context.Context, identityClient identityv1.TenantServiceClie
 
 // Run retries Pending VolumeAttachments (blocked by another active
 // attachment on the same volume_id at Create time) every
-// pendingSweepInterval until ctx is done. Safe to call from only one
-// goroutine; cmd/block-storage/main.go starts it once at startup.
-func (s *Service) Run(ctx context.Context) error {
+// pendingSweepInterval until ctx is done, and -- once nc/js are non-nil --
+// also drives the StorageConnection/Volume verification flow (see
+// verification.go): subscribing to Hypervisor storage-connection reports
+// and Volume verify-results, and periodically sweeping both toward Ready.
+// Safe to call from only one goroutine; cmd/block-storage/main.go starts it
+// once at startup.
+func (s *Service) Run(ctx context.Context, nc *nats.Conn, js jetstream.JetStream) error {
+	s.nc = nc
+	s.js = js
+
+	if js != nil {
+		if err := EnsureStreams(ctx, js); err != nil {
+			return err
+		}
+		if err := s.subscribeHypervisorStorageConnections(ctx); err != nil {
+			return fmt.Errorf("subscribe hypervisor storage-connections: %w", err)
+		}
+		if err := s.subscribeVerifyResults(ctx); err != nil {
+			return fmt.Errorf("subscribe verify results: %w", err)
+		}
+	}
+
 	ticker := time.NewTicker(pendingSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -119,6 +166,8 @@ func (s *Service) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			s.retryPendingAttachments(ctx)
+			s.sweepStorageConnections(ctx)
+			s.sweepPendingVolumes(ctx)
 		}
 	}
 }
@@ -143,6 +192,13 @@ func (s *Service) retryPendingAttachments(ctx context.Context) {
 // ErrQuotaExceeded if it would be exceeded, then registers the reference
 // (no external backend call -- see the package doc comment: kyuusha never
 // provisions anything).
+//
+// The new Volume starts Pending, not Ready: see verification.go for the
+// asynchronous flow (via NATS, never blocking this call) that promotes it
+// to Ready once its StorageConnection is itself Ready and its own
+// identifier has been confirmed to actually exist. Never Error -- an
+// unverified Volume just stays Pending (docs/open-questions.md「Volumeの
+// 申告内容...」).
 func (s *Service) CreateVolume(ctx context.Context, tenantID, name string, spec VolumeSpec) (*Volume, error) {
 	if tenantID == "" {
 		return nil, fmt.Errorf("%w: tenant_id is required", ErrValidation)
@@ -160,6 +216,9 @@ func (s *Service) CreateVolume(ctx context.Context, tenantID, name string, spec 
 	}
 	if spec.Identifier == "" {
 		return nil, fmt.Errorf("%w: spec.identifier is required", ErrValidation)
+	}
+	if _, ok := s.storageConnections.LookupByName("", spec.StorageConnection); !ok {
+		return nil, fmt.Errorf("%w: storage_connection %q does not exist", ErrValidation, spec.StorageConnection)
 	}
 
 	s.usageMu.Lock()
@@ -184,7 +243,7 @@ func (s *Service) CreateVolume(ctx context.Context, tenantID, name string, spec 
 
 	out, err := s.volumes.Create(ctx, tenantID, name, Volume{
 		Spec:   spec,
-		Status: VolumeStatus{Phase: VolumePhaseReady},
+		Status: VolumeStatus{Phase: VolumePhasePending},
 	})
 	if err != nil {
 		return nil, err
@@ -192,6 +251,11 @@ func (s *Service) CreateVolume(ctx context.Context, tenantID, name string, spec 
 
 	usage.VolumeGB += spec.SizeGB
 	s.usage[tenantID] = usage
+
+	// Best-effort immediate attempt (the periodic sweep, verification.go,
+	// retries indefinitely regardless) -- lets a Volume reach Ready quickly
+	// in the common case instead of always waiting a full sweep interval.
+	s.verifyVolume(ctx, out)
 
 	return &out, nil
 }
@@ -239,6 +303,73 @@ func (s *Service) DeleteVolume(ctx context.Context, tenantID, id string) error {
 
 func (s *Service) WatchVolumes(ctx context.Context, tenantID string, sinceRV int64) (<-chan VolumeEvent, error) {
 	return s.volumes.Watch(ctx, tenantID, sinceRV, nil)
+}
+
+// CreateStorageConnection is idempotent when name is set, same shape as
+// CreateVolume. Not tenant-scoped (same as Hypervisor) -- always stored
+// under tenant_id "". Starts Pending; see verification.go for how it
+// reaches Ready.
+func (s *Service) CreateStorageConnection(ctx context.Context, name string, spec StorageConnectionSpec) (*StorageConnection, error) {
+	if len(spec.Zones) == 0 {
+		return nil, fmt.Errorf("%w: spec.zones must have at least one zone", ErrValidation)
+	}
+	if existing, ok := s.storageConnections.LookupByName("", name); ok {
+		return &existing, nil
+	}
+	out, err := s.storageConnections.Create(ctx, "", name, StorageConnection{
+		Spec:   spec,
+		Status: StorageConnectionStatus{Phase: StorageConnectionPhasePending},
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Best-effort immediate recompute, in case Hypervisors already
+	// reported this connection's name before it existed as a resource here
+	// (verification.go's sweep would otherwise only pick it up on the next
+	// tick).
+	s.sweepStorageConnections(ctx)
+	out, getErr := s.storageConnections.Get(ctx, "", out.Meta.ID)
+	if getErr != nil {
+		return nil, getErr
+	}
+	return &out, nil
+}
+
+func (s *Service) GetStorageConnection(ctx context.Context, id string) (*StorageConnection, error) {
+	out, err := s.storageConnections.Get(ctx, "", id)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (s *Service) ListStorageConnections(ctx context.Context) ([]StorageConnection, error) {
+	return s.storageConnections.List(ctx, "")
+}
+
+// DeleteStorageConnection rejects a StorageConnection still referenced by
+// any Volume (by name -- see Volume.Spec.StorageConnection), the same
+// "never leave a referencing resource dangling" rule DeleteVolume applies
+// to VolumeAttachment.
+func (s *Service) DeleteStorageConnection(ctx context.Context, id string) error {
+	sc, err := s.storageConnections.Get(ctx, "", id)
+	if err != nil {
+		return err
+	}
+	vols, err := s.volumes.List(ctx, "")
+	if err != nil {
+		return err
+	}
+	for _, v := range vols {
+		if v.Spec.StorageConnection == sc.Meta.Name {
+			return fmt.Errorf("%w: storage_connection %q still referenced by volume %q", ErrValidation, sc.Meta.Name, v.Meta.ID)
+		}
+	}
+	return s.storageConnections.Delete(ctx, "", id)
+}
+
+func (s *Service) WatchStorageConnections(ctx context.Context, sinceRV int64) (<-chan StorageConnectionEvent, error) {
+	return s.storageConnections.Watch(ctx, "", sinceRV, nil)
 }
 
 // CreateVolumeAttachment validates spec.volume_id against an existing,

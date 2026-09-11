@@ -37,6 +37,9 @@ type VolumeSpec struct {
 	// Hypervisor's StorageConnection session makes it visible); for NFS, a
 	// file path relative to wherever that Hypervisor mounted the connection.
 	Identifier string
+	// Annotations is never interpreted by kyuusha itself -- purely a
+	// reference field for admins/users (e.g. a QoS tier).
+	Annotations map[string]string
 }
 
 type VolumePhase string

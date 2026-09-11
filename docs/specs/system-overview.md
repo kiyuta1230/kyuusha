@@ -49,10 +49,16 @@ flowchart LR
   ホストにポート公開しない）
 - `compute-agent`は`compute`に**直接**gRPCで接続する（自己登録用。api-gatewayは経由しない、東西通信）
 - `compute` → `identity`（Quota参照）・`compute` → `image`（Image検証）・`compute` → `network`
-  （NetworkInterface検証/作成、[network仕様](network.md)「compute側の統合」参照）もサービス間の
-  直接gRPC呼び出し（同じく東西通信）。`block-storage` → `identity`（Quota参照）も同様。
-  `compute` → `block-storage`の直接呼び出しはまだない（VM作成時にVolumeAttachmentを作る/
-  参照する連携は未統合。[Volume仕様](volume.md)参照）
+  （NetworkInterface検証/作成、[network仕様](network.md)「compute側の統合」参照）・
+  `compute` → `block-storage`（Volume検証、VolumeAttachment作成、[Volume仕様](volume.md)
+  「compute側の統合」参照）もサービス間の直接gRPC呼び出し（同じく東西通信）。
+  `block-storage` → `identity`（Quota参照）も同様
+- `block-storage`はNATSにも直接つながる（gRPC経由ではない）: `compute`が発行する
+  Hypervisorの`zone`+`storage_connections`イベントのsubscribe、`compute-agent`との
+  StorageConnection/Volume検証コマンド/応答のやり取り（[Volume仕様](volume.md)
+  「検証フロー」参照）——`compute`のHypervisor情報をgRPCで取得すると
+  `compute` ↔ `block-storage`が双方向依存になってしまうため、あえてcomputeの
+  gRPCを経由せずNATSで直結している
 - 東西通信（上記すべて）は`internal/mtls`による相互TLS認証済み（[認証・認可仕様](authn-authz.md)
   「適用範囲・既知のギャップ」参照）。南北（clientとapi-gateway間）はJWT認証のみで、mTLSではない
 
@@ -60,12 +66,12 @@ flowchart LR
 
 | サービス | デフォルトアドレス | 提供API |
 |---|---|---|
-| `api-gateway` | `:8080` | `VirtualMachineService`, `HypervisorService`（Get/List/Watch/SetSchedulableのみ）, `TenantService`, `ImageService`, `SubnetService`, `NetworkInterfaceService`, `VolumeService`, `VolumeAttachmentService` |
+| `api-gateway` | `:8080` | `VirtualMachineService`, `HypervisorService`（Get/List/Watch/SetSchedulableのみ）, `TenantService`, `ImageService`, `SubnetService`, `NetworkInterfaceService`, `VolumeService`, `VolumeAttachmentService`, `StorageConnectionService` |
 | `compute` | `:8081` | `VirtualMachineService`, `HypervisorService`（Registerを含む全RPC） |
 | `identity` | `:8082` | `TenantService` |
 | `image` | `:8083` | `ImageService` |
 | `network` | `:8084` | `SubnetService`, `NetworkInterfaceService` |
-| `block-storage` | `:8085` | `VolumeService`, `VolumeAttachmentService` |
+| `block-storage` | `:8085` | `VolumeService`, `VolumeAttachmentService`, `StorageConnectionService` |
 | `NATS` | `:4222`（client）, `:8222`（監視用HTTP、compose環境のみ） | JetStream |
 
 各サービス自身が公開する`/metrics`（Prometheus形式、`-metrics-addr`で指定）と、`-otlp-endpoint`

@@ -59,129 +59,6 @@ iSCSI/NVMe-oF/NFSは「Hypervisor単位の事前接続＋接続済みセッシ�
 参照するだけ」という統一モデルに収まった。`playground/scenario.sh`で実VM経由の
 永続化を実際に確認済み（詳細は`docs/specs/volume.md`参照）。
 
-## Hypervisor↔ストレージバックエンドの接続確立をkyuusha側で自動化すべきか（未着手、下記参照）
-
-上記の実装直後、ユーザーから: 「登録されたボリューム接続情報に従って、
-ハイパーバイザが自動でマウントなりしておくことはできるよね？」という指摘。
-現状（上記で実装した設計）は、Hypervisor自身が`-storage-connections=
-name[:local_path]`フラグで「もう接続済み」と自己申告する方式——新しい
-ストレージバックエンドを1つ追加するたびに、そのゾーンの既存Hypervisor**全台**の
-フラグを書き換えて再起動する必要があり、運用コストがHypervisor数×ストレージ
-バックエンド数のオーダーで増え続ける。
-
-**実例との比較で分かったこと**: OpenStack Cinder（nova-compute側のos-brick）も
-Kubernetes CSIも、「プロビジョニング」（ボリュームの作成/削除、バックエンド固有）は
-外部化・プラガブルにする一方、「ホスト接続確立」（iSCSIログイン、NFSマウントに
-相当する`NodeStageVolume`）はオーケストレータ自身が自動でやる——kyuushaが
-直前に決めた「接続確立も含めて完全に外部化する」という境界は、これらの実例より
-一歩ドライブ過ぎている可能性がある。プロトコル標準の接続確立をkyuusha側へ
-戻すのは、直前の設計の後退ではなく、実例に近づける精緻化と捉えられる。
-
-**頻度分析（ユーザーと確認済み）**: 自動化する場合、Hypervisor側の作業は
-「ホスト初期セットアップ時（iscsiadm/nvme-cliインストール、認証情報配置）」の
-1回きりになり、その後は:
-- 新しいストレージバックエンドが増えたとき → そのゾーンの各Hypervisorが
-  自動で初回接続する（人手不要になる）
-- 既に接続済みのバックエンドの中でVolumeが増えるだけ → 接続作業は一切不要
-  （NFS/NVMe-oFは即座に見える。iSCSIだけ`iscsiadm --rescan`相当の軽い自動
-  再スキャンが要るかもしれないが、`volumeref.Resolve`内に隠蔽でき、人間の
-  作業は発生しない）
-
-**大まかな形（ユーザー提案、まだ詳細未確定）**: block-storageサービスに
-新しい`StorageBackend`（または`StorageConnection`）リソースを作り、実接続情報
-（iSCSIならポータルIP:port+IQN、NVMe-oFならdiscoveryアドレス+NQN、NFSなら
-サーバー:ベースパス、どのゾーンから到達可能か）を持たせる。ストレージ管理者が
-Subnetと同じ粒度（1ストレージノードにつき1回）で登録する。compute-agentがそれを
-Watchし、自分のゾーンに該当するものへ自動接続する。
-
-**まだ決まっていないこと（ユーザーの意向で一旦保留、着手しない）**:
-- 接続確立のタイミング: eager（Hypervisor起動時に自ゾーンの全StorageBackendへ
-  先回り接続）か、lazy（実際にそのVolumeを使うVMがスケジュールされた瞬間だけ
-  接続）か
-- スケジューリング時、Volumeのstorage_connectionを持たないゾーンのHypervisorを
-  除外するフィルタ（自動化する場合はほぼ必須になる——手動declare方式では
-  「起動はするが劣化する」で済んでいた部分）
-- `kyuusha volume create`のCLI verb見直し（ユーザー提案、まだ「かもね」レベル）
-  ——RPC名`Create`自体はKubernetesの`PersistentVolume`も同じ「参照のみ・
-  それでもcreateと呼ぶ」という前例があり、他リソースとの一貫性のため維持が
-  妥当そうだが、Cinderの`volume create`（実プロビジョニングする）との紛らわしさ
-  を避けるCLIエイリアス（`register`等）は検討の余地がある
-
-この節は設計討議の記録であって実装計画ではない——次に着手するときはまず
-上記の未決事項から詰める。
-
-### 具体的な設計（2026-09-11、下記の範囲は詳細まで合意済み・実装はまだ）
-
-「Volume作成時に存在確認する」という別の指摘（次節「Volumeの申告内容...」参照）
-がきっかけで、リソースの正式な形が下記まで詳細に固まった——`StorageBackend`では
-なく**`StorageConnection`という独立したCRUDリソース**（block-storageで管理）にする。
-
-```
-StorageConnection:
-  spec:
-    zones: [zone-a, zone-b]     # ストレージアドミンが宣言:
-                                 # 「このバックエンドはこのゾーンから接続してよい」
-    annotations: {...}          # kyuusha自身は一切解釈しない自由記述の参考情報
-                                 # （例: 製品バージョン）。K8sのannotationsと同じ
-                                 # 位置付け——labelsのような選別用途ではない
-  status:
-    phase: Pending | Ready       # 厳格モデル: spec.zonesの**全ゾーン**で確認が
-                                 # 取れて初めてReady。1ゾーンでも確認できなければ
-                                 # 全体がPendingのまま（Errorへは倒さない——
-                                 # ユーザーの指示: 「ずっと確認が取れないゾーンが
-                                 # あるときはペンディングのままにしましょう」）
-    verified_zones: [zone-a]     # 実際に確認が取れたゾーンのみ
-```
-
-Volumeは`zones`を持たない——`storage_connection`経由で間接的にゾーンが決まる
-（同じ接続を複数のVolumeが共有するので、Volume側に重複して持たせない）。
-Volumeにも同じ理由で`annotations`（例: QoS設定）を追加する。
-
-**Volume.status.phaseが`Ready`になる条件（2段階）**:
-1. 参照している`StorageConnection`が`Ready`（全ゾーン確認済み）
-2. そのVolume固有の`identifier`実在確認+実サイズ取得が完了している
-
-どちらも確認が取れなければ`Volume`は`Pending`のまま——`StorageConnection`と同じく
-Errorへは倒さない（ユーザーの指示: 「ボリューム検証も確認が取れなければ
-ペンディングのままがよさそうです」）。
-
-**検証は2段階、それぞれ検証主体が違う**:
-1. **接続レベル**（StorageConnection単位、ゾーンごとに1回でよい・複数Volumeで
-   共有できる）: そのゾーンのHypervisorが自己申告している`storage_connections`
-   と、StorageConnection自身の`spec.zones`を突き合わせるだけ
-2. **Volumeレベル**（Volume単位、接続とは別に毎回必要）: その`identifier`が
-   実在するか・実サイズはいくつかを、実際にどこかのHypervisorへ聞きに行く
-
-**サービス間通信は新しいgRPC依存を作らずNATS経由にする**: block-storageが
-「どのHypervisorに聞けばいいか」を知るためにcomputeのHypervisor情報をgRPCで
-見に行くと、今は片方向（compute→block-storage、VM作成時のVolume検証）の依存が
-双方向になってしまう。代わりに:
-- Hypervisorの`storage_connections`自己申告を、compute向けgRPC登録に加えて
-  （or代わりに）NATSイベントとしても流す（heartbeatと同じ経路）→
-  block-storageが直接subscribeして「どのゾーンのどのHypervisorが何を
-  持っているか」を自分の中に持つ（接続レベルの検証に使う）
-- Volumeレベルの検証コマンドも、block-storageから対象Hypervisor
-  （compute-agent）へ直接NATSで投げ、compute-agentがNATSで結果を返す——
-  computeを経由しない
-
-**Hypervisorの自己申告は当面は静的のまま（2026-09-11決定）**。起動時1回の
-宣言をずっと信じ続ける今の方式で実装を進める。動的化（heartbeatのたびに
-実際に到達性を再確認してから報告する方式）は将来の改善として別途扱う——
-状態を正直に保てる利点はあるが、NFSがハングした場合の`stat()`呼び出しが
-返ってこずheartbeatループ自体を詰まらせるリスクがあるなど、実装コストと
-運用リスクが上がるため、まずは静的で様子を見る。**この動的化の要否は
-共通のオープンクエスチョンとして残す**（下記「動的な自己申告」参照）。
-
-**まだ決まっていないこと（この詳細設計の範囲内で）**:
-- NATSのsubject設計（コマンド/イベントの具体的な形）
-- Volumeレベル検証コマンドのリトライ間隔・上限（無期限リトライか）
-- proto/CLIへの反映
-
-**この節（`StorageConnection`関連の設計・実装状況）は、実装が完了したら
-削除する**——実装が終わればここに書いてある内容は現状の実装そのものになり、
-「未決事項」ではなくなるため（`docs/specs/volume.md`や新しい仕様ドキュメントへ
-正式に反映する）。
-
 ## Hypervisorのストレージ接続自己申告を動的化すべきか（静的で実装中、将来の検討事項）
 
 `StorageConnection`実装（上記）は当面、Hypervisorの`storage_connections`自己申告を
@@ -200,53 +77,31 @@ Errorへは倒さない（ユーザーの指示: 「ボリューム検証も確�
 `StorageConnection`関連の他の節と違い、実装が終わっても削除しない
 （恒常的な将来課題として残す）。
 
-## Volumeの申告内容（存在確認・サイズ）が一切検証されない（サイズの検知は解決済み、下記参照）
+## Volumeの申告内容（存在確認・サイズ）が一切検証されない（解決済み、下記参照）
 
-上記の「参照+接続」責務境界の直接の帰結として、`CreateVolume`は
-`protocol`/`storage_connection`/`identifier`が空でないか・enumとして正しいか
-という**形式チェックのみ**で、外部呼び出しは一切無い。したがって:
+もともとの問題: `CreateVolume`が`protocol`/`storage_connection`/`identifier`の
+形式チェックのみで即座に`Ready`にしていたため、到達可能性も`size_gb`（完全な
+自己申告、`max_volume_gb`のQuota強制が事実上の申告制になっていた）も一切検証
+されなかった。2段階で解決済み:
 
-- **到達可能性は一度も検証されない**: どのHypervisorもその`storage_connection`を
-  宣言していなくても、`identifier`が指すファイル/デバイスが実在しなくても、
-  Volumeは即`Ready`になる。実際に試されるのは、VMがそのVolumeで実際に起動
-  しようとした瞬間（compute-agentの`volumeref.Resolve`）が初めて——それも失敗時は
-  IPが解決しなかったNetworkInterfaceのような寛容な劣化ではなく、**VM起動全体が
-  失敗する**（ただしこれは意図的に妥当な可能性もある——永続データを積むはずの
-  Volumeを黙って外して起動を続けるより、失敗を明示した方が「データがあるはずが
-  実は無い」という気づきにくい事故を防げるため。ここは変更が必要な"バグ"というより
-  トレードオフの再確認が必要な点）
-- **`size_gb`は完全な自己申告で検証不能**: kyuushaは何も作らないので、宣言値が
-  実際のボリュームサイズと合っているか確認する手段が無い。結果として
-  `max_volume_gb`のQuota強制が事実上の申告制（honor system）になっている——
-  実際は10TBのボリュームを繋ぐつもりでも`size_gb=1`と申告すればQuota上は1GBの
-  消費としてしか計上されず、検知する仕組みが無い
+1. **サイズの検知**（2026-09-11、commit `30409fb`）: VM起動時、
+   `internal/compute-agent/volumeref.Resolve`が見つけたパスの実サイズを取得し、
+   宣言`size_gb`と10%以上食い違えば`vmm.WarnIfSizeMismatch`が構造化ログで警告する
+   （block-storage/proto側の変更は伴わない、ログベースの検知のみ）
+2. **存在確認**（2026-09-11、`StorageConnection`リソース＋非同期検証フロー実装）:
+   `Volume`はもう即`Ready`にならず、`StorageConnection`が`Ready`（宣言した全ゾーンで
+   到達確認済み）かつ`identifier`の実在がcompute-agent経由で確認できて初めて
+   `Ready`になる。詳細は`docs/architecture.md`「追記（2026-09-11）」と
+   `docs/specs/volume.md`「検証フロー」参照
 
-**対応方針（2026-09-11に決定・実装済み: サイズの検知）**: 完全な事前検証（Create時に
-どこかのHypervisorへ能動的に確認を取りに行く）は、上の「Hypervisor↔ストレージ
-バックエンドの接続自動化」がどの形に決まるか（どのHypervisorに聞けばいいか、
-zoneとどう紐づくか）に依存するため、まだ着手していない。着手したのは
-**compute-agent側でのローカルな検知+可観測化**（commit `30409fb`）:
-
-- `internal/compute-agent/volumeref.Resolve`が見つけたパスの実サイズを
-  （ブロックデバイスも通常ファイルも同じ`Seek(0, io.SeekEnd)`で）取得するように
-  なった
-- 宣言された`size_gb`と10%以上食い違う場合、`vmm.WarnIfSizeMismatch`が構造化ログで
-  警告する（このプロジェクトの「専用の状態機械を作るのではなく既存の
-  オブザーバビリティ基盤に乗せる」という一貫した方針——Prometheus/Loki/Grafanaが
-  既にある——に沿った選択で、block-storage/proto側の変更は伴わない）。実機で
-  「正しいサイズ→警告なし」「50GB申告・実体1MB→警告あり」の両方をplaygroundで
-  ライブ確認済み
-
-**まだ解決されないまま残る部分**（別タスク、`docs/specs/volume.md`「この実装が
-カバーしないもの」の`status.device_path`/`status.hypervisor`と本質的に同じ話）:
-- 実際に検知した不整合を`kyuusha volattach get`等のAPI越しに見えるようにするには、
-  compute-agent→compute→block-storageの報告経路（新しいproto フィールド+RPC）が
-  要る——これは今回のログベースの対応より一段大きい話なので、別途着手する
-- 到達可能性の事前検証自体は未着手のまま（VM起動が寛容に劣化しない件を含め、
-  こちらは"バグ"というよりトレードオフの再確認が必要な論点として残る）——
-  ↑この到達可能性の事前検証は、上の「Hypervisor↔ストレージバックエンドの
-  接続確立をkyuusha側で自動化すべきか」節の「具体的な設計」で詳細まで
-  合意済み（`StorageConnection`リソース、2段階検証）。実装はまだ
+**まだ解決されないまま残る部分**（別タスク）:
+- 検知した不整合（サイズ食い違い、`device_path`/`status.hypervisor`)を
+  `kyuusha volume get`/`kyuusha volattach get`等のAPI越しに見えるようにする経路は
+  まだ無い——ログでしか見えない
+- VM起動が寛容に劣化しない件（`volumeref.Resolve`が失敗するとVM起動全体が失敗する）
+  自体は変更していない——永続データを積むVolumeを黙って外すより失敗を明示する方が
+  安全という判断で、"バグ"ではなくトレードオフとして残している
+- Volume検証コマンドのリトライ間隔・上限（現状は無期限、10秒ごと）は未チューニング
 
 ## QEMU用のjailer相当の隔離方式（自前実装 vs. libvirt）
 

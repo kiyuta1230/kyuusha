@@ -43,10 +43,21 @@ message VolumeSpec {
   // storage_connection session makes it visible); for NFS, a file path
   // relative to wherever that Hypervisor mounted the connection.
   string identifier = 4;
+  // annotations is never interpreted by kyuusha itself -- purely a
+  // reference field for admins/users (e.g. a QoS tier). Same role as
+  // Kubernetes' annotations (not labels: nothing selects on this).
+  map<string, string> annotations = 5;
 }
 
 message VolumeStatus {
-  string phase = 1; // Ready（識別子の形式チェック＋quota判定が通れば即座） / Deleting / Error
+  // phase is Pending until (1) the referenced StorageConnection
+  // (storageconnection.proto) is itself Ready, and (2) this Volume's own
+  // identifier has been confirmed to exist (with a real observed size) by
+  // some Hypervisor holding that connection -- see docs/open-questions.md
+  //「Volumeの申告内容...」「Hypervisor↔ストレージバックエンドの接続確立を
+  // kyuusha側で自動化すべきか」. Never Error, by the same strict-but-patient
+  // design as StorageConnection: an unverified Volume just stays Pending.
+  string phase = 1; // Pending / Ready / Deleting
   repeated kyuusha.resource.v1.Condition conditions = 2;
 }
 

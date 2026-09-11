@@ -178,6 +178,7 @@ func main() {
 	defer blockStorageConn.Close()
 	volumeProxy := gateway.NewVolumeProxy(blockstoragev1.NewVolumeServiceClient(blockStorageConn))
 	volumeAttachmentProxy := gateway.NewVolumeAttachmentProxy(blockstoragev1.NewVolumeAttachmentServiceClient(blockStorageConn))
+	storageConnectionProxy := gateway.NewStorageConnectionProxy(blockstoragev1.NewStorageConnectionServiceClient(blockStorageConn))
 
 	lis, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
@@ -197,6 +198,7 @@ func main() {
 	networkv1.RegisterNetworkInterfaceServiceServer(grpcServer, networkInterfaceProxy)
 	blockstoragev1.RegisterVolumeServiceServer(grpcServer, volumeProxy)
 	blockstoragev1.RegisterVolumeAttachmentServiceServer(grpcServer, volumeAttachmentProxy)
+	blockstoragev1.RegisterStorageConnectionServiceServer(grpcServer, storageConnectionProxy)
 
 	go func() {
 		<-ctx.Done()

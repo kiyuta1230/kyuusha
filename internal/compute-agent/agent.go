@@ -23,7 +23,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/vmm"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent/volumeref"
 
+	blockstorage "gitlab.com/ki.yuta1230/kyuusha/internal/block-storage"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
@@ -61,6 +63,13 @@ type Agent struct {
 	// connections flag value it also uses to build the local
 	// volumeref.Connections map each VMM driver resolves Volumes against.
 	StorageConnections []*computev1.StorageConnection
+	// LocalStorageConnections is the same declared set as
+	// StorageConnections, in the shape internal/compute-agent/volumeref
+	// needs (also handed to each VMM driver, see cmd/compute-agent/main.go)
+	// -- used here to answer block-storage's verify-volume command
+	// (handleVerifyVolume) the exact same way a real VM boot would resolve
+	// a Volume, just without attaching it to anything.
+	LocalStorageConnections volumeref.Connections
 
 	// Drivers boots/tears down VMs, keyed by driver_hint (e.g.
 	// string(compute.VmmDriverFirecracker), string(compute.VmmDriverQEMU)).
@@ -114,6 +123,32 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	defer deleteConsumeCtx.Stop()
+
+	// block-storage's verify-volume command (internal/block-storage/
+	// verification.go) -- a separate stream block-storage owns/creates,
+	// not compute's own COMPUTE_CMD, so EnsureStreams here too (idempotent,
+	// same as compute.EnsureStreams above; either service may start first
+	// under docker-compose).
+	if err := blockstorage.EnsureStreams(ctx, a.JS); err != nil {
+		return err
+	}
+	verifyStream, err := a.JS.Stream(ctx, "BLOCKSTORAGE_CMD")
+	if err != nil {
+		return err
+	}
+	verifyCons, err := verifyStream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "compute-agent-" + a.Hypervisor + "-verify-volume",
+		FilterSubject: blockstorage.CmdSubjectVerifyVolume(a.Hypervisor),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	verifyConsumeCtx, err := verifyCons.Consume(a.handleVerifyVolume)
+	if err != nil {
+		return err
+	}
+	defer verifyConsumeCtx.Stop()
 
 	// Plain NATS core subscription, not JetStream: console access is
 	// ephemeral/live, not a durable work-queue command -- see
@@ -243,6 +278,38 @@ func (a *Agent) handleDelete(msg jetstream.Msg) {
 	}
 	for _, driver := range a.Drivers {
 		driver.Stop(cmd.VMID)
+	}
+}
+
+// handleVerifyVolume answers block-storage's request to confirm a Volume's
+// identifier actually exists on this host, and its real size -- see
+// internal/block-storage/verification.go. Uses the exact same
+// internal/compute-agent/volumeref.Resolve a real VM boot would, just
+// without attaching anything to a VM: this is pure discovery, so there's
+// nothing to place into a jail or clean up afterward.
+func (a *Agent) handleVerifyVolume(msg jetstream.Msg) {
+	_ = msg.Ack()
+
+	var cmd blockstorage.VerifyVolumeCommand
+	if err := json.Unmarshal(msg.Data(), &cmd); err != nil {
+		slog.Error("compute-agent: bad verify-volume command", "err", err)
+		return
+	}
+
+	result := blockstorage.VerifyVolumeResult{TenantID: cmd.TenantID, VolumeID: cmd.VolumeID}
+	_, sizeBytes, err := volumeref.Resolve(a.LocalStorageConnections, cmd.Protocol, cmd.StorageConnection, cmd.Identifier)
+	if err != nil {
+		result.Error = err.Error()
+	} else {
+		result.Success = true
+		result.SizeBytes = sizeBytes
+	}
+
+	payload, _ := json.Marshal(result)
+	resultMsg := nats.NewMsg(blockstorage.EvtSubjectVerifyVolumeResult(a.Hypervisor))
+	resultMsg.Data = payload
+	if _, err := a.JS.PublishMsg(context.Background(), resultMsg); err != nil {
+		slog.Error("compute-agent: publish verify-volume result failed", "volume_id", cmd.VolumeID, "err", err)
 	}
 }
 

@@ -45,6 +45,8 @@ func main() {
 		volumeCmd(os.Args[2:])
 	case "volattach":
 		volattachCmd(os.Args[2:])
+	case "storageconn":
+		storageConnCmd(os.Args[2:])
 	case "token":
 		tokenCmd(os.Args[2:])
 	default:
@@ -64,6 +66,7 @@ func usage() {
   kyuusha netif <create|get|list|watch|delete> [flags]
   kyuusha volume <create|get|list|watch|delete> [flags]
   kyuusha volattach <create|get|list|watch|delete> [flags]
+  kyuusha storageconn <create|get|list|watch|delete> [flags]   (admin-only)
   kyuusha token mint [flags]   (dev-only; see hack/devkeys/README.md)`)
 }
 
