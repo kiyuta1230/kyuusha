@@ -24,6 +24,7 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	computeagent "gitlab.com/ki.yuta1230/kyuusha/internal/compute-agent"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute/grpcserver"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
 
 	computev1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
@@ -86,7 +87,7 @@ func startHypervisorService(t *testing.T, svc *compute.Service, bootstrapTokenPu
 // ms.compute.evt.*.vm.create-result) -> Reconciler marks the VM Running. No
 // Firecracker/QEMU involved yet.
 func TestPlayground_CreateVMReachesRunning(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	nc := startNATS(t)
@@ -95,7 +96,7 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 		t.Fatalf("jetstream.New: %v", err)
 	}
 
-	svc, err := compute.NewService(ctx, &compute.FakeTenantClient{}, &compute.FakeImageClient{}, &compute.FakeSubnetClient{}, &compute.FakeNetworkInterfaceClient{}, &compute.FakeVolumeClient{}, &compute.FakeVolumeAttachmentClient{})
+	svc, err := compute.NewService(ctx, resourcetest.Client(t), &compute.FakeTenantClient{}, &compute.FakeImageClient{}, &compute.FakeSubnetClient{}, &compute.FakeNetworkInterfaceClient{}, &compute.FakeVolumeClient{}, &compute.FakeVolumeAttachmentClient{})
 	if err != nil {
 		t.Fatalf("compute.NewService: %v", err)
 	}

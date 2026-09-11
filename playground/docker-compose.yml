@@ -40,6 +40,33 @@ services:
       timeout: 2s
       retries: 15
 
+  # Backing store for every resource.Store (see docs/architecture.md
+  # "採用: バッキングストアにetcdを採用する") -- a single member here, not a
+  # real cluster (that's a production-deployment concern, not this
+  # playground's). --auto-compaction-mode=periodic is the one real
+  # requirement called out in that doc: without it, kyuusha's heartbeat-
+  # heavy write pattern accumulates MVCC history until etcd's default 2GB
+  # quota is hit.
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.5.17
+    command:
+      - etcd
+      - "--data-dir=/etcd-data"
+      - "--listen-client-urls=http://0.0.0.0:2379"
+      - "--advertise-client-urls=http://etcd:2379"
+      - "--listen-peer-urls=http://0.0.0.0:2380"
+      - "--initial-advertise-peer-urls=http://etcd:2380"
+      - "--initial-cluster=default=http://etcd:2380"
+      - "--auto-compaction-mode=periodic"
+      - "--auto-compaction-retention=1h"
+    volumes:
+      - etcd-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
   jaeger:
     image: jaegertracing/all-in-one:1.62.0
     environment:
@@ -88,6 +115,7 @@ services:
       target: compute
     command:
       - "-nats-url=nats://nats:4222"
+      - "-etcd-endpoints=etcd:2379"
       - "-grpc-addr=:8081"
       - "-identity-addr=identity:8082"
       - "-image-addr=image:8083"
@@ -97,6 +125,8 @@ services:
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
       nats:
+        condition: service_healthy
+      etcd:
         condition: service_healthy
       identity:
         condition: service_started
@@ -120,9 +150,12 @@ services:
       target: identity
     command:
       - "-grpc-addr=:8082"
+      - "-etcd-endpoints=etcd:2379"
       - "-metrics-addr=:9091"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
+      etcd:
+        condition: service_healthy
       jaeger:
         condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
@@ -134,9 +167,12 @@ services:
       target: image
     command:
       - "-grpc-addr=:8083"
+      - "-etcd-endpoints=etcd:2379"
       - "-metrics-addr=:9095"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
+      etcd:
+        condition: service_healthy
       jaeger:
         condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
@@ -148,9 +184,12 @@ services:
       target: network
     command:
       - "-grpc-addr=:8084"
+      - "-etcd-endpoints=etcd:2379"
       - "-metrics-addr=:9096"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
+      etcd:
+        condition: service_healthy
       jaeger:
         condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
@@ -163,11 +202,14 @@ services:
     command:
       - "-grpc-addr=:8085"
       - "-nats-url=nats://nats:4222"
+      - "-etcd-endpoints=etcd:2379"
       - "-identity-addr=identity:8082"
       - "-metrics-addr=:9097"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
       nats:
+        condition: service_healthy
+      etcd:
         condition: service_healthy
       identity:
         condition: service_started
@@ -343,3 +385,12 @@ services:
         condition: service_healthy
       compute:
         condition: service_started
+
+volumes:
+  # Survives `docker compose down` (not `down -v`) -- see docs/architecture.md
+  # "採用: バッキングストアにetcdを採用する". Without this, etcd's data lives
+  # only in the container's own writable layer, which a plain `restart`
+  # preserves but a container recreation (e.g. `up --build` after an image
+  # change) would silently wipe -- exactly the persistence gap this whole
+  # migration exists to close.
+  etcd-data:

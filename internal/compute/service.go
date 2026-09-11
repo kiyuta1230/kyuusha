@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
+
 	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 
@@ -62,18 +64,18 @@ type Service struct {
 	usage   map[string]tenantUsage
 }
 
-func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient, imageClient imagev1.ImageServiceClient, subnetClient networkv1.SubnetServiceClient, netifClient networkv1.NetworkInterfaceServiceClient, volumeClient blockstoragev1.VolumeServiceClient, volumeAttachmentClient blockstoragev1.VolumeAttachmentServiceClient) (*Service, error) {
+func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, imageClient imagev1.ImageServiceClient, subnetClient networkv1.SubnetServiceClient, netifClient networkv1.NetworkInterfaceServiceClient, volumeClient blockstoragev1.VolumeServiceClient, volumeAttachmentClient blockstoragev1.VolumeAttachmentServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return &Service{
-		store: resource.NewStore[VirtualMachine, *VirtualMachine]("vm", resource.StoreErrors{
+		store: resource.NewStore[VirtualMachine, *VirtualMachine](etcdClient, "vm", resource.StoreErrors{
 			NotFound:      ErrNotFound,
 			Conflict:      ErrConflict,
 			HistoryPruned: ErrHistoryPruned,
 		}),
-		hypervisors: resource.NewStore[Hypervisor, *Hypervisor]("hypervisor", resource.StoreErrors{
+		hypervisors: resource.NewStore[Hypervisor, *Hypervisor](etcdClient, "hypervisor", resource.StoreErrors{
 			NotFound:      ErrHypervisorNotFound,
 			Conflict:      ErrHypervisorConflict,
 			HistoryPruned: ErrHypervisorHistoryPruned,
@@ -114,7 +116,7 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 
-	if existing, ok := s.store.LookupByName(tenantID, name); ok {
+	if existing, ok := s.store.LookupByName(ctx, tenantID, name); ok {
 		return &existing, nil
 	}
 

@@ -30,6 +30,7 @@ import (
 
 	blockstorage "gitlab.com/ki.yuta1230/kyuusha/internal/block-storage"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/block-storage/grpcserver"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/etcdconn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
@@ -46,6 +47,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers and used when dialing other services (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA both callers' and dialed services' certificates must chain to")
+	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -111,7 +113,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	svc, err := blockstorage.NewService(ctx, identityv1.NewTenantServiceClient(identityConn))
+	etcdClient, err := etcdconn.Connect(*etcdEndpoints)
+	if err != nil {
+		slog.Error("connect to etcd", "endpoints", *etcdEndpoints, "err", err)
+		os.Exit(1)
+	}
+	defer etcdClient.Close()
+
+	svc, err := blockstorage.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn))
 	if err != nil {
 		slog.Error("new block-storage service", "err", err)
 		os.Exit(1)

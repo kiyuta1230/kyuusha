@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 var (
@@ -61,14 +62,14 @@ type Service struct {
 	nextMACOct uint32
 }
 
-func NewService() *Service {
+func NewService(etcdClient *clientv3.Client) *Service {
 	return &Service{
-		subnets: resource.NewStore[Subnet, *Subnet]("subnet", resource.StoreErrors{
+		subnets: resource.NewStore[Subnet, *Subnet](etcdClient, "subnet", resource.StoreErrors{
 			NotFound:      ErrSubnetNotFound,
 			Conflict:      ErrSubnetConflict,
 			HistoryPruned: ErrSubnetHistoryPruned,
 		}),
-		interfaces: resource.NewStore[NetworkInterface, *NetworkInterface]("netif", resource.StoreErrors{
+		interfaces: resource.NewStore[NetworkInterface, *NetworkInterface](etcdClient, "netif", resource.StoreErrors{
 			NotFound:      ErrNetworkInterfaceNotFound,
 			Conflict:      ErrNetworkInterfaceConflict,
 			HistoryPruned: ErrNetworkInterfaceHistoryPruned,
@@ -150,7 +151,7 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 		return nil, fmt.Errorf("%w: spec.allocatable_ip_ranges: %v", ErrValidation, err)
 	}
 
-	if existing, ok := s.subnets.LookupByName(tenantID, name); ok {
+	if existing, ok := s.subnets.LookupByName(ctx, tenantID, name); ok {
 		return &existing, nil
 	}
 
@@ -245,7 +246,7 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 		return nil, fmt.Errorf("%w: spec.subnet_id is required", ErrValidation)
 	}
 
-	if existing, ok := s.interfaces.LookupByName(tenantID, name); ok {
+	if existing, ok := s.interfaces.LookupByName(ctx, tenantID, name); ok {
 		return &existing, nil
 	}
 

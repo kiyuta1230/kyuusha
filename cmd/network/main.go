@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
+	"gitlab.com/ki.yuta1230/kyuusha/internal/etcdconn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/network"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/network/grpcserver"
@@ -35,6 +36,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA callers' certificates must chain to")
+	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -71,7 +73,14 @@ func main() {
 		}
 	}()
 
-	svc := network.NewService()
+	etcdClient, err := etcdconn.Connect(*etcdEndpoints)
+	if err != nil {
+		slog.Error("connect to etcd", "endpoints", *etcdEndpoints, "err", err)
+		os.Exit(1)
+	}
+	defer etcdClient.Close()
+
+	svc := network.NewService(etcdClient)
 	go func() {
 		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("pending sweep stopped", "err", err)

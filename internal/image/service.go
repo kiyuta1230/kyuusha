@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 var (
@@ -39,9 +40,9 @@ type Service struct {
 	httpClient *http.Client
 }
 
-func NewService() *Service {
+func NewService(etcdClient *clientv3.Client) *Service {
 	return &Service{
-		store: resource.NewStore[Image, *Image]("image", resource.StoreErrors{
+		store: resource.NewStore[Image, *Image](etcdClient, "image", resource.StoreErrors{
 			NotFound:      ErrNotFound,
 			Conflict:      ErrConflict,
 			HistoryPruned: ErrHistoryPruned,

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
 )
 
 func TestService_CreateRejectsUnknownTenant(t *testing.T) {
@@ -20,7 +21,7 @@ func TestService_CreateRejectsUnknownTenant(t *testing.T) {
 
 func TestService_CreateEnforcesQuota(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, &FakeTenantClient{Quota: &identityv1.QuotaSpec{
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{
 		MaxVcpu:          3,
 		MaxMemoryMb:      8192,
 		MaxVms:           2,

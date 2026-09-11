@@ -22,6 +22,7 @@ import (
 	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/compute/grpcserver"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/etcdconn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/mtls"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/telemetry"
 
@@ -45,6 +46,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA both callers' and dialed services' certificates must chain to")
 	bootstrapTokenPublicKey := flag.String("bootstrap-token-public-key", "hack/devkeys/jwt-dev.pub", "PEM public key verifying Hypervisor self-registration bootstrap tokens (see internal/bootstraptoken, 'kyuusha hypervisor bootstrap-token create')")
+	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -80,6 +82,13 @@ func main() {
 			slog.Error("metrics server stopped", "err", err)
 		}
 	}()
+
+	etcdClient, err := etcdconn.Connect(*etcdEndpoints)
+	if err != nil {
+		slog.Error("connect to etcd", "endpoints", *etcdEndpoints, "err", err)
+		os.Exit(1)
+	}
+	defer etcdClient.Close()
 
 	nc, err := nats.Connect(*natsURL)
 	if err != nil {
@@ -140,7 +149,7 @@ func main() {
 	}
 	defer blockStorageConn.Close()
 
-	svc, err := compute.NewService(ctx,
+	svc, err := compute.NewService(ctx, etcdClient,
 		identityv1.NewTenantServiceClient(identityConn),
 		imagev1.NewImageServiceClient(imageConn),
 		networkv1.NewSubnetServiceClient(networkConn),

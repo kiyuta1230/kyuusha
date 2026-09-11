@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
 
@@ -107,23 +108,23 @@ type Service struct {
 	hypervisorConnections map[string]hypervisorConnInfo
 }
 
-func NewService(ctx context.Context, identityClient identityv1.TenantServiceClient) (*Service, error) {
+func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return &Service{
-		volumes: resource.NewStore[Volume, *Volume]("volume", resource.StoreErrors{
+		volumes: resource.NewStore[Volume, *Volume](etcdClient, "volume", resource.StoreErrors{
 			NotFound:      ErrVolumeNotFound,
 			Conflict:      ErrVolumeConflict,
 			HistoryPruned: ErrVolumeHistoryPruned,
 		}),
-		attachments: resource.NewStore[VolumeAttachment, *VolumeAttachment]("volattach", resource.StoreErrors{
+		attachments: resource.NewStore[VolumeAttachment, *VolumeAttachment](etcdClient, "volattach", resource.StoreErrors{
 			NotFound:      ErrVolumeAttachmentNotFound,
 			Conflict:      ErrVolumeAttachmentConflict,
 			HistoryPruned: ErrVolumeAttachmentHistoryPruned,
 		}),
-		storageConnections: resource.NewStore[StorageConnection, *StorageConnection]("storageconnection", resource.StoreErrors{
+		storageConnections: resource.NewStore[StorageConnection, *StorageConnection](etcdClient, "storageconnection", resource.StoreErrors{
 			NotFound:      ErrStorageConnectionNotFound,
 			Conflict:      ErrStorageConnectionConflict,
 			HistoryPruned: ErrStorageConnectionHistoryPruned,
@@ -217,14 +218,14 @@ func (s *Service) CreateVolume(ctx context.Context, tenantID, name string, spec 
 	if spec.Identifier == "" {
 		return nil, fmt.Errorf("%w: spec.identifier is required", ErrValidation)
 	}
-	if _, ok := s.storageConnections.LookupByName("", spec.StorageConnection); !ok {
+	if _, ok := s.storageConnections.LookupByName(ctx, "", spec.StorageConnection); !ok {
 		return nil, fmt.Errorf("%w: storage_connection %q does not exist", ErrValidation, spec.StorageConnection)
 	}
 
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 
-	if existing, ok := s.volumes.LookupByName(tenantID, name); ok {
+	if existing, ok := s.volumes.LookupByName(ctx, tenantID, name); ok {
 		return &existing, nil
 	}
 
@@ -313,7 +314,7 @@ func (s *Service) CreateStorageConnection(ctx context.Context, name string, spec
 	if len(spec.Zones) == 0 {
 		return nil, fmt.Errorf("%w: spec.zones must have at least one zone", ErrValidation)
 	}
-	if existing, ok := s.storageConnections.LookupByName("", name); ok {
+	if existing, ok := s.storageConnections.LookupByName(ctx, "", name); ok {
 		return &existing, nil
 	}
 	out, err := s.storageConnections.Create(ctx, "", name, StorageConnection{
@@ -393,7 +394,7 @@ func (s *Service) CreateVolumeAttachment(ctx context.Context, tenantID, name str
 		return nil, fmt.Errorf("%w: spec.volume_id is required", ErrValidation)
 	}
 
-	if existing, ok := s.attachments.LookupByName(tenantID, name); ok {
+	if existing, ok := s.attachments.LookupByName(ctx, tenantID, name); ok {
 		return &existing, nil
 	}
 

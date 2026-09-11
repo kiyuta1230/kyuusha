@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 var (
@@ -34,9 +35,9 @@ type Service struct {
 	store *resource.Store[Tenant, *Tenant]
 }
 
-func NewService() *Service {
+func NewService(etcdClient *clientv3.Client) *Service {
 	return &Service{
-		store: resource.NewStore[Tenant, *Tenant]("tenant", resource.StoreErrors{
+		store: resource.NewStore[Tenant, *Tenant](etcdClient, "tenant", resource.StoreErrors{
 			NotFound:      ErrNotFound,
 			Conflict:      ErrConflict,
 			HistoryPruned: ErrHistoryPruned,

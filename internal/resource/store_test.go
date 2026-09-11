@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
 )
 
 // thing is a minimal resource type used only to exercise the generic Store
@@ -34,8 +36,8 @@ var (
 	errThingConflict = errors.New("thing: conflict")
 )
 
-func newThingStore() *Store[thing, *thing] {
-	return NewStore[thing, *thing]("thing", StoreErrors{
+func newThingStore(t *testing.T) *Store[thing, *thing] {
+	return NewStore[thing, *thing](resourcetest.Client(t), "thing", StoreErrors{
 		NotFound: errThingNotFound,
 		Conflict: errThingConflict,
 	})
@@ -43,7 +45,7 @@ func newThingStore() *Store[thing, *thing] {
 
 func TestStore_DeleteWithoutFinalizersRemovesImmediately(t *testing.T) {
 	ctx := context.Background()
-	s := newThingStore()
+	s := newThingStore(t)
 
 	out, err := s.Create(ctx, "tenant-a", "x", thing{Name: "unchanged"})
 	if err != nil {
@@ -60,7 +62,7 @@ func TestStore_DeleteWithoutFinalizersRemovesImmediately(t *testing.T) {
 
 func TestStore_DeleteWithFinalizersMarksAndWaits(t *testing.T) {
 	ctx := context.Background()
-	s := newThingStore()
+	s := newThingStore(t)
 
 	out, err := s.Create(ctx, "tenant-a", "x", thing{Name: "unchanged"})
 	if err != nil {
@@ -144,7 +146,7 @@ func TestStore_DeleteWithFinalizersMarksAndWaits(t *testing.T) {
 
 func TestStore_UpdateCannotResurrectAPendingDeletion(t *testing.T) {
 	ctx := context.Background()
-	s := newThingStore()
+	s := newThingStore(t)
 
 	out, err := s.Create(ctx, "tenant-a", "x", thing{})
 	if err != nil {
@@ -183,7 +185,7 @@ func TestStore_UpdateCannotResurrectAPendingDeletion(t *testing.T) {
 // stream must skip objects the filter rejects.
 func TestStore_WatchMatchesFilter(t *testing.T) {
 	ctx := context.Background()
-	s := newThingStore()
+	s := newThingStore(t)
 
 	matchesWanted := func(th thing) bool { return th.Name == "wanted" }
 

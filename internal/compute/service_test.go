@@ -9,11 +9,12 @@ import (
 	identityv1 "gitlab.com/ki.yuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/authn"
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
 )
 
 func newTestService(t *testing.T, ctx context.Context) *Service {
 	t.Helper()
-	svc, err := NewService(ctx, &FakeTenantClient{}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -25,7 +26,7 @@ func newTestService(t *testing.T, ctx context.Context) *Service {
 // concurrency, Delete, and confirm Watch reports all of it. Kept as a normal
 // test so it runs (and stays honest) under `go test ./...`.
 func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	svc := newTestService(t, ctx)
@@ -135,7 +136,7 @@ func TestService_DeleteWithFinalizerBlocksUntilCleared(t *testing.T) {
 	// A tight max_vms=1 quota (rather than newTestService's unlimited one)
 	// is what makes the "tenant_usage was already decremented at Delete-
 	// call time" assertion below meaningful.
-	svc, err := NewService(ctx, &FakeTenantClient{Quota: &identityv1.QuotaSpec{
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{
 		MaxVcpu: 8, MaxMemoryMb: 8192, MaxVms: 1, MaxVcpuPerVm: 8, MaxMemoryMbPerVm: 8192,
 	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
 	if err != nil {
@@ -268,7 +269,7 @@ func TestService_FinalizerOwnership(t *testing.T) {
 // placed its own finalizer on should be able to Watch just those, not every
 // VM in the tenant.
 func TestService_WatchFilterByFinalizerName(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	svc := newTestService(t, ctx)
 	const tenant = "tenant-a"

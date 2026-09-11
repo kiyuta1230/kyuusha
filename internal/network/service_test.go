@@ -7,11 +7,12 @@ import (
 	"testing"
 
 	"gitlab.com/ki.yuta1230/kyuusha/internal/resource"
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
 )
 
 func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	if _, err := svc.CreateSubnet(ctx, "tenant-a", "x", SubnetSpec{CIDR: "10.0.1.0/24"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected ErrValidation for missing zone, got %v", err)
@@ -31,7 +32,7 @@ func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{
 		Zone: "zone-a", CIDR: "10.0.1.0/24", AllocatableIPRanges: []string{"10.0.1.10-10.0.1.10"},
@@ -58,7 +59,7 @@ func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T)
 
 func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -90,7 +91,7 @@ func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 
 func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	first, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -107,7 +108,7 @@ func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 
 func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	// Drain zone-a's pool directly (allocating one Subnet per VLAN ID would
 	// be needlessly slow); Create should then leave a Subnet Pending rather
@@ -158,7 +159,7 @@ func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRejectsUnknownSubnet(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	_, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: "subnet-does-not-exist"})
 	if !errors.Is(err, ErrValidation) {
@@ -168,7 +169,7 @@ func TestService_CreateNetworkInterfaceRejectsUnknownSubnet(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -183,7 +184,7 @@ func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
 	if err != nil {
@@ -223,7 +224,7 @@ func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T)
 
 func TestService_CreateNetworkInterfaceReportsIPPoolExhausted(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	// /30 has exactly 2 usable host addresses.
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/30"})

@@ -4,13 +4,15 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
 )
 
 func TestPlayground_TenantLifecycleOverWatch(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	events, err := svc.Watch(ctx, "", 0)
 	if err != nil {
@@ -77,7 +79,7 @@ func TestPlayground_TenantLifecycleOverWatch(t *testing.T) {
 
 func TestService_GetIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	a, err := svc.Create(ctx, "tenant-a", TenantSpec{})
 	if err != nil {
@@ -90,7 +92,7 @@ func TestService_GetIsTenantScoped(t *testing.T) {
 
 func TestService_CreateNamesAreGloballyUnique(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	a, err := svc.Create(ctx, "acme", TenantSpec{DisplayName: "first"})
 	if err != nil {

@@ -1545,6 +1545,19 @@ Kubernetesの`apiserver`+`etcd`の設計をそのまま踏襲したもの（[why
 `resource_version`の意味が壊れる点が決め手になった。運用面では、ユーザー自身が
 etcdクラスタ運用の実経験を持っていることも、この選択の後押しになっている。
 
+**実装済み（2026-09-11）**: `internal/resource.Store`をetcd-backedに書き換え、
+compute/identity/image/network/block-storageの5サービス全てが`-etcd-endpoints`
+経由でetcdへ接続するよう`NewService`/各`cmd/*/main.go`を更新した。キー設計・
+`resource_version`↔`mod_revision`対応・`Create`の冪等性チェック（Txn CAS）・
+`Update`の楽観的並行性制御・`Watch`（`WithCreatedNotify`で`ErrHistoryPruned`を
+同期的に検出）は上記設計どおり。`playground/docker-compose.yml`に
+`--auto-compaction-mode=periodic`設定済みの単一メンバーetcdを追加し、名前付き
+volumeで`docker compose down`後も状態が残ることをライブ確認済み（サービス
+再起動・コンテナ再作成の両方でTenant/Hypervisorの`resource_version`が変わらず
+残ることを確認）。**ただし後述のリーダー選出（`concurrency.Election`）は未実装
+のまま**——今回実装したのは「単一レプリカが状態を失わない」ことだけで、複数
+レプリカ運用・reconcileループの二重処理防止は依然として設計のみ、次の段階。
+
 **書き込み頻度に関する既知の注意点**: kyuushaはHypervisorのheartbeatを5秒おきに
 書き込んでいる（`compute.Service.Heartbeat`）。想定スケール上限（Hypervisor約500台）
 では理論上秒間100件程度の書き込みが発生し、etcdのMVCCはcompactionしない限り
@@ -1946,7 +1959,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Flavor/machine_classという固定カタログの廃止（`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
 - UserData/cloud-init注入（NoCloud seed disk方式、HTTPメタデータサービスは不採用）
 - コントロールプレーンサービス自体の可用性（API面はステートレス複製、reconcile面はetcdの`concurrency.Election`によるリーダー選出）
-- バッキングストアにetcdを採用（2026-09-11訂正: `internal/resource.Store`がそれまで完全にオンメモリで、状態が一切永続化されていなかったことが判明したため。PostgreSQL/MySQL、NATS JetStream KVも比較検討し、`resource_version`のグローバル単調増加という意味論がetcdと最も自然に一致すること、リーダー選出も同じ依存で賄えることが決め手）
+- バッキングストアにetcdを採用、実装済み（2026-09-11訂正: `internal/resource.Store`がそれまで完全にオンメモリで、状態が一切永続化されていなかったことが判明したため。PostgreSQL/MySQL、NATS JetStream KVも比較検討し、`resource_version`のグローバル単調増加という意味論がetcdと最も自然に一致すること、リーダー選出も同じ依存で賄えることが決め手。同日中に`internal/resource/store.go`をetcd-backedへ書き換え、5サービス全て・`playground/docker-compose.yml`まで含めて実装・ライブ確認済み——リーダー選出自体はまだ未着手、単一レプリカのままでの永続化のみ）
 - Imageのストレージ方針（`ImageArtifact{url, digest}`による外部URL参照のみ。kyuushaはblobを一切保管しない。オブジェクトストレージは任意の外部依存に格下げ）
 - ハイパーバイザー間の軽量ピアフェッチ（heartbeatでのキャッシュ済みdigest報告＋同一zone優先の直接HTTP転送。外部依存ではなくkyuusha自身の組み込み機能）
 - インフラ要件の「必須」「任意」の分類軸（必須: DB/NATS/ブロックストレージノード。任意: privateオブジェクトストレージ/Dragonfly）

@@ -206,7 +206,7 @@ func (s *Service) sweepPendingVolumes(ctx context.Context) {
 		if vol.Status.Phase != VolumePhasePending {
 			continue
 		}
-		sc, ok := s.storageConnections.LookupByName("", vol.Spec.StorageConnection)
+		sc, ok := s.storageConnections.LookupByName(ctx, "", vol.Spec.StorageConnection)
 		if !ok {
 			continue // shouldn't happen post-Create-time validation; nothing to do if it does anyway
 		}
@@ -289,7 +289,7 @@ func (s *Service) handleVerifyResult(ctx context.Context, res VerifyVolumeResult
 		return
 	}
 
-	sc, ok := s.storageConnections.LookupByName("", updated.Spec.StorageConnection)
+	sc, ok := s.storageConnections.LookupByName(ctx, "", updated.Spec.StorageConnection)
 	if ok && sc.Status.Phase == StorageConnectionPhaseReady && status == resource.ConditionTrue && updated.Status.Phase == VolumePhasePending {
 		updated.Status.Phase = VolumePhaseReady
 		if _, err := s.volumes.Update(ctx, updated); err != nil {

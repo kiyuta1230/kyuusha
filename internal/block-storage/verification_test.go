@@ -3,6 +3,8 @@ package blockstorage
 import (
 	"context"
 	"testing"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
 )
 
 // TestStorageConnection_ReadyRequiresAllDeclaredZones exercises the strict
@@ -12,7 +14,7 @@ import (
 // just any one.
 func TestStorageConnection_ReadyRequiresAllDeclaredZones(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, &FakeTenantClient{})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -135,7 +137,7 @@ func TestVolume_FailedVerificationStaysPendingNotError(t *testing.T) {
 // creation/verification timing themselves.
 func newTestServiceNoConnection(t *testing.T, ctx context.Context) *Service {
 	t.Helper()
-	svc, err := NewService(ctx, &FakeTenantClient{})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -67,7 +67,10 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 		status.AllocatedMemoryMB = existing.Status.AllocatedMemoryMB
 	}
 
-	out := s.hypervisors.Put(ctx, hypervisor, "", hypervisor, Hypervisor{Spec: spec, Status: status})
+	out, err := s.hypervisors.Put(ctx, hypervisor, "", hypervisor, Hypervisor{Spec: spec, Status: status})
+	if err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 

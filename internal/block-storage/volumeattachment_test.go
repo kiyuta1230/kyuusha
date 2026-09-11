@@ -45,7 +45,7 @@ func TestService_VolumeAttachmentAttachesWhenVolumeIsFree(t *testing.T) {
 // immediately (a fresh CreateVolumeAttachment re-checks) or via Run's
 // periodic retry sweep for one already sitting Pending.
 func TestService_ExclusiveAttachBlocksSecondAttachmentThenRetrySucceeds(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	svc := newTestService(t, ctx)
 

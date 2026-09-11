@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"gitlab.com/ki.yuta1230/kyuusha/internal/resourcetest"
 )
 
 func kernelRootfsSpec() Spec {
@@ -12,7 +14,7 @@ func kernelRootfsSpec() Spec {
 
 func TestService_CreateDefaultsVisibilityToPrivate(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	img, err := svc.Create(ctx, "tenant-a", "x", kernelRootfsSpec())
 	if err != nil {
@@ -25,7 +27,7 @@ func TestService_CreateDefaultsVisibilityToPrivate(t *testing.T) {
 
 func TestService_CreateRejectsGarbageVisibility(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	spec := kernelRootfsSpec()
 	spec.Visibility = Visibility("NOT_A_REAL_VALUE")
@@ -36,7 +38,7 @@ func TestService_CreateRejectsGarbageVisibility(t *testing.T) {
 
 func TestService_GetHidesPrivateImageFromOtherTenants(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	img, err := svc.Create(ctx, "tenant-a", "x", kernelRootfsSpec())
 	if err != nil {
@@ -53,7 +55,7 @@ func TestService_GetHidesPrivateImageFromOtherTenants(t *testing.T) {
 
 func TestService_GetAllowsPublicImageFromAnyTenant(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	spec := kernelRootfsSpec()
 	spec.Visibility = VisibilityPublic
@@ -73,7 +75,7 @@ func TestService_GetAllowsPublicImageFromAnyTenant(t *testing.T) {
 
 func TestService_GetAllowsPrivateImageSharedWithSpecificTenant(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	spec := kernelRootfsSpec()
 	spec.SharedWithTenantIDs = []string{"tenant-b"}
@@ -92,7 +94,7 @@ func TestService_GetAllowsPrivateImageSharedWithSpecificTenant(t *testing.T) {
 
 func TestService_ListIncludesOwnAndVisibleImagesOnly(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	own, err := svc.Create(ctx, "tenant-b", "own", kernelRootfsSpec())
 	if err != nil {
@@ -134,7 +136,7 @@ func TestService_ListIncludesOwnAndVisibleImagesOnly(t *testing.T) {
 
 func TestService_SetVisibilityIsOwnerOnly(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	img, err := svc.Create(ctx, "tenant-a", "x", kernelRootfsSpec())
 	if err != nil {
@@ -159,9 +161,9 @@ func TestService_SetVisibilityIsOwnerOnly(t *testing.T) {
 }
 
 func TestService_WatchFiltersOutInvisibleCrossTenantEvents(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	svc := NewService()
+	svc := NewService(resourcetest.Client(t))
 
 	events, err := svc.Watch(ctx, "tenant-b", 0)
 	if err != nil {
