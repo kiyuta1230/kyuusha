@@ -51,7 +51,10 @@ func New(ctx context.Context) (*Authorizer, error) {
 // authn" internal-error case) and the request's own tenant_id alongside the
 // allow/deny error, so callers can audit-log both the decision and, for a
 // successful one, the eventual RPC outcome without recomputing anything.
-func (a *Authorizer) authorize(ctx context.Context, req any) (*authn.Claims, string, error) {
+// fullMethod (e.g. "/kyuusha.blockstorage.v1.StorageConnectionService/Create")
+// is classified into rpc.service/rpc.action for policy.rego -- see
+// rpcclass.go and docs/specs/authn-authz.md "将来の拡張".
+func (a *Authorizer) authorize(ctx context.Context, req any, fullMethod string) (*authn.Claims, string, error) {
 	claims, ok := authn.FromContext(ctx)
 	if !ok {
 		return nil, "", status.Error(codes.Internal, "authz ran before authn")
@@ -63,11 +66,16 @@ func (a *Authorizer) authorize(ctx context.Context, req any) (*authn.Claims, str
 
 	input := map[string]any{
 		"claims": map[string]any{
-			"tenant_id": claims.TenantID,
-			"role":      claims.Role,
+			"tenant_id":   claims.TenantID,
+			"role":        claims.Role,
+			"tenant_role": claims.TenantRole,
 		},
 		"request": map[string]any{
 			"tenant_id": requestTenantID,
+		},
+		"rpc": map[string]any{
+			"service": rpcService(fullMethod),
+			"action":  rpcAction(fullMethod),
 		},
 	}
 	results, err := a.query.Eval(ctx, rego.EvalInput(input))
@@ -86,7 +94,7 @@ func (a *Authorizer) authorize(ctx context.Context, req any) (*authn.Claims, str
 
 func (a *Authorizer) UnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		claims, requestTenantID, err := a.authorize(ctx, req)
+		claims, requestTenantID, err := a.authorize(ctx, req, info.FullMethod)
 		if err != nil {
 			auditDenied(ctx, info.FullMethod, requestTenantID, claims, err)
 			return nil, err
@@ -94,7 +102,7 @@ func (a *Authorizer) UnaryInterceptor() grpc.UnaryServerInterceptor {
 		resp, err := handler(ctx, req)
 		audit.Log(ctx, audit.Record{
 			Event: audit.EventRPCCompleted, RPCMethod: info.FullMethod, RequestTenantID: requestTenantID,
-			TenantID: claims.TenantID, Sub: claims.Subject, Role: claims.Role, Err: err,
+			TenantID: claims.TenantID, Sub: claims.Subject, Role: claims.Role, TenantRole: claims.TenantRole, Err: err,
 		})
 		return resp, err
 	}
@@ -114,7 +122,7 @@ func (a *Authorizer) StreamInterceptor() grpc.StreamServerInterceptor {
 		if wrapped.claims != nil {
 			audit.Log(ss.Context(), audit.Record{
 				Event: audit.EventRPCCompleted, RPCMethod: info.FullMethod, RequestTenantID: wrapped.requestTenantID,
-				TenantID: wrapped.claims.TenantID, Sub: wrapped.claims.Subject, Role: wrapped.claims.Role, Err: err,
+				TenantID: wrapped.claims.TenantID, Sub: wrapped.claims.Subject, Role: wrapped.claims.Role, TenantRole: wrapped.claims.TenantRole, Err: err,
 			})
 		}
 		return err
@@ -127,7 +135,7 @@ func auditDenied(ctx context.Context, rpcMethod, requestTenantID string, claims 
 	}
 	audit.Log(ctx, audit.Record{
 		Event: audit.EventAuthzDenied, RPCMethod: rpcMethod, RequestTenantID: requestTenantID,
-		TenantID: claims.TenantID, Sub: claims.Subject, Role: claims.Role, Err: err,
+		TenantID: claims.TenantID, Sub: claims.Subject, Role: claims.Role, TenantRole: claims.TenantRole, Err: err,
 	})
 }
 
@@ -147,7 +155,7 @@ func (s *authorizedStream) RecvMsg(m any) error {
 	}
 	if !s.checked {
 		s.checked = true
-		claims, requestTenantID, err := s.a.authorize(s.Context(), m)
+		claims, requestTenantID, err := s.a.authorize(s.Context(), m, s.rpcMethod)
 		s.claims, s.requestTenantID = claims, requestTenantID
 		if err != nil {
 			auditDenied(s.Context(), s.rpcMethod, requestTenantID, claims, err)

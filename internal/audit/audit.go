@@ -25,11 +25,11 @@ const (
 	EventRPCCompleted Event = "rpc_completed"
 )
 
-// Record is one audit event. TenantID/Sub/Role are the caller's claims
-// (empty if not yet known -- an authn failure happens before any claims
-// exist). RequestTenantID is the tenant_id carried by the request itself,
-// which can differ from the caller's own TenantID for admin actions acting
-// on another tenant. Err is the outcome; nil means success.
+// Record is one audit event. TenantID/Sub/Role/TenantRole are the caller's
+// claims (empty if not yet known -- an authn failure happens before any
+// claims exist). RequestTenantID is the tenant_id carried by the request
+// itself, which can differ from the caller's own TenantID for admin actions
+// acting on another tenant. Err is the outcome; nil means success.
 type Record struct {
 	Event           Event
 	RPCMethod       string
@@ -37,6 +37,7 @@ type Record struct {
 	TenantID        string
 	Sub             string
 	Role            string
+	TenantRole      string
 	Err             error
 }
 
@@ -54,6 +55,7 @@ func Log(ctx context.Context, r Record) {
 		slog.String("tenant_id", r.TenantID),
 		slog.String("sub", r.Sub),
 		slog.String("role", r.Role),
+		slog.String("tenant_role", r.TenantRole),
 	}
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
 		attrs = append(attrs, slog.String("trace_id", sc.TraceID().String()))

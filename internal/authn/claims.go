@@ -11,7 +11,15 @@ import "github.com/golang-jwt/jwt/v5"
 // Claims is the JWT payload kyuusha expects on every request.
 type Claims struct {
 	TenantID string `json:"tenant_id"`
-	Role     string `json:"role,omitempty"` // "" (tenant-scoped) | "admin"
+	// Role is the cross-tenant axis: "" (no cross-tenant power) | "admin"
+	// (every tenant, every operation) | "storage-admin" (every tenant, but
+	// only block-storage RPCs -- see docs/specs/authn-authz.md "将来の拡張").
+	Role string `json:"role,omitempty"`
+	// TenantRole is the orthogonal within-tenant axis: "" (a.k.a. "member",
+	// full read/write of the caller's own tenant) | "viewer" (read-only).
+	// Meaningless together with a non-empty Role, which already grants
+	// cross-tenant read/write regardless of this field.
+	TenantRole string `json:"tenant_role,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -20,4 +28,11 @@ type Claims struct {
 // role orthogonal to any single tenant, not a tenant-level permission).
 func (c *Claims) IsAdmin() bool {
 	return c.Role == "admin"
+}
+
+// IsStorageAdmin reports whether the token carries the cross-tenant
+// storage-admin role (every tenant's block-storage RPCs, nothing else --
+// see docs/specs/authn-authz.md "将来の拡張").
+func (c *Claims) IsStorageAdmin() bool {
+	return c.Role == "storage-admin"
 }

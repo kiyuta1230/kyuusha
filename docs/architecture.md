@@ -1027,9 +1027,14 @@ Goライブラリとして埋め込む**（別サービスを立てず`open-poli
 KaaSコントローラー1つで、自クラスタの全リソース種別を管理する必要があるため分割の実利が薄い。
 OPA採用によりこの「今は粗く、後で細かく」という判断は先送りでき、認可基盤自体を作り直す必要はない。
 
-「後で細かく」する際の具体的な設計方針（テナント内ロールとリソース単位の所有権という2つの軸、
-それぞれの実装場所とトレードオフ）は[認証・認可仕様](specs/authn-authz.md)「将来の拡張」節に
-まとめてある。まだ実装はしておらず、具体的な要求が出た時点で着手する。
+「後で細かく」する際の具体的な設計方針（テナント内ロール・リソース単位の所有権・
+サービス種別スコープのadminという3つの軸、それぞれの実装場所とトレードオフ）は
+[認証・認可仕様](specs/authn-authz.md)「将来の拡張」節にまとめてある。2026-09-11に
+軸1（`tenant_role=viewer`）と軸3（`role=storage-admin`、block-storageサービスのみに
+scopeしたadmin相当）を実装した——ただしこれは「リソース種別ごとに細かく分ける」という
+上記の判断を覆すものではなく、静的に列挙した少数の役割を足しただけ（動的なカスタム
+ロール定義は検討の上、実装・レビューコストが一桁大きいため見送った）。軸2
+（リソース単位の所有権）はまだ未実装で、具体的な要求が出た時点で着手する。
 
 ### Hypervisor自己登録とzone割当
 
@@ -1950,7 +1955,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - DRBDミラーリング導入タイミング（pet系ワークロードが本番相当で使われ始めた時点）
 - NATS JetStreamのsubject/stream設計（`ms.<service>.<cmd|evt>.<hypervisor>...`、CMD/EVTストリームの分離）
 - gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）
-- 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）
+- 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）。2026-09-11、`tenant_role=viewer`（テナント内read-only）と`role=storage-admin`（block-storageサービスのみにscopeしたadmin相当）を実装——静的な列挙のみで、動的カスタムロール定義は見送り
 - Watchの再開設計（resource_version + Bookmarkイベント、履歴保持は有限で古すぎたら再List）
 - Firecrackerのjailer/tapデバイス運用方針
 - ネットワークACL（`NetworkInterfaceSpec.ingress_rules`による最小限のホスト側ファイアウォール。SecurityGroupのような別リソースは導入しない）
