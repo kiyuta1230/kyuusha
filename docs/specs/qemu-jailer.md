@@ -91,5 +91,15 @@ QEMU側に同等以上の隔離を持たせるための設計であり、2026-09
 
 - minijail vs nsjailの最終選定（実機QEMUを実際にjailして起動できるか検証してから）
 - QEMU向けseccompポリシーの具体的な内容（strace等でのトレースに基づく作成が
-  別途必要、当て推量で埋めない——旧ハンドオフ文書が指摘していたのと同じ理由）
+  別途必要、当て推量で埋めない——旧ハンドオフ文書が指摘していたのと同じ理由）。
+  **2026-09-12調査**: minijail/nsjail側に実QEMU（`qemu-system-*`）向けの既製
+  ポリシーは無い（crosvm自身のseccompポリシー、`jail/seccomp/{arch}/{device}.policy`は
+  crosvm自身のRust製プロセス向けで、別バイナリの実QEMUには流用できない。
+  Cuttlefishも実QEMUではなくcrosvmベースだった。nsjailは完全に汎用ツールで
+  QEMU向け実績は見当たらず。libvirtもQEMU自身の内蔵`-sandbox`/`-seccomp`を
+  有効にしているだけで、外部jailer側のポリシーではない）。ただしminijail自身が
+  straceベースのポリシー生成ツール（`tools/generate_seccomp_policy.py`）を
+  同梱しており、ゼロから自作するよりはこれを使ってstrace結果からポリシーを
+  組み立てる方が楽——予定していた「strace等でのトレースに基づく作成」自体は
+  変わらないが、そのための道具は既製のものを使える
 - network namespace分離（tapのmove-in同期問題）は将来必要になれば着手する
