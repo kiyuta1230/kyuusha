@@ -26,7 +26,7 @@ const seedDiskSizeBytes = 1 << 20 // 1MiB
 // minimal guest. See docs/architecture.md "UserData注入: NoCloud seed
 // disk". Returns the path to the generated image.
 //
-// Shared by every VMM driver (fcvmm, qemuvmm): building the seed disk
+// Shared by every VMM driver (fcvmm, chvmm): building the seed disk
 // itself has nothing driver-specific about it, only how each driver
 // attaches the resulting image file as a second block device.
 //

@@ -189,20 +189,20 @@ else
   echo "!! could not confirm a real guest boot for vm-1 (no /dev/kvm on this host? try: kyuusha vm console -tenant=$tenant -id=$vm1_id)" >&2
 fi
 
-echo "==> creating a VM with -driver-hint=qemu against the same Image (KERNEL_ROOTFS now accepts either driver -- see docs/specs/qemu-boot.md)"
-go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-qemu \
-  -image="$image" -vcpu=1 -memory-mb=128 -driver-hint=qemu -wait
-qemu_vm_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-qemu ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
-qemu_console=""
+echo "==> creating a VM with -driver-hint=cloud-hypervisor against the same Image (KERNEL_ROOTFS now accepts either driver -- see docs/specs/cloud-hypervisor-boot.md)"
+go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-ch \
+  -image="$image" -vcpu=1 -memory-mb=128 -driver-hint=cloud-hypervisor -wait
+ch_vm_id="$(go run ./cmd/kyuusha vm list -addr=localhost:8080 -tenant="$tenant" | grep 'name=vm-ch ' | grep -o 'id=[^ ]*' | cut -d= -f2)"
+ch_console=""
 for _ in $(seq 1 30); do
-  qemu_console="$(go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$qemu_vm_id" 2>/dev/null)"
-  echo "$qemu_console" | grep -q "kyuusha: guest booted OK" && break
+  ch_console="$(go run ./cmd/kyuusha vm console -addr=localhost:8080 -tenant="$tenant" -id="$ch_vm_id" 2>/dev/null)"
+  echo "$ch_console" | grep -q "kyuusha: guest booted OK" && break
   sleep 1
 done
-if echo "$qemu_console" | grep -q "kyuusha: guest booted OK"; then
-  echo "    confirmed: real QEMU guest booted from the same kernel_rootfs Image as vm-1"
+if echo "$ch_console" | grep -q "kyuusha: guest booted OK"; then
+  echo "    confirmed: real cloud-hypervisor guest booted from the same kernel_rootfs Image as vm-1"
 else
-  echo "!! could not confirm a real guest boot for vm-qemu (no /dev/kvm on this host, or qemu-system-x86_64 missing? try: kyuusha vm console -tenant=$tenant -id=$qemu_vm_id)" >&2
+  echo "!! could not confirm a real guest boot for vm-ch (no /dev/kvm on this host, or cloud-hypervisor missing? try: kyuusha vm console -tenant=$tenant -id=$ch_vm_id)" >&2
 fi
 
 echo "==> creating Subnet for tenant $tenant (zone-a; real IPAM -- see docs/specs/network.md)"

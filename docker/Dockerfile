@@ -42,8 +42,15 @@ FROM ubuntu:24.04 AS compute-agent
 # FIRECRACKER VM is exec'd through it (chroot + uid/gid privilege drop;
 # Firecracker's own built-in seccomp filter applies regardless of jailer,
 # on by default unless -no-seccomp -- see docs/specs/firecracker-boot.md
-# "jailer"), unlike driver_hint=QEMU, for which an equivalent is still an
-# open question (docs/open-questions.md).
+# "jailer").
+#
+# cloud-hypervisor-static -- real driver_hint=CLOUD_HYPERVISOR VM boot, see
+# internal/compute-agent/chvmm and docs/specs/cloud-hypervisor-boot.md.
+# "-static": a real qemu-system-x86_64 (this driver's predecessor until
+# 2026-09-12) turned out to need ~30 shared libraries staged into any jail;
+# cloud-hypervisor's static build has none (confirmed: `ldd` reports
+# "statically linked"), and needs no external jailer at all -- its own
+# built-in seccomp is on by default.
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && ARCH="$(uname -m)" && FC_VERSION=v1.16.1 \
     && curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-${ARCH}.tgz" \
@@ -52,11 +59,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && mv "release-${FC_VERSION}-${ARCH}/jailer-${FC_VERSION}-${ARCH}" /usr/local/bin/jailer \
     && chmod +x /usr/local/bin/firecracker /usr/local/bin/jailer \
     && rm -rf "release-${FC_VERSION}-${ARCH}" \
+    && CH_VERSION=v53.0 \
+    && case "$ARCH" in \
+         x86_64) CH_ASSET=cloud-hypervisor-static ;; \
+         aarch64) CH_ASSET=cloud-hypervisor-static-aarch64 ;; \
+         *) echo "unsupported arch for cloud-hypervisor: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /usr/local/bin/cloud-hypervisor \
+       "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VERSION}/${CH_ASSET}" \
+    && chmod +x /usr/local/bin/cloud-hypervisor \
     && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
-# qemu-system-x86_64 -- real driver_hint=QEMU VM boot, see
-# internal/compute-agent/qemuvmm and docs/specs/qemu-boot.md.
-#
 # e2fsprogs: builds the cloud-init NoCloud seed disk as an ext4 image via
 # `mkfs.ext4 -d` (see internal/compute-agent/vmm/seed.go and
 # docs/architecture.md "UserData注入: NoCloud seed disk").
@@ -70,7 +83,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # entirely the operator's own doing, a host-level prerequisite this
 # container doesn't need any tooling for.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      qemu-system-x86 e2fsprogs iproute2 \
+      e2fsprogs iproute2 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/compute-agent /usr/local/bin/compute-agent
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/

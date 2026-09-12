@@ -20,7 +20,14 @@ enum RecoveryPolicy {
 enum VmmDriver {
   VMM_DRIVER_UNSPECIFIED = 0; // treated as FIRECRACKER
   VMM_DRIVER_FIRECRACKER = 1;
-  VMM_DRIVER_QEMU = 2;
+  // VMM_DRIVER_CLOUD_HYPERVISOR: cloud-hypervisor (rust-vmm, same lineage as
+  // Firecracker) -- chosen over QEMU (2026-09-12) for the fuller device
+  // model (VFIO passthrough, vhost-user) neither driver implements yet: a
+  // real qemu-system-* binary turned out to need ~30 shared libraries and
+  // legacy PC firmware blobs staged into any jail, none of which
+  // cloud-hypervisor needs (single static binary, no BIOS emulation, direct
+  // kernel boot only) -- see docs/specs/cloud-hypervisor-boot.md.
+  VMM_DRIVER_CLOUD_HYPERVISOR = 2;
 }
 
 message NetworkAttachment {
@@ -120,7 +127,7 @@ message StopVirtualMachineRequest {
 // already uses (see reconciler.go's provisionAndPublish) -- the VM's
 // existing NetworkInterfaces/VolumeAttachments are reattached, and its
 // already-placed root disk is reused rather than recopied from the Image
-// (see internal/compute-agent/fcvmm and .../qemuvmm's Boot).
+// (see internal/compute-agent/fcvmm and .../chvmm's Boot).
 message StartVirtualMachineRequest {
   string tenant_id = 1;
   string id = 2;

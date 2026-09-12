@@ -1,9 +1,10 @@
 #!/bin/sh
 # Runs as PID 1 (boot_args: init=/init) inside the playground's guest --
-# see docs/specs/firecracker-boot.md and docs/specs/qemu-boot.md. The same
-# rootfs image boots under either driver_hint (FIRECRACKER via fcvmm, QEMU
-# via qemuvmm); this script has no way to tell which one launched it, so it
-# doesn't claim to know. Deliberately not a real init system (no service
+# see docs/specs/firecracker-boot.md and docs/specs/cloud-hypervisor-boot.md.
+# The same rootfs image boots under either driver_hint (FIRECRACKER via
+# fcvmm, CLOUD_HYPERVISOR via chvmm); this script has no way to tell which
+# one launched it, so it doesn't claim to know. Deliberately not a real
+# init system (no service
 # management, doesn't reap zombies): its jobs are to prove the guest kernel
 # actually booted (a recognizable line on the serial console, ttyS0, which
 # compute-agent captures to <run-dir>/<vm_id>/console.log), and -- for

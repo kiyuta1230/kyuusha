@@ -20,9 +20,9 @@ const (
 type VmmDriver string
 
 const (
-	VmmDriverUnspecified VmmDriver = "" // 未指定はFIRECRACKERとして扱う
-	VmmDriverFirecracker VmmDriver = "FIRECRACKER"
-	VmmDriverQEMU        VmmDriver = "QEMU"
+	VmmDriverUnspecified     VmmDriver = "" // 未指定はFIRECRACKERとして扱う
+	VmmDriverFirecracker     VmmDriver = "FIRECRACKER"
+	VmmDriverCloudHypervisor VmmDriver = "CLOUD_HYPERVISOR"
 )
 
 type NetworkAttachment struct {

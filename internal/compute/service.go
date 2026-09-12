@@ -340,7 +340,7 @@ func (s *Service) Stop(ctx context.Context, tenantID, id string, force bool) (*V
 // NetworkInterfaces/VolumeAttachments and telling compute-agent to boot it
 // again -- each VMM driver's Boot detects and reuses the already-placed root
 // disk from before Stop rather than recopying it from the Image (see
-// internal/compute-agent/fcvmm and .../qemuvmm).
+// internal/compute-agent/fcvmm and .../chvmm).
 func (s *Service) Start(ctx context.Context, tenantID, id string) (*VirtualMachine, error) {
 	vm, err := s.store.Get(ctx, tenantID, id)
 	if err != nil {

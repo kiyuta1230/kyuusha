@@ -10,8 +10,9 @@ host側でも強制される（`internal/compute-agent/cgroup`、[VirtualMachine
 「cgroupリソース制限」参照）。
 Firecrackerプロセス自体は必ずjailer経由で起動する（chroot+uid/gid降格、下記
 「jailer」参照）——compute-agentコンテナ自身の権限のまま動くことはない。
-`driver_hint=QEMU`は別ドライバとして実装済み——[QEMU起動仕様](qemu-boot.md)参照
-（同じ`KERNEL_ROOTFS`形式のImageを、`internal/compute-agent/qemuvmm`が別のVMMプロセスで
+`driver_hint=CLOUD_HYPERVISOR`は別ドライバとして実装済み——
+[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照
+（同じ`KERNEL_ROOTFS`形式のImageを、`internal/compute-agent/chvmm`が別のVMMプロセスで
 起動する）。
 
 ## computeからcompute-agentへ渡る情報
@@ -39,11 +40,11 @@ Firecrackerプロセス自体は必ずjailer経由で起動する（chroot+uid/g
    （下記「jailer」参照）。標準出力/標準エラー（＝シリアルコンソール`ttyS0`の出力）
    はjailの外、`<vm_id>/console.log`へ（すでに開いているファイルディスクリプタは
    chroot/pivot_rootの影響を受けないため、jailの中へ置く必要がない）
-4. **成否判定**: プロセス起動から500ms以内に終了した場合のみ失敗とみなす、fcvmm/qemuvmm
+4. **成否判定**: プロセス起動から500ms以内に終了した場合のみ失敗とみなす、fcvmm/chvmm
    共通の方式（[VirtualMachine仕様](virtual-machine.md)「起動確認（成否判定）」参照）。
 
 UserData注入・cgroupリソース制限・削除・シリアルコンソールアクセスも
-[VirtualMachine仕様](virtual-machine.md)を参照（すべてfcvmm/qemuvmm共通）。
+[VirtualMachine仕様](virtual-machine.md)を参照（すべてfcvmm/chvmm共通）。
 
 ## jailer
 
@@ -75,9 +76,10 @@ jailer統合は**実装済み**: `driver_hint=FIRECRACKER`のVMは必ずFirecrac
   明示しない限りデフォルトの組み込みseccompフィルタを適用する——jailerを使う
   かどうかに関係なく、このシステムはずっとこれが有効だった。jailerがこの機能
   に対して追加するものは無い（実際に貢献しているのはchroot+権限降格の部分だけ）
-- `driver_hint=QEMU`には同等の隔離がまだ無い——`jailer`はFirecracker専用ツールで
-  QEMUをラップできない。QEMU用の方式（自前chroot/namespace実装 vs. libvirt経由）
-  は未決事項のまま（docs/open-questions.md参照）
+- `driver_hint=CLOUD_HYPERVISOR`には`jailer`相当の外部chroot/uid-gid dropは無い
+  ——ただし意図的な非対称: cloud-hypervisorは静的バイナリ+組み込みseccompで、
+  jailerがFirecrackerに与えているのと同種の効果（chroot自体を除く）を自前で
+  持っている（[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照）
 
 ## `-fc-*`フラグ（`cmd/compute-agent`）
 
@@ -107,7 +109,8 @@ docker-compose.yml側の設定は要らない——jailer自身が要求するch
   Alpine minirootfsを土台にした自前rootfs（`docker/fc-guest-init.sh`をPID 1として動かす。
   Alpineの`/sbin/init`（openrc前提）は完全ではないため、`boot_args`に`init=/init`を必須とする
   -- compute-agent側のデフォルト`boot_args`には最初から含まれている）。このアセットは
-  `driver_hint=QEMU`のVMもそのまま使い回す（[QEMU起動仕様](qemu-boot.md)参照）
+  `driver_hint=CLOUD_HYPERVISOR`のVMもそのまま使い回す
+  （[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照）
 - `playground/scenario.sh`が作るImageはこのkernel/rootfsを指す。VM作成後、
   `kyuusha vm console`で実際に起動確認メッセージが読めることを確認する
 
@@ -116,6 +119,6 @@ docker-compose.yml側の設定は要らない——jailer自身が要求するch
 - クロスHypervisorのネットワーク疎通（同じHypervisor内のtap+ブリッジのみ。
   [network.md](network.md)「tap配線とローカルネットワーク」参照）
 
-ドライバを問わず共通の未実装事項（jailer相当の分離、digest検証、Stop/Restart、
-`user_data`の機密情報対応、本物のcloud-initでの動作確認）は
+ドライバを問わず共通の未実装事項（digest検証、`user_data`の機密情報対応、
+本物のcloud-initでの動作確認）は
 [VirtualMachine仕様](virtual-machine.md)「この実装がカバーしないもの（共通）」参照。

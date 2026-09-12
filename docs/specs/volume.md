@@ -193,7 +193,7 @@ NetworkInterfaceと同じ「寛容な劣化」——今のところこれで実�
 
 ## compute-agent側の配線（`internal/compute-agent/volumeref`）
 
-`fcvmm`/`qemuvmm`共通（[VirtualMachine仕様](virtual-machine.md)参照）。VMが
+`fcvmm`/`chvmm`共通（[VirtualMachine仕様](virtual-machine.md)参照）。VMが
 `Scheduled`→`Provisioning`へ遷移する際、Reconcilerが既に`Attached`まで到達した
 VolumeAttachmentについて、そのVolume自身の`protocol`/`storage_connection`/`identifier`
 （`VolumeAttachmentStatus`はもうこれらを持たない——参照するVolumeから都度取得する）を
@@ -208,9 +208,9 @@ compute-agentは起動処理の中で、Volumeごとに`volumeref.Resolve`を呼
   （オペレータの接続確立とこのVolumeの登録は互いに順序保証が無いため）
 
 見つかったパスは、rootディスク/seed diskと並ぶ追加のvirtio-blockドライブとして
-Firecracker/QEMUへ渡す:
+Firecracker/cloud-hypervisorへ渡す:
 
-- **qemuvmm**: jailが無いので、解決したパスをそのまま`-drive file=<path>,...`へ渡すだけ
+- **chvmm**: jailが無いので、解決したパスをそのまま`--disk path=<path>`へ渡すだけ
 - **fcvmm**: jailer chrootの中に実ファイル/デバイスを見せる必要がある
   （`fcvmm/jailer.go`の`placeVolumeLike`）。ブロックデバイス（ISCSI/NVME_OF）は
   従来通り同じmajor:minorで`mknod`——ゲストの書き込みは実デバイスへ直接届く。
@@ -227,7 +227,7 @@ tap配線の後始末と同じeventual-consistency、失敗しても致命的で
 ### device_path/hypervisorの報告（2026-09-11実装）
 
 `VolumeAttachmentStatus.device_path`/`hypervisor`は元々「フィールドはあるが報告経路が無く
-常に空」という既知の未実装事項だった。`fcvmm`/`qemuvmm`の`Boot()`は元々`error`だけを
+常に空」という既知の未実装事項だった。`fcvmm`/`chvmm`の`Boot()`は元々`error`だけを
 返していたが、`volumeref.Resolve`が実際に見つけた実パス（`AttachedVolume{AttachmentID,
 TenantID, DevicePath}`）を成功時に併せて返すよう変更し、`internal/compute-agent/agent.go`
 （`reportAttachedVolumes`）がそれをVolumeごとに`ms.blockstorage.evt.<hypervisor>.

@@ -5,9 +5,9 @@
 VirtualMachineは、実際にどのVMM（Virtual Machine Monitor）で起動されるかを
 `spec.driver_hint`で選べるリソース。今のところ2つの実ドライバがある——
 [Firecracker起動仕様](firecracker-boot.md)（`FIRECRACKER`、未指定時のデフォルト）と
-[QEMU起動仕様](qemu-boot.md)（`QEMU`）。どちらも同じ`KERNEL_ROOTFS`形式のImage
+[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)（`CLOUD_HYPERVISOR`）。どちらも同じ`KERNEL_ROOTFS`形式のImage
 （[Image仕様](image.md)参照）を、`internal/compute-agent`配下の別々のVMMドライバ
-（`fcvmm`/`qemuvmm`）で起動する。
+（`fcvmm`/`chvmm`）で起動する。
 
 このドキュメントには、**ドライバを問わず共通の**仕組みだけをまとめる。ドライバ固有の
 起動処理・引数・トレードオフはそれぞれのドキュメントを参照。`Pending`→`Scheduled`の
@@ -21,13 +21,13 @@ compute-agentはImage/network/block-storageいずれのサービスクライア�
 VMが`Scheduled`→`Provisioning`へ遷移する際（[VMスケジュール仕様](vm-scheduling.md)
 参照）、Reconcilerがそのタイミングでこれらを解決し、起動に必要な情報をすべて
 `CreateCommand`（NATS、`internal/compute/nats.go`）に載せて渡す。ドライバを問わず
-共通のペイロード——`driver_hint`が`FIRECRACKER`か`QEMU`かだけが変わる。
+共通のペイロード——`driver_hint`が`FIRECRACKER`か`CLOUD_HYPERVISOR`かだけが変わる。
 
 | フィールド | 由来 |
 |---|---|
 | `driver_hint` | `VirtualMachineSpec.driver_hint`（未指定なら`FIRECRACKER`） |
 | `kernel_url` / `rootfs_url` | 解決したImageの`spec.kernel.url` / `spec.rootfs.url`（`QCOW2`の場合は空） |
-| `boot_args` | Imageの`spec.boot_args`（空ならcompute-agent側のデフォルトを使う。デフォルト値自体はドライバごとに違う——[QEMU起動仕様](qemu-boot.md)「boot_argsのデフォルトがFirecrackerと違う理由」参照） |
+| `boot_args` | Imageの`spec.boot_args`（空ならcompute-agent側のデフォルトを使う。デフォルト値自体はドライバごとに違う——[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)「boot_argsのデフォルトがFirecrackerと違う理由」参照） |
 | `interfaces` | `network_interfaces`から作られたNetworkInterface+そのSubnetの情報（[network.md](network.md)参照）。空配列ならネットワークなしで起動する |
 | `volumes` | `volumes`から作られたVolumeAttachmentのうち、実際に`Attached`まで到達したものについて、そのVolume自身が持つ`protocol`/`storage_connection`/`identifier`（[Volume仕様](volume.md)参照。kyuushaはここで何もログイン/マウントしない——compute-agentが起動時にこの情報から既に見えているデバイス/ファイルを探すだけ）。空配列ならVolumeなしで起動する——アタッチが`Pending`のまま（排他制御待ち）だったものはここに含まれない |
 | `user_data` | `VirtualMachineSpec.user_data`そのまま。空なら何も注入しない（下記「UserData注入」参照） |
@@ -38,7 +38,7 @@ VMが`Scheduled`→`Provisioning`へ遷移する際（[VMスケジュール仕�
 
 ## 起動確認（成否判定）
 
-fcvmm/qemuvmm共通の方式（`bootGracePeriod`）: プロセス起動から500ms以内に終了した
+fcvmm/chvmm共通の方式（`bootGracePeriod`）: プロセス起動から500ms以内に終了した
 場合のみ失敗（`CreateResult{Success: false}`）とみなす。この猶予時間は「バイナリが
 無い」「/dev/kvm権限がない」「configが壊れている」等の即座に落ちる失敗を検知する
 ためのもので、**ゲストカーネルが実際にブートし切ったことの確認ではない**（シリアル
@@ -48,7 +48,7 @@ fcvmm/qemuvmm共通の方式（`bootGracePeriod`）: プロセス起動から500
 
 ## UserData注入（cloud-init NoCloud seed disk）
 
-`spec.user_data`が空でないVMには、`internal/compute-agent/vmm/seed.go`（fcvmm/qemuvmm
+`spec.user_data`が空でないVMには、`internal/compute-agent/vmm/seed.go`（fcvmm/chvmm
 共有）がcloud-initのNoCloud方式のseed diskを作り、root diskと並ぶ2番目の（読み取り専用の）
 virtio-blockドライブとして渡す（ゲストからは通常`/dev/vdb`に見える）。
 `docs/architecture.md`「UserData注入: NoCloud seed disk」参照。
@@ -79,7 +79,7 @@ virtio-blockドライブとして渡す（ゲストからは通常`/dev/vdb`に�
 
 ## cgroupリソース制限（`internal/compute-agent/cgroup`）
 
-fcvmm/qemuvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`成功後）、そのPIDを
+fcvmm/chvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`成功後）、そのPIDを
 `/sys/fs/cgroup/kyuusha/<VM ID>`というcgroup v2グループへ移し、`cpu.max`を
 `<spec.vcpu>*100000 100000`（=vcpu個ぶんのフルコアを上限としたCPU quota）、
 `memory.max`を`spec.memory_mb`をバイトに換算した値に設定する。VMMに渡した仮想
@@ -107,9 +107,11 @@ fcvmm/qemuvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`
   一切変わらず、あくまでCPU/メモリの消費量に上限を設けるだけ（docs/architecture.md
   「Firecracker: jailerとtapデバイス」参照）。`driver_hint=FIRECRACKER`は実際に
   jailerを使ってchroot+uid/gid降格を得ている（cgroupとは別の、fcvmm固有の仕組み
-  ——[Firecracker起動仕様](firecracker-boot.md)「jailer」参照）が、
-  `driver_hint=QEMU`にはまだ同等のものがない（QEMU用の隔離方式自体が
-  docs/open-questions.mdの未決事項）
+  ——[Firecracker起動仕様](firecracker-boot.md)「jailer」参照）。
+  `driver_hint=CLOUD_HYPERVISOR`には外部jailer(chroot+uid/gid drop)は無いが、
+  静的バイナリ(共有ライブラリのchroot問題がそもそも発生しない)+組み込みseccomp
+  (既定で有効)という別の形で相応の防御を持つ——
+  [cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照
 
 ## 停止/起動（`Stop`/`Start`、2026-09-12実装）
 
@@ -185,7 +187,7 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
 
 ## playgroundでの共通構成
 
-ドライバ固有の要件（Firecrackerバイナリの取得、QEMUパッケージのインストール等）は
+ドライバ固有の要件（Firecrackerバイナリの取得、cloud-hypervisorバイナリの取得等）は
 それぞれの仕様書を参照。ここに書くのはドライバを問わず共通の要件だけ:
 
 - `/dev/kvm`をcompute-agentコンテナへ渡す必要がある（`playground/docker-compose.yml`の
@@ -200,9 +202,10 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
   付与するだけでは書き込み可能にならない（ライブ検証で確認済み）。無くてもVMの起動自体は
   失敗しない（best-effortでリソース無制限のまま起動を続けるだけ）
 - `-drivers`フラグで、そのcompute-agentがサポートするVMMドライバをスケジューラへ申告する
-  （`compute-agent-1/2/3`の`command:`）。playgroundは`-drivers=FIRECRACKER,QEMU`——これが
-  無い（既定値`FIRECRACKER`のみ）と、`driver_hint=QEMU`のVMはスケジュール可能な
-  Hypervisorが1台も無い状態になり、`Pending`のまま進まなくなる（[VMスケジュール仕様](vm-scheduling.md)
+  （`compute-agent-1/2/3`の`command:`）。playgroundは
+  `-drivers=FIRECRACKER,CLOUD_HYPERVISOR`——これが無い（既定値`FIRECRACKER`のみ）と、
+  `driver_hint=CLOUD_HYPERVISOR`のVMはスケジュール可能なHypervisorが1台も無い状態に
+  なり、`Pending`のまま進まなくなる（[VMスケジュール仕様](vm-scheduling.md)
   参照。ライブ検証で実際に踏んだ実バグ）
 - kernel/rootfsは`image-assets`という専用compose serviceが配信する（プレーンHTTP、ホストには
   公開しない）。ドライバを問わず同じアセットを共有する——[Firecracker起動仕様](firecracker-boot.md)
@@ -211,15 +214,15 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
 ## この実装がカバーしないもの（共通）
 
 - ダウンロードした`kernel_url`/`rootfs_url`の内容のdigest検証
-- Stop（一時停止）/Restart。今あるのは起動（Boot）と削除に伴う強制終了（Stop=プロセス終了）のみ
 - `user_data`の機密情報対応（保存時暗号化、監査ログからの除外。
   `docs/architecture.md`「UserData注入」の「機密情報の扱いに関する注記」参照）
 - 本物のcloud-initを動かすゲストでの動作確認（playgroundの最小Alpineゲストには
   cloud-init自体が入っていないため、seed diskが正しく届くことまでしか確認していない）
 
-jailer相当のプロセス隔離はもう「共通の未実装事項」ではない——`driver_hint=FIRECRACKER`
-は実装済み（[Firecracker起動仕様](firecracker-boot.md)「jailer」参照）、
-`driver_hint=QEMU`は未実装のまま（docs/open-questions.md参照）と、ドライバごとに
-状況が分かれている。その他のドライバ固有の未実装事項（例: Firecrackerのクロス
-hypervisorネットワーク疎通、QEMUのPCI passthrough/vhost-user）も、それぞれの
-仕様書の「この実装がカバーしないもの」を参照。
+プロセス隔離もStop/Start（一時停止/再開）ももう「共通の未実装事項」ではない
+——jailer相当の隔離は`driver_hint=FIRECRACKER`が実jailer(chroot+uid/gid drop)、
+`driver_hint=CLOUD_HYPERVISOR`が静的バイナリ+組み込みseccompという別の形で、
+それぞれ対応済み（上記「cgroupリソース制限」節参照）。Stop/Startは2026-09-12実装
+（上記「停止/起動」節参照）。ドライバ固有の未実装事項（例: Firecrackerのクロス
+hypervisorネットワーク疎通、cloud-hypervisorのPCI passthrough/vhost-user）は
+それぞれの仕様書の「この実装がカバーしないもの」を参照。

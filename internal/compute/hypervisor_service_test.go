@@ -28,7 +28,7 @@ func TestService_RegisterHypervisorUpsertsPreservingReservations(t *testing.T) {
 
 	// Re-register (e.g. agent restart) must refresh capacity/zone but keep
 	// the existing reservation intact.
-	h2, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-b", 16, 32768, []string{"FIRECRACKER", "QEMU"}, nil)
+	h2, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-b", 16, 32768, []string{"FIRECRACKER", "CLOUD_HYPERVISOR"}, nil)
 	if err != nil {
 		t.Fatalf("re-Register: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestService_ScheduleVMFiltersAndReserves(t *testing.T) {
 		t.Fatalf("force NotReady: %v", err)
 	}
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-wrong-driver", "zone-a", 8, 16384, []string{"QEMU"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-wrong-driver", "zone-a", 8, 16384, []string{"CLOUD_HYPERVISOR"}, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

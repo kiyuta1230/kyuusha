@@ -43,18 +43,20 @@ zoneスコープ付きbootstrapトークン検証（`internal/bootstraptoken`）
 残っているのは主に: bootstrapトークンの使い捨て化（同じトークンを同じハイパーバイザーの
 再起動のたびに繰り返し使うこと自体は妨げていない）。必要になった時点で着手する。
 
-## QEMUドライバのブート可能ディスク対応（Windows等の非Linuxゲスト）
+## cloud-hypervisorドライバのブート可能ディスク対応（Windows等の非Linuxゲスト）
 
-2026-09に`driver_hint=QEMU`を実装した（`internal/compute-agent/qemuvmm`）。ただし起動方式は
-Firecrackerと同じ「kernel/rootfsを直接指定する」方式を選び、QEMUが本来可能な「ブートローダー
-内蔵の自己完結ディスク」（`QCOW2`）経由の起動は実装しなかった——同じ`KERNEL_ROOTFS`資産を
-両ドライバで使い回せることを優先したため（[QEMU起動仕様](specs/qemu-boot.md)「起動方式」参照）。
+2026-09に`driver_hint=QEMU`として実装し、同月中にcloud-hypervisorへ置き換えた
+（`internal/compute-agent/chvmm`、[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
+参照）。起動方式はFirecrackerと同じ「kernel/rootfsを直接指定する」方式を選び、
+QEMU/cloud-hypervisorが本来可能な「ブートローダー内蔵の自己完結ディスク」
+（`QCOW2`）経由の起動は実装しなかった——同じ`KERNEL_ROOTFS`資産を両ドライバで
+使い回せることを優先したため。
 
 この選択の対価として、Windows等の非Linuxゲストは現状サポート外（BIOS/UEFIファームウェアを
 経由しないため原理的に起動できない）。`Image.spec.format=QCOW2`自体はスキーマ・
 Create時バリデーションとも既に存在するが、どのドライバもまだ`spec.disk`を消費しない
-（Reconcilerが読んでいない）——本当に必要になった時点で、QCOW2を実際に起動する新しい
-パスを`qemuvmm`に足す（chroot/ファームウェア起動を含む、既存のkernel/rootfs直接ブートとは
+（Reconcilerが読んでいない）——本当に必要になった時点で、cloud-hypervisorのUEFI/OVMF
+ブートパスを使う新しいパスを`chvmm`に足す（既存のkernel/rootfs直接ブートとは
 別の実装になる見込み）という判断で今は先送りしている。
 
 ## block-storageバックエンドの責務境界の作り直し（解決済み・実装済み、2026-09-10）
@@ -133,35 +135,23 @@ Volume検証と独立にVM起動のたびに実際のアタッチ経路で発生
 - 検証コマンドのリトライ間隔・上限（現状は無期限、10秒ごと）は未チューニング
 - Volume検証コマンドのリトライ間隔・上限（現状は無期限、10秒ごと）は未チューニング
 
-## QEMU用のjailer相当の隔離方式（2026-09-12改訂: 既製バイナリ統合に方針転換）
+## QEMU用のjailer相当の隔離方式（2026-09-12、ドライバ置き換えにより解消）
 
 2026-09に`driver_hint=FIRECRACKER`のVMをjailer（chroot + uid/gid権限降格）でラップした
-（[Firecracker起動仕様](specs/firecracker-boot.md)「jailer」、docs/architecture.md
-「Firecracker: jailerとtapデバイス」参照）。jailer自体はFirecracker専用ツールで
-QEMUをラップできないため、`driver_hint=QEMU`にはまだ同等の隔離が無いまま。
+（[Firecracker起動仕様](specs/firecracker-boot.md)「jailer」）。jailer自体はFirecracker
+専用ツールでQEMUをラップできないため、`driver_hint=QEMU`にはまだ同等の隔離が無い、
+という問題が長らく残っていた——一度は「別プロジェクトとして本格的な汎用jailerを
+立ち上げる」方針（[QEMU jailerハンドオフ](qemu-jailer-handoff.md)）、次に「既製の
+minijail/nsjailをkyuusha本体へ直接統合する」方針（[QEMU jailer設計](specs/qemu-jailer.md)）
+と2度方針転換したが、**2026-09-12、そもそも実QEMUを使うのをやめてcloud-hypervisorへ
+置き換えたことで、この問題自体が解消した**: cloud-hypervisorは静的バイナリ
+（共有ライブラリのchroot問題が発生しない）で、seccompを内蔵しており、外部jailerが
+実質不要になった。
 
-libvirt経由でQEMUを使う案は見送り（kyuusha全体の「運用コストの重い既製品を避ける」
-路線とズレる、コンテナ環境でのnamespace関連の深いバグを既に何度も踏んでいる実績から
-libvirt+SELinux/AppArmorでも同種の沼にハマるリスクが高い）。
-
-2026-09-11時点では「chroot/uid-dropは低リスクで自前実装できるが、namespace分離+
-seccompは高リスク（標準ライブラリに無くlibseccompかBPF自前実装が要る）」という前提で、
-軽い版をkyuusha本体に、本格版を別プロジェクトに分割する方針を採った
-（[QEMU jailerハンドオフ](qemu-jailer-handoff.md)に経緯を記録、現在は撤回済みとして
-history用に残している）。
-
-**2026-09-12、この前提が崩れたため方針転換**: 調査の結果、chroot + namespace
-（PID/mount/net）+ seccomp-bpf + uid/gid降格を一通り持つ既製の汎用exec型jailer
-（minijail、nsjail）が実在することが判明した。特にminijailは、crosvm（ChromeOS/
-Androidの実プロダクションVMM）がVMM本体のjailingに実際に使っている前例がある。
-これにより「別プロジェクトとして一から自前実装する」動機（既製品が無い、一番
-リスクの高い部分を切り離したい）の両方が弱まったため、**別プロジェクトは作らず、
-kyuusha本体のタスクとしてminijail（またはnsjail）を`internal/compute-agent/qemuvmm`
-から直接execする形に統合する**方針へ変更した。
-
-詳しい調査結果・比較表・v1スコープ（chroot+namespace+seccomp+uid/gid dropを
-minijail/nsjailにまるごと任せる、network namespace分離は見送り）・実装イメージは
-[QEMU jailer設計](specs/qemu-jailer.md)を参照。
+詳細な経緯（QEMUの動的ライブラリ依存の発見、libvirt/自前jailer/別プロジェクト/
+既製jailer統合という検討の変遷）は[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
+「QEMUからcloud-hypervisorへの置き換え」、および上記2つの旧ドキュメント（どちらも
+冒頭に撤回済みの注記あり、経緯の記録として残している）を参照。
 
 ## ロールベースの細かい認可（RPCメソッド・リソース種別単位）をやるべきか
 

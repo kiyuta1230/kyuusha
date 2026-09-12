@@ -12,10 +12,12 @@ OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプ�
 
 > **ステータス**: 開発中。ストレージ以外の主要機能（VM/Hypervisor/Image/Network/CLI/認証認可/
 > 東西mTLS/Hypervisor bootstrapトークン/cgroupリソース制限）はplayground環境で一通り
-> 動作確認済み。VMMドライバはFirecracker/QEMUの両方が実際にVMを起動する（[起動方式の比較](docs/specs/qemu-boot.md)）。
-> jailer相当のプロセス隔離（chroot/namespace分離・特権降格）はどちらのドライバも未実装のまま
-> （詳細は各仕様書の「既知の穴」節を参照）。実ブロックストレージバックエンド（ZFS/NVMe-oF等）は
-> 未実装で、Volumeは現状Quotaチェック→即Readyのみ。
+> 動作確認済み。VMMドライバはFirecracker/cloud-hypervisorの両方が実際にVMを起動する
+> （[起動方式の比較](docs/specs/cloud-hypervisor-boot.md)）。Firecrackerは実jailer
+> （chroot+uid/gid降格）でラップ済み、cloud-hypervisorは静的バイナリ+組み込みseccompで
+> 外部jailer自体が不要（詳細は各仕様書を参照）。実ブロックストレージバックエンド
+> （ZFS/NVMe-oF等）は未実装で、Volumeは既存の実ファイル/デバイスへの参照+非同期検証のみ
+> （kyuusha自身はプロビジョニングしない、詳細は[Volume仕様](docs/specs/volume.md)参照）。
 
 ## 構成
 
@@ -24,7 +26,7 @@ OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプ�
 | `api-gateway` | clientが到達できる唯一の公開エンドポイント。JWT検証＋OPA認可 |
 | `identity` | Tenant（テナント・Quota上限値）管理 |
 | `compute` | VirtualMachine・Hypervisor管理。スケジューラ、Quota強制、Image/Network検証 |
-| `compute-agent` | 各ハイパーバイザー上で動くagent。実VMM（Firecracker/QEMUどちらも）を起動する |
+| `compute-agent` | 各ハイパーバイザー上で動くagent。実VMM（Firecracker/cloud-hypervisorどちらも）を起動する |
 | `image` | Image（外部URL参照+digest）管理。テナント間共有（PUBLIC/PRIVATE）対応 |
 | `network` | Subnet・NetworkInterface管理。VLAN/IPアドレス払い出し(IPAM) |
 | `block-storage` | Volume・VolumeAttachment管理（実バックエンドはまだ無い） |
@@ -34,7 +36,7 @@ OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプ�
 
 ## クイックスタート（playground）
 
-`/dev/kvm`があれば実VMM（Firecracker/QEMU）までVMを起動する、multi-hypervisorのローカル環境。
+`/dev/kvm`があれば実VMM（Firecracker/cloud-hypervisor）までVMを起動する、multi-hypervisorのローカル環境。
 
 ```sh
 docker compose -f playground/docker-compose.yml up -d --build

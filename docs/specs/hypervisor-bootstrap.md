@@ -20,7 +20,7 @@ Hypervisorはcompute内部のスケジューリング対象であり、KaaS向�
 | `status.last_heartbeat_at` | 最終heartbeat受信時刻 |
 | `status.allocatable_vcpu` / `allocatable_memory_mb` | 申告された総capacity |
 | `status.allocated_vcpu` / `allocated_memory_mb` | スケジューラによる予約合計 |
-| `status.supported_drivers` | 対応VMMドライバ一覧（例: `["FIRECRACKER", "QEMU"]`） |
+| `status.supported_drivers` | 対応VMMドライバ一覧（例: `["FIRECRACKER", "CLOUD_HYPERVISOR"]`） |
 | `status.storage_connections` | このHypervisorが既に確立済みのストレージ接続一覧（`{name, local_path}`）。自己申告——kyuusha自身はここに何も接続しない。詳細は[Volume仕様](volume.md)「StorageConnection」参照。現状スケジューラは未使用（同参照） |
 | `status.available_devices` | PCIデバイス在庫（現状スケジューラは未使用） |
 

@@ -3,9 +3,15 @@
 > **注（2026-09-12）**: このドキュメントが提案する「別プロジェクトとして立ち上げる」
 > 方針は2026-09-12に見直され、撤回された。既製の汎用exec型jailer（minijail/nsjail）
 > が実在することが分かったため、別プロジェクトは作らず、kyuusha本体
-> （`internal/compute-agent/qemuvmm`）へ直接統合する方針に変更している。
-> 現在の設計は[QEMU jailer設計](specs/qemu-jailer.md)を参照。本文は当時の検討過程の
-> 記録として残す。
+> （`internal/compute-agent/chvmm`、当時は`qemuvmm`という名前だった）へ直接統合する
+> 方針に変更した——[QEMU jailer設計](specs/qemu-jailer.md)参照。
+>
+> **さらに同日中、その方針自体も丸ごと不要になった**: `chvmm`が実行する実体を
+> 実QEMUからcloud-hypervisor（静的バイナリ、seccomp内蔵、外部jailer不要）へ
+> 置き換えたため、このドキュメント全体が前提としていた「実QEMUバイナリを
+> どうjailするか」という問題自体が消滅している。詳細は
+> [cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)「QEMUから
+> cloud-hypervisorへの置き換え」を参照。本文は当時の検討過程の記録として残す。
 
 このドキュメントは、**kyuushaとは別の新しいプロジェクトとして**「QEMU用のjailer相当の
 隔離ツール」を立ち上げるための引き継ぎ資料。2026-09-11、kyuushaの実装セッション内で
@@ -18,7 +24,7 @@
 kyuusha（厩舎、Go製の小規模IaaS/KaaS基盤）は、VMを2つのVMM（Virtual Machine Monitor）で
 起動できる: Firecracker（`driver_hint=FIRECRACKER`、既定）とQEMU（`driver_hint=QEMU`）。
 両方とも同じ`KERNEL_ROOTFS`形式のImage（カーネル+生rootfsイメージ、ブートローダー無し）を、
-`internal/compute-agent`配下の別々のドライバ（`fcvmm`/`qemuvmm`）で起動する。
+`internal/compute-agent`配下の別々のドライバ（`fcvmm`/`chvmm`）で起動する。
 
 **Firecracker側は2026-09に実チェイジャー（`jailer`）でラップした**（AWS製、Firecracker
 本体とは別の既製バイナリ、GitHubのFirecrackerリリースに同梱されている）:
@@ -70,7 +76,7 @@ chroot内へkernel/rootfs/seed disk/Volumeを配置してから、実際に`jail
 
 ## QEMU側の現状（ギャップ）
 
-`internal/compute-agent/qemuvmm/manager.go`は`qemu-system-x86_64`を直接execしている
+`internal/compute-agent/chvmm/manager.go`は`qemu-system-x86_64`を直接execしている
 ——chrootもuid/gid降格もseccompも無し。compute-agentコンテナ自体が特権コンテナで
 root実行なので、QEMUプロセスもroot・無隔離のまま動いている。これが埋めたいギャップ。
 
@@ -121,7 +127,7 @@ QEMU向けには同等の既製品が無い（QEMUのデバイスモデルはFir
 ## 最終決定（2026-09-11）: 2トラックに分割する
 
 1. **kyuusha本体（近い将来、別セッションで着手）**: 軽い版——chroot + uid/gid drop
-   のみ実装する。`fcvmm/jailer.go`のパターンを`qemuvmm`向けに書き直すだけなので、
+   のみ実装する。`fcvmm/jailer.go`のパターンを`chvmm`向けに書き直すだけなので、
    実装コストは低い。namespace分離・seccompは入れない（Firecracker側のjailerと
    同じスコープに揃える）。**注: このドキュメント作成時点でまだ未着手**
 2. **別プロジェクト（今回のハンドオフ対象）**: 本格的なnamespace分離+seccompまで
@@ -166,12 +172,12 @@ Firecracker/jailerと同じ「GitHub releasesから既製バイナリを取っ�
 - `internal/compute-agent/fcvmm/manager.go` — Boot()内でjailer.goの各関数を
   どういう順序で呼んでいるか（chroot作成→リソース配置→jailer実行）の実例
 - `internal/compute-agent/fcvmm/jailer.go` — 上記の低レベル配置ロジックそのもの
-- `internal/compute-agent/qemuvmm/manager.go` — 現状のQEMU起動処理（隔離なし。
+- `internal/compute-agent/chvmm/manager.go` — 現状のQEMU起動処理（隔離なし。
   「軽い版」を足す先であり、新プロジェクトが最終的に統合される先でもある）
 - `internal/compute-agent/netsetup` — tapデバイス配線（namespace分離時に
   設計判断が要る箇所）
 - `docs/specs/firecracker-boot.md`「jailer」節
-- `docs/specs/qemu-boot.md`
+- `docs/specs/cloud-hypervisor-boot.md`
 
 ## kyuusha固有の前提（新プロジェクト側では気にしなくてよいこと）
 

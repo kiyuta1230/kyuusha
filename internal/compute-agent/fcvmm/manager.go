@@ -6,17 +6,17 @@
 // (see internal/compute-agent/cgroup) derived directly from spec.vcpu/
 // spec.memory_mb, best-effort: a host/container without usable cgroup v2
 // delegation just boots the VM unconstrained, same as before this existed.
-// Manager implements internal/compute-agent/vmm.VMM -- see qemuvmm for the
-// other implementation (driver_hint=QEMU). Real network interfaces
+// Manager implements internal/compute-agent/vmm.VMM -- see chvmm for the
+// other implementation (driver_hint=CLOUD_HYPERVISOR). Real network interfaces
 // (tap devices, per-VLAN bridges -- see internal/compute-agent/netsetup)
 // are wired for VMs whose spec carries them; a VM with none boots exactly
 // as before (network-less, serial-only). A VM with spec.user_data set gets
 // a cloud-init NoCloud seed disk (see internal/compute-agent/vmm's
 // BuildSeedDisk and docs/architecture.md "UserData注入: NoCloud seed
 // disk"). Handles driver_hint=FIRECRACKER only; see
-// internal/compute-agent/qemuvmm for driver_hint=QEMU, which boots from the
-// exact same kind of Image (KERNEL_ROOTFS: a kernel + a raw rootfs, no
-// bootloader) via a different VMM process.
+// internal/compute-agent/chvmm for driver_hint=CLOUD_HYPERVISOR, which boots
+// from the exact same kind of Image (KERNEL_ROOTFS: a kernel + a raw
+// rootfs, no bootloader) via a different VMM process.
 package fcvmm
 
 import (
@@ -73,7 +73,7 @@ const (
 // internal/compute-agent/vmm's shapes: Manager implements vmm.VMM, and
 // agent.go builds one shared vmm.BootSpec value regardless of which
 // driver_hint it's dispatching to, so both must be the exact same type as
-// what qemuvmm.Manager.Boot accepts, not merely structurally similar
+// what chvmm.Manager.Boot accepts, not merely structurally similar
 // copies.
 type BootSpec = vmm.BootSpec
 type NetIface = vmm.NetIface
@@ -191,7 +191,8 @@ func (m *Manager) jailGID() uint32 {
 // ConsoleLogPath is where Boot(vmID's spec) captures Firecracker's stdout/
 // stderr (== the guest's serial console, ttyS0) -- see docs/specs/
 // firecracker-boot.md. It exists only once Boot has actually run for this
-// vmID (never, for a stub-succeeded QEMU VM or one that hasn't booted yet).
+// vmID (never, for a stub-succeeded CLOUD_HYPERVISOR VM or one that hasn't
+// booted yet).
 func (m *Manager) ConsoleLogPath(vmID string) string {
 	return filepath.Join(m.runDir(), vmID, "console.log")
 }

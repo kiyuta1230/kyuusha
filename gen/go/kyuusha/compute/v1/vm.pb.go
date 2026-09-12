@@ -77,7 +77,14 @@ type VmmDriver int32
 const (
 	VmmDriver_VMM_DRIVER_UNSPECIFIED VmmDriver = 0 // treated as FIRECRACKER
 	VmmDriver_VMM_DRIVER_FIRECRACKER VmmDriver = 1
-	VmmDriver_VMM_DRIVER_QEMU        VmmDriver = 2
+	// VMM_DRIVER_CLOUD_HYPERVISOR: cloud-hypervisor (rust-vmm, same lineage as
+	// Firecracker) -- chosen over QEMU (2026-09-12) for the fuller device
+	// model (VFIO passthrough, vhost-user) neither driver implements yet: a
+	// real qemu-system-* binary turned out to need ~30 shared libraries and
+	// legacy PC firmware blobs staged into any jail, none of which
+	// cloud-hypervisor needs (single static binary, no BIOS emulation, direct
+	// kernel boot only) -- see docs/specs/cloud-hypervisor-boot.md.
+	VmmDriver_VMM_DRIVER_CLOUD_HYPERVISOR VmmDriver = 2
 )
 
 // Enum value maps for VmmDriver.
@@ -85,12 +92,12 @@ var (
 	VmmDriver_name = map[int32]string{
 		0: "VMM_DRIVER_UNSPECIFIED",
 		1: "VMM_DRIVER_FIRECRACKER",
-		2: "VMM_DRIVER_QEMU",
+		2: "VMM_DRIVER_CLOUD_HYPERVISOR",
 	}
 	VmmDriver_value = map[string]int32{
-		"VMM_DRIVER_UNSPECIFIED": 0,
-		"VMM_DRIVER_FIRECRACKER": 1,
-		"VMM_DRIVER_QEMU":        2,
+		"VMM_DRIVER_UNSPECIFIED":      0,
+		"VMM_DRIVER_FIRECRACKER":      1,
+		"VMM_DRIVER_CLOUD_HYPERVISOR": 2,
 	}
 )
 
@@ -1003,7 +1010,7 @@ func (x *StopVirtualMachineRequest) GetForce() bool {
 // already uses (see reconciler.go's provisionAndPublish) -- the VM's
 // existing NetworkInterfaces/VolumeAttachments are reattached, and its
 // already-placed root disk is reused rather than recopied from the Image
-// (see internal/compute-agent/fcvmm and .../qemuvmm's Boot).
+// (see internal/compute-agent/fcvmm and .../chvmm's Boot).
 type StartVirtualMachineRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -1391,11 +1398,11 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x0eRecoveryPolicy\x12\x1f\n" +
 	"\x1bRECOVERY_POLICY_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14RECOVERY_POLICY_NONE\x10\x01\x12\x1d\n" +
-	"\x19RECOVERY_POLICY_SELF_HEAL\x10\x02*X\n" +
+	"\x19RECOVERY_POLICY_SELF_HEAL\x10\x02*d\n" +
 	"\tVmmDriver\x12\x1a\n" +
 	"\x16VMM_DRIVER_UNSPECIFIED\x10\x00\x12\x1a\n" +
-	"\x16VMM_DRIVER_FIRECRACKER\x10\x01\x12\x13\n" +
-	"\x0fVMM_DRIVER_QEMU\x10\x022\xe6\x06\n" +
+	"\x16VMM_DRIVER_FIRECRACKER\x10\x01\x12\x1f\n" +
+	"\x1bVMM_DRIVER_CLOUD_HYPERVISOR\x10\x022\xe6\x06\n" +
 	"\x15VirtualMachineService\x12]\n" +
 	"\x06Create\x12/.kyuusha.compute.v1.CreateVirtualMachineRequest\x1a\".kyuusha.compute.v1.VirtualMachine\x12W\n" +
 	"\x03Get\x12,.kyuusha.compute.v1.GetVirtualMachineRequest\x1a\".kyuusha.compute.v1.VirtualMachine\x12g\n" +

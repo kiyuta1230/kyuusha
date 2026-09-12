@@ -1,27 +1,25 @@
-// Package qemuvmm runs real QEMU microVMs for compute-agent
-// (driver_hint=QEMU) -- the second real VMM integration, alongside
-// internal/compute-agent/fcvmm (driver_hint=FIRECRACKER). See
-// docs/specs/qemu-boot.md for what this covers and doesn't, and why QEMU
-// exists here at all given fcvmm already works: PCI passthrough (VFIO) and
-// vhost-user networking are only possible through QEMU's fuller device
-// model, which Firecracker's deliberately minimal one doesn't have --
-// neither is implemented yet, but the machine type chosen below (q35, a
-// real PCIe bus) is chosen specifically to not foreclose them later.
+// Package chvmm runs real cloud-hypervisor microVMs for compute-agent
+// (driver_hint=CLOUD_HYPERVISOR) -- the second real VMM integration,
+// alongside internal/compute-agent/fcvmm (driver_hint=FIRECRACKER).
+// Replaces the earlier QEMU-based driver (2026-09-12): a real
+// qemu-system-x86_64 binary turned out to need ~30 shared libraries and
+// legacy PC firmware blobs staged into any jail (discovered while designing
+// external jailing for it), none of which cloud-hypervisor needs. It's a
+// single statically-linked binary (musl, `ldd` reports "statically linked"),
+// has no BIOS/VGA-BIOS boot chain to carry (pure direct kernel boot via a
+// PVH entry point, same ELF vmlinux fcvmm already caches), and ships
+// seccomp on by default plus optional Landlock -- see
+// docs/specs/cloud-hypervisor-boot.md for the full comparison and why this
+// driver, unlike fcvmm, needs no external jailer at all.
 //
 // Boots from the exact same kind of Image as fcvmm (KERNEL_ROOTFS: a
-// kernel + a raw rootfs filesystem, no bootloader, no partition table) via
-// QEMU's own direct Linux boot protocol (-kernel/-append) instead of
-// Firecracker's config-file boot -- see docs/specs/qemu-boot.md for why
-// this, and not a self-contained bootable disk image (QCOW2), was chosen
-// for this first pass, and what that rules out (non-Linux guests, notably
-// Windows). Like fcvmm, this deliberately skips jailer-equivalent process
-// isolation (chroot/namespace/uid-drop) and applies only host-side cgroup
-// v2 CPU/memory limits (internal/compute-agent/cgroup), best-effort. Real
-// network interfaces (internal/compute-agent/netsetup, the same tap/bridge
-// wiring fcvmm uses) and a cloud-init NoCloud seed disk
-// (internal/compute-agent/vmm's BuildSeedDisk) are both supported, same as
-// fcvmm.
-package qemuvmm
+// kernel + a raw rootfs filesystem, no bootloader, no partition table).
+// Like fcvmm, this applies only host-side cgroup v2 CPU/memory limits
+// (internal/compute-agent/cgroup), best-effort. Real network interfaces
+// (internal/compute-agent/netsetup, the same tap/bridge wiring fcvmm uses)
+// and a cloud-init NoCloud seed disk (internal/compute-agent/vmm's
+// BuildSeedDisk) are both supported, same as fcvmm.
+package chvmm
 
 import (
 	"context"
@@ -48,18 +46,13 @@ import (
 var _ vmm.VMM = (*Manager)(nil)
 
 const (
-	// defaultBootArgs mirrors fcvmm's, with one real difference: QEMU has
-	// no equivalent of Firecracker's is_root_device flag auto-injecting
-	// `root=/dev/vda` into the kernel cmdline, so it must be spelled out
-	// here explicitly. No `pci=off` either -- unlike Firecracker, this
-	// driver's machine type (q35) has a real PCI bus, and disabling PCI
-	// probing would also take virtio-blk/virtio-net's PCI transport down
-	// with it.
+	// defaultBootArgs mirrors fcvmm's/the old qemuvmm's: cloud-hypervisor's
+	// virtio-blk root disk shows up as /dev/vda, same convention.
 	defaultBootArgs = "console=ttyS0 reboot=k panic=1 root=/dev/vda rw init=/init"
 
 	// bootGracePeriod: see fcvmm's identical constant -- same reasoning,
-	// just for QEMU's own set of instant-exit failure modes (missing
-	// binary, bad /dev/kvm permissions, a kernel image QEMU's direct-boot
+	// just for cloud-hypervisor's own set of instant-exit failure modes
+	// (missing binary, bad /dev/kvm permissions, a kernel image its PVH
 	// loader rejects).
 	bootGracePeriod = 500 * time.Millisecond
 
@@ -72,22 +65,22 @@ const (
 type BootSpec = vmm.BootSpec
 type NetIface = vmm.NetIface
 
-// Manager tracks the QEMU processes this compute-agent has booted. One
-// Manager per compute-agent process.
+// Manager tracks the cloud-hypervisor processes this compute-agent has
+// booted. One Manager per compute-agent process.
 type Manager struct {
-	// BinPath is the qemu-system binary to exec. Defaults to
-	// "qemu-system-x86_64" (resolved via $PATH) if empty.
+	// BinPath is the cloud-hypervisor binary to exec. Defaults to
+	// "cloud-hypervisor" (resolved via $PATH) if empty.
 	BinPath string
 	// CacheDir holds downloaded kernel/rootfs artifacts, keyed by a hash of
 	// their URL -- shared read-only across all VMs booted from the same
 	// Image. Kept separate from fcvmm's own cache dir (not because the
 	// artifacts differ -- a KERNEL_ROOTFS Image is identical either way --
 	// but so each driver's on-disk state stays independently inspectable.
-	// Defaults to /var/lib/kyuusha/qemu-cache.
+	// Defaults to /var/lib/kyuusha/ch-cache.
 	CacheDir string
 	// RunDir holds one subdirectory per running VM (its writable rootfs
 	// copy, console log, and cloud-init seed disk if any). Defaults to
-	// /var/lib/kyuusha/qemu-run.
+	// /var/lib/kyuusha/ch-run.
 	RunDir string
 	// StorageConnections is this host's declared set of storage
 	// connections (see internal/compute-agent/volumeref), the same value
@@ -105,9 +98,10 @@ type Manager struct {
 // runningVM tracks what Boot did for one VM, so Stop (and the exit-watch
 // goroutine Boot starts) can tear all of it down: the process itself, and
 // every tap device Wire created for it. No Volume-side bookkeeping needed
-// here (unlike fcvmm's runningVM): QEMU opens a Volume's already-visible
-// device/file path directly via -drive, with no jail to place it into and
-// so nothing of this driver's own left to unwind at teardown.
+// here (unlike fcvmm's runningVM): cloud-hypervisor opens a Volume's
+// already-visible device/file path directly via --disk, with no jail to
+// place it into and so nothing of this driver's own left to unwind at
+// teardown.
 type runningVM struct {
 	cmd  *exec.Cmd
 	taps []string
@@ -122,78 +116,79 @@ func (m *Manager) binPath() string {
 	if m.BinPath != "" {
 		return m.BinPath
 	}
-	return "qemu-system-x86_64"
+	return "cloud-hypervisor"
 }
 
 func (m *Manager) cacheDir() string {
 	if m.CacheDir != "" {
 		return m.CacheDir
 	}
-	return "/var/lib/kyuusha/qemu-cache"
+	return "/var/lib/kyuusha/ch-cache"
 }
 
 func (m *Manager) runDir() string {
 	if m.RunDir != "" {
 		return m.RunDir
 	}
-	return "/var/lib/kyuusha/qemu-run"
+	return "/var/lib/kyuusha/ch-run"
 }
 
-// ConsoleLogPath is where Boot(vmID's spec) captures QEMU's stdout/stderr
-// (== the guest's serial console, ttyS0, via -serial stdio below) -- see
-// docs/specs/qemu-boot.md. It exists only once Boot has actually run for
-// this vmID.
+// ConsoleLogPath is where Boot(vmID's spec) captures cloud-hypervisor's
+// stdout/stderr (== the guest's serial console, ttyS0, via --serial tty
+// below) -- see docs/specs/cloud-hypervisor-boot.md. It exists only once
+// Boot has actually run for this vmID.
 func (m *Manager) ConsoleLogPath(vmID string) string {
 	return filepath.Join(m.runDir(), vmID, "console.log")
 }
 
 // Boot fetches (or reuses cached copies of) spec's kernel/rootfs, gives the
-// VM its own writable rootfs copy and run directory, and starts QEMU
-// against them. It returns once QEMU has either exited immediately (an
-// error) or stayed up past bootGracePeriod (success) -- see that
-// constant's doc for exactly what "success" does and doesn't mean.
+// VM its own writable rootfs copy and run directory, and starts
+// cloud-hypervisor against them. It returns once cloud-hypervisor has
+// either exited immediately (an error) or stayed up past bootGracePeriod
+// (success) -- see that constant's doc for exactly what "success" does and
+// doesn't mean.
 func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume, error) {
 	if err := os.MkdirAll(m.cacheDir(), 0o755); err != nil {
-		return nil, fmt.Errorf("qemuvmm: create cache dir: %w", err)
+		return nil, fmt.Errorf("chvmm: create cache dir: %w", err)
 	}
 	kernelPath, err := m.ensureCached(ctx, spec.KernelURL)
 	if err != nil {
-		return nil, fmt.Errorf("qemuvmm: fetch kernel: %w", err)
+		return nil, fmt.Errorf("chvmm: fetch kernel: %w", err)
 	}
 	masterRootfs, err := m.ensureCached(ctx, spec.RootfsURL)
 	if err != nil {
-		return nil, fmt.Errorf("qemuvmm: fetch rootfs: %w", err)
+		return nil, fmt.Errorf("chvmm: fetch rootfs: %w", err)
 	}
 
 	vmDir := filepath.Join(m.runDir(), spec.VMID)
 	if err := os.MkdirAll(vmDir, 0o755); err != nil {
-		return nil, fmt.Errorf("qemuvmm: create run dir: %w", err)
+		return nil, fmt.Errorf("chvmm: create run dir: %w", err)
 	}
 
-	// QEMU's virtio-blk backend opens the drive read-write and writes guest
-	// changes straight into the backing file, so every VM needs its own
-	// copy -- the cached master is shared read-only across VMs booted from
-	// the same Image. If this vm_id already has one (a Start after Stop,
-	// see docs/architecture.md's VM lifecycle: Stop never removes vmDir --
-	// only Destroy does, called from Delete, not from here), reuse it as-is
-	// instead of recopying from the Image, so the guest's own writes since
-	// its last boot survive the restart.
+	// cloud-hypervisor's virtio-blk backend opens the drive read-write and
+	// writes guest changes straight into the backing file, so every VM
+	// needs its own copy -- the cached master is shared read-only across
+	// VMs booted from the same Image. If this vm_id already has one (a
+	// Start after Stop, see docs/architecture.md's VM lifecycle: Stop never
+	// removes vmDir -- only Destroy does, called from Delete, not from
+	// here), reuse it as-is instead of recopying from the Image, so the
+	// guest's own writes since its last boot survive the restart.
 	rootfsCopy := filepath.Join(vmDir, "rootfs.raw")
 	if _, err := os.Stat(rootfsCopy); err != nil {
 		if err := copyFile(masterRootfs, rootfsCopy); err != nil {
-			return nil, fmt.Errorf("qemuvmm: copy rootfs: %w", err)
+			return nil, fmt.Errorf("chvmm: copy rootfs: %w", err)
 		}
 	}
 
-	// Wire every real network interface before QEMU starts (it opens each
-	// tap by name at boot, so it must already exist) -- same
+	// Wire every real network interface before cloud-hypervisor starts (it
+	// opens each tap by name at boot, so it must already exist) -- same
 	// internal/compute-agent/netsetup this VM's counterpart under fcvmm
 	// uses; a tap device works identically regardless of which VMM process
 	// ends up attached to it. On a failure partway through, unwire whatever
 	// this call already created rather than leaking tap devices for a VM
 	// that never boots.
 	var netArgs []string
-	var qemuNetArgs []string
+	var chNetArgs []string
 	var taps []string
 	var attached []vmm.AttachedVolume
 	cleanup := func() {
@@ -211,14 +206,10 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		})
 		if err != nil {
 			cleanup()
-			return nil, fmt.Errorf("qemuvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
+			return nil, fmt.Errorf("chvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
 		}
 		taps = append(taps, wired.TapName)
-		netdevID := fmt.Sprintf("net%d", i)
-		qemuNetArgs = append(qemuNetArgs,
-			"-netdev", fmt.Sprintf("tap,id=%s,ifname=%s,script=no,downscript=no", netdevID, wired.TapName),
-			"-device", fmt.Sprintf("virtio-net-pci,netdev=%s,mac=%s", netdevID, wired.MACAddress),
-		)
+		chNetArgs = append(chNetArgs, "--net", fmt.Sprintf("tap=%s,mac=%s", wired.TapName, wired.MACAddress))
 		// kyuusha.net.<i>.* is not a real kernel parameter: it's parsed by
 		// the guest's own /init (docker/fc-guest-init.sh), exactly like
 		// fcvmm's identical convention -- see docs/specs/network.md.
@@ -239,66 +230,58 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		bootArgs = bootArgs + " " + strings.Join(netArgs, " ")
 	}
 
-	driveArgs := []string{"-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", rootfsCopy)}
+	diskArgs := []string{"--disk", fmt.Sprintf("path=%s", rootfsCopy)}
 	if spec.UserData != "" {
 		seedImg, err := vmm.BuildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
 		if err != nil {
 			cleanup()
-			return nil, fmt.Errorf("qemuvmm: build seed disk: %w", err)
+			return nil, fmt.Errorf("chvmm: build seed disk: %w", err)
 		}
 		// Read-only, non-root: the guest sees this as a second virtio-blk
 		// device (typically /dev/vdb) alongside its root disk, exactly what
 		// cloud-init's NoCloud datasource expects -- same as fcvmm's seed
 		// drive.
-		driveArgs = append(driveArgs, "-drive", fmt.Sprintf("file=%s,format=raw,if=virtio,readonly=on", seedImg))
+		diskArgs = append(diskArgs, "--disk", fmt.Sprintf("path=%s,readonly=on", seedImg))
 	}
 
-	// Discover every already-visible Volume before QEMU starts -- same
-	// reasoning as taps, see internal/compute-agent/volumeref and
+	// Discover every already-visible Volume before cloud-hypervisor starts
+	// -- same reasoning as taps, see internal/compute-agent/volumeref and
 	// docs/specs/volume.md. Each becomes its own read-write virtio-blk
 	// drive alongside rootfs/seed, referenced by its real path directly:
-	// unlike fcvmm, there's no jail here for the path to need placing into.
+	// no jail here for the path to need placing into.
 	for i, v := range spec.Volumes {
 		devPath, sizeBytes, err := volumeref.Resolve(m.StorageConnections, v.Protocol, v.StorageConnection, v.Identifier)
 		if err != nil {
 			cleanup()
-			return nil, fmt.Errorf("qemuvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
+			return nil, fmt.Errorf("chvmm: resolve volume %d (%s): %w", i, v.AttachmentID, err)
 		}
 		vmm.WarnIfSizeMismatch(v, sizeBytes)
 		attached = append(attached, vmm.AttachedVolume{AttachmentID: v.AttachmentID, TenantID: v.TenantID, DevicePath: devPath})
-		driveArgs = append(driveArgs, "-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", devPath))
+		diskArgs = append(diskArgs, "--disk", fmt.Sprintf("path=%s", devPath))
 	}
 
 	consoleLog, err := os.Create(filepath.Join(vmDir, "console.log"))
 	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("qemuvmm: create console log: %w", err)
+		return nil, fmt.Errorf("chvmm: create console log: %w", err)
 	}
 	defer consoleLog.Close()
 
 	args := []string{
-		// q35: a real PCIe machine, deliberately not the minimal `microvm`
-		// type QEMU also offers -- microvm has no PCI bus at all, which
-		// would rule out VFIO/PCI passthrough later (see package doc).
-		"-M", "q35",
-		"-enable-kvm",
-		"-cpu", "host",
-		"-smp", fmt.Sprintf("%d", spec.VCPU),
-		"-m", fmt.Sprintf("%dM", spec.MemoryMB),
-		"-kernel", kernelPath,
-		"-append", bootArgs,
-		// No firmware/BIOS boot chain, no monitor, no default devices
-		// (default VGA/parallel/floppy/etc.) -- ttyS0 is the only I/O
-		// surface, exactly like fcvmm's console.log contract: QEMU's own
-		// stdout/stderr (below) becomes both the guest serial console and
-		// wherever QEMU's own startup errors land, in one file.
-		"-display", "none",
-		"-serial", "stdio",
-		"-monitor", "none",
-		"-nodefaults",
+		"--kernel", kernelPath,
+		"--cmdline", bootArgs,
+		"--cpus", fmt.Sprintf("boot=%d", spec.VCPU),
+		"--memory", fmt.Sprintf("size=%dM", spec.MemoryMB),
+		// tty: writes straight to this process's own stdout/stderr (below),
+		// same "console.log doubles as both the guest serial console and
+		// wherever cloud-hypervisor's own startup errors land" contract as
+		// fcvmm/the old qemuvmm's console.log. console=off: no second,
+		// non-serial virtio-console device -- ttyS0 is the only I/O surface.
+		"--serial", "tty",
+		"--console", "off",
 	}
-	args = append(args, driveArgs...)
-	args = append(args, qemuNetArgs...)
+	args = append(args, diskArgs...)
+	args = append(args, chNetArgs...)
 
 	// Not exec.CommandContext(ctx, ...): ctx here is the NATS message
 	// handler's context, which is done long before this VM's guest is --
@@ -309,14 +292,14 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	cmd.Stderr = consoleLog
 	if err := cmd.Start(); err != nil {
 		cleanup()
-		return nil, fmt.Errorf("qemuvmm: start qemu: %w", err)
+		return nil, fmt.Errorf("chvmm: start cloud-hypervisor: %w", err)
 	}
 
 	// Best-effort: a host/container without usable cgroup v2 delegation just
 	// boots this VM unconstrained -- see internal/compute-agent/cgroup's doc
 	// comment.
 	if err := cgroup.Apply(spec.VMID, spec.VCPU, spec.MemoryMB, cmd.Process.Pid); err != nil {
-		slog.Warn("qemuvmm: cgroup limits not applied, VM will boot unconstrained", "vm_id", spec.VMID, "err", err)
+		slog.Warn("chvmm: cgroup limits not applied, VM will boot unconstrained", "vm_id", spec.VMID, "err", err)
 	}
 
 	exitCh := make(chan error, 1)
@@ -326,9 +309,9 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	case err := <-exitCh:
 		cleanup()
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
-			slog.Warn("qemuvmm: removing cgroup after immediate exit", "vm_id", spec.VMID, "err", rmErr)
+			slog.Warn("chvmm: removing cgroup after immediate exit", "vm_id", spec.VMID, "err", rmErr)
 		}
-		return nil, fmt.Errorf("qemuvmm: qemu exited immediately (see %s): %w", consoleLog.Name(), err)
+		return nil, fmt.Errorf("chvmm: cloud-hypervisor exited immediately (see %s): %w", consoleLog.Name(), err)
 	case <-time.After(bootGracePeriod):
 	}
 
@@ -347,12 +330,12 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		m.mu.Unlock()
 		cleanup()
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
-			slog.Warn("qemuvmm: removing cgroup", "vm_id", spec.VMID, "err", rmErr)
+			slog.Warn("chvmm: removing cgroup", "vm_id", spec.VMID, "err", rmErr)
 		}
 		if err != nil {
-			slog.Warn("qemuvmm: qemu process exited", "vm_id", spec.VMID, "err", err)
+			slog.Warn("chvmm: cloud-hypervisor process exited", "vm_id", spec.VMID, "err", err)
 		} else {
-			slog.Info("qemuvmm: qemu process exited", "vm_id", spec.VMID)
+			slog.Info("chvmm: cloud-hypervisor process exited", "vm_id", spec.VMID)
 		}
 		close(rv.done)
 	}()
@@ -360,12 +343,12 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	return attached, nil
 }
 
-// Stop tears down vmID's QEMU process if one is running, blocking until it
-// has actually exited -- see vmm.VMM's doc comment for why this must be
-// synchronous, and fcvmm's identical Stop for the same reasoning. A no-op if
-// this compute-agent never booted a real process for it (a VM some other
-// driver booted, or one that already exited). Does not touch the VM's run
-// directory (its root disk) -- see Destroy.
+// Stop tears down vmID's cloud-hypervisor process if one is running,
+// blocking until it has actually exited -- see vmm.VMM's doc comment for
+// why this must be synchronous, and fcvmm's identical Stop for the same
+// reasoning. A no-op if this compute-agent never booted a real process for
+// it (a VM some other driver booted, or one that already exited). Does not
+// touch the VM's run directory (its root disk) -- see Destroy.
 func (m *Manager) Stop(vmID string, force bool) {
 	m.mu.Lock()
 	rv, ok := m.running[vmID]
@@ -395,7 +378,7 @@ func (m *Manager) Stop(vmID string, force bool) {
 func (m *Manager) Destroy(vmID string) {
 	m.Stop(vmID, true)
 	if err := os.RemoveAll(filepath.Join(m.runDir(), vmID)); err != nil {
-		slog.Warn("qemuvmm: destroy: remove run dir failed", "vm_id", vmID, "err", err)
+		slog.Warn("chvmm: destroy: remove run dir failed", "vm_id", vmID, "err", err)
 	}
 }
 

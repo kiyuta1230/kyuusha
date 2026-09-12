@@ -158,7 +158,7 @@ func vmCreate(args []string) {
 	vcpu := fs.Int("vcpu", 1, "vCPU count")
 	memoryMB := fs.Int64("memory-mb", 1024, "memory in MB")
 	recovery := fs.String("recovery-policy", "none", "none|self-heal")
-	driverHint := fs.String("driver-hint", "", "VMM driver: firecracker|qemu (empty: server default, FIRECRACKER). Must match the Image's format -- KERNEL_ROOTFS accepts either, QCOW2 requires qemu; see docs/specs/image.md")
+	driverHint := fs.String("driver-hint", "", "VMM driver: firecracker|cloud-hypervisor (empty: server default, FIRECRACKER). Must match the Image's format -- KERNEL_ROOTFS accepts either, QCOW2 requires cloud-hypervisor; see docs/specs/image.md")
 	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
 	volumes := fs.String("volumes", "", "comma-separated Volume IDs to attach at boot (see docs/specs/volume.md; attach-before-boot only -- a Volume added after the VM is already Running is not attached)")
 	userDataFile := fs.String("user-data-file", "", "path to a cloud-init user-data file (NoCloud seed disk; see docs/architecture.md \"UserData注入\"); empty means don't inject anything")
@@ -618,14 +618,15 @@ func parseVmmDriver(s string) computev1.VmmDriver {
 		return computev1.VmmDriver_VMM_DRIVER_UNSPECIFIED
 	case "firecracker":
 		return computev1.VmmDriver_VMM_DRIVER_FIRECRACKER
-	case "qemu":
-		return computev1.VmmDriver_VMM_DRIVER_QEMU
+	case "cloud-hypervisor":
+		return computev1.VmmDriver_VMM_DRIVER_CLOUD_HYPERVISOR
 	default:
 		// Fatal, not a silent fallback: unlike -recovery-policy, silently
-		// defaulting an unrecognized value here (e.g. a typo'd "QEMU") would
-		// pick a different, working driver rather than obviously failing --
-		// a KERNEL_ROOTFS Image accepts either, so nothing would complain.
-		fatal("-driver-hint: unrecognized %q, want firecracker|qemu", s)
+		// defaulting an unrecognized value here (e.g. a typo'd
+		// "CLOUD-HYPERVISOR") would pick a different, working driver rather
+		// than obviously failing -- a KERNEL_ROOTFS Image accepts either, so
+		// nothing would complain.
+		fatal("-driver-hint: unrecognized %q, want firecracker|cloud-hypervisor", s)
 		return computev1.VmmDriver_VMM_DRIVER_UNSPECIFIED
 	}
 }

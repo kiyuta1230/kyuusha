@@ -83,11 +83,11 @@ const (
 // Image resolved to concrete boot inputs at publish time (see
 // reconciler.go's PhaseScheduled branch): compute-agent has no image
 // service client of its own, so everything it needs to actually boot the
-// VM (via whichever of internal/compute-agent/fcvmm or .../qemuvmm
+// VM (via whichever of internal/compute-agent/fcvmm or .../chvmm
 // driver_hint selects) travels in this one message. KernelURL/RootfsURL
 // are empty for a QCOW2 Image (no driver consumes that format yet -- see
-// docs/specs/qemu-boot.md), in which case compute-agent stub-succeeds as
-// before.
+// docs/specs/cloud-hypervisor-boot.md), in which case compute-agent
+// stub-succeeds as before.
 type CreateCommand struct {
 	VMID       string `json:"vm_id"`
 	TenantID   string `json:"tenant_id"`

@@ -85,7 +85,7 @@ func startHypervisorService(t *testing.T, svc *compute.Service, bootstrapTokenPu
 // (schedules onto a self-registered Hypervisor, publishes
 // ms.compute.cmd.*.vm.create) -> compute-agent (stub-creates, publishes
 // ms.compute.evt.*.vm.create-result) -> Reconciler marks the VM Running. No
-// Firecracker/QEMU involved yet.
+// Firecracker/cloud-hypervisor involved yet.
 func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

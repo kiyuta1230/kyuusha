@@ -1,8 +1,9 @@
 // Command compute-agent runs the NATS side of compute-agent: it accepts
 // vm.create/vm.delete commands and boots real VMM processes -- Firecracker
 // for driver_hint=FIRECRACKER (internal/compute-agent/fcvmm,
-// docs/specs/firecracker-boot.md) and QEMU for driver_hint=QEMU
-// (internal/compute-agent/qemuvmm, docs/specs/qemu-boot.md).
+// docs/specs/firecracker-boot.md) and cloud-hypervisor for
+// driver_hint=CLOUD_HYPERVISOR (internal/compute-agent/chvmm,
+// docs/specs/cloud-hypervisor-boot.md).
 package main
 
 import (
@@ -24,8 +25,8 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/compute"
 	computeagent "github.com/kiyuta1230/kyuusha/internal/compute-agent"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/chvmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/fcvmm"
-	"github.com/kiyuta1230/kyuusha/internal/compute-agent/qemuvmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
 	"github.com/kiyuta1230/kyuusha/internal/mtls"
@@ -41,7 +42,7 @@ func main() {
 	bootstrapTokenFile := flag.String("bootstrap-token-file", "", "path to a zone-scoped bootstrap token (required; see 'kyuusha hypervisor bootstrap-token create'). Its zone claim, not any locally-configured value, becomes this Hypervisor's zone")
 	vcpu := flag.Int("vcpu", 8, "allocatable vCPU capacity to report")
 	memoryMB := flag.Int64("memory-mb", 16384, "allocatable memory capacity to report, in MB")
-	drivers := flag.String("drivers", "FIRECRACKER", "comma-separated VMM drivers this hypervisor supports (FIRECRACKER|QEMU)")
+	drivers := flag.String("drivers", "FIRECRACKER", "comma-separated VMM drivers this hypervisor supports (FIRECRACKER|CLOUD_HYPERVISOR)")
 	heartbeat := flag.Duration("heartbeat", 5*time.Second, "heartbeat interval")
 	metricsAddr := flag.String("metrics-addr", ":9094", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
@@ -52,9 +53,9 @@ func main() {
 	fcJailChrootBaseDir := flag.String("fc-jail-chroot-base-dir", "/var/lib/kyuusha/fc-jail", "jailer's --chroot-base-dir: parent of <exec-file-basename>/<vm_id>/root for every VM's jail")
 	fcJailUID := flag.Uint("fc-jail-uid", 123, "uid jailer drops privileges to before exec'ing Firecracker inside its jail -- shared by every VM this compute-agent boots (see the fcvmm package doc comment)")
 	fcJailGID := flag.Uint("fc-jail-gid", 100, "gid jailer drops privileges to before exec'ing Firecracker inside its jail -- shared by every VM this compute-agent boots (see the fcvmm package doc comment)")
-	qemuBin := flag.String("qemu-bin", "qemu-system-x86_64", "qemu-system binary to exec for driver_hint=QEMU VMs (see internal/compute-agent/qemuvmm)")
-	qemuCacheDir := flag.String("qemu-cache-dir", "/var/lib/kyuusha/qemu-cache", "directory caching downloaded kernel/rootfs artifacts for driver_hint=QEMU VMs")
-	qemuRunDir := flag.String("qemu-run-dir", "/var/lib/kyuusha/qemu-run", "directory holding each running driver_hint=QEMU VM's writable rootfs copy and console log")
+	chBin := flag.String("ch-bin", "cloud-hypervisor", "cloud-hypervisor binary to exec for driver_hint=CLOUD_HYPERVISOR VMs (see internal/compute-agent/chvmm)")
+	chCacheDir := flag.String("ch-cache-dir", "/var/lib/kyuusha/ch-cache", "directory caching downloaded kernel/rootfs artifacts for driver_hint=CLOUD_HYPERVISOR VMs")
+	chRunDir := flag.String("ch-run-dir", "/var/lib/kyuusha/ch-run", "directory holding each running driver_hint=CLOUD_HYPERVISOR VM's writable rootfs copy and console log")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented when dialing compute (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
@@ -180,10 +181,10 @@ func main() {
 				JailGID:            uint32(*fcJailGID),
 				StorageConnections: connections,
 			},
-			string(compute.VmmDriverQEMU): &qemuvmm.Manager{
-				BinPath:            *qemuBin,
-				CacheDir:           *qemuCacheDir,
-				RunDir:             *qemuRunDir,
+			string(compute.VmmDriverCloudHypervisor): &chvmm.Manager{
+				BinPath:            *chBin,
+				CacheDir:           *chCacheDir,
+				RunDir:             *chRunDir,
 				StorageConnections: connections,
 			},
 		},
@@ -197,7 +198,7 @@ func main() {
 
 // parseStorageConnections turns -storage-connections' name[:local_path]
 // entries into both forms this compute-agent needs: a local
-// volumeref.Connections map (consumed by fcvmm/qemuvmm's Managers at VM
+// volumeref.Connections map (consumed by fcvmm/chvmm's Managers at VM
 // boot time, and by handleVerifyVolume to answer block-storage) and the
 // []*computev1.StorageConnection this same information travels as in
 // RegisterHypervisorRequest. Both are built from a single flag value,

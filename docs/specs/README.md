@@ -13,7 +13,7 @@
 - [Image](image.md)
 - [VirtualMachine](virtual-machine.md)
 - [Firecracker起動](firecracker-boot.md)
-- [QEMU起動](qemu-boot.md)
+- [cloud-hypervisor起動](cloud-hypervisor-boot.md)
 - [network](network.md)
 - [Volume](volume.md)
 - [外部システム連携](external-integration.md)

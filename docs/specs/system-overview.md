@@ -16,7 +16,7 @@ kyuusha自体の構成要素ではない。それらのエンドポイント・d
 | `network` | Subnet・NetworkInterfaceを管理するCRUD+Watchサービス（[network仕様](network.md)参照）。VLAN ID/IPアドレスの払い出し（IPAM）は実装済み |
 | `block-storage` | Volume・VolumeAttachmentを管理するCRUD+Watchサービス（[Volume仕様](volume.md)参照）。Quota（max_volume_gb）強制と、同一Volumeへの二重アタッチを防ぐ排他制御は実装済み。ボリュームの作成/削除やHypervisor側の接続確立は一切行わない——既存の（iSCSI/NVMe-oF/NFSで到達可能な）ボリュームを参照するだけ（[Volume仕様](volume.md)「概要」参照） |
 | `compute` | VirtualMachine・Hypervisorを管理するサービス。スケジューラ（zoneフィルタ含む）、Quota強制、Image/NetworkInterface/Volume検証（identity/image/network/block-storageへの同期参照）、compute-agentとのNATSやり取りを持つ。`-volumes`で指定したVolumeAttachmentの作成・起動コマンドへの連携も実装済み |
-| `compute-agent` | 各ハイパーバイザー上で動くagent。起動時にcomputeへ自己登録し、NATS経由でVM作成/削除コマンドを受けて処理する。`driver_hint=FIRECRACKER`/`QEMU`どちらも実際にVMを起動する（[Firecracker起動仕様](firecracker-boot.md)/[QEMU起動仕様](qemu-boot.md)参照）。`network_interfaces`を持つVMには実タップデバイス+ローカルブリッジも配線する（同一Hypervisor内のみ、[network仕様](network.md)参照） |
+| `compute-agent` | 各ハイパーバイザー上で動くagent。起動時にcomputeへ自己登録し、NATS経由でVM作成/削除コマンドを受けて処理する。`driver_hint=FIRECRACKER`/`CLOUD_HYPERVISOR`どちらも実際にVMを起動する（[Firecracker起動仕様](firecracker-boot.md)/[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照）。`network_interfaces`を持つVMには実タップデバイス+ローカルブリッジも配線する（同一Hypervisor内のみ、[network仕様](network.md)参照） |
 | `NATS (JetStream)` | compute ↔ compute-agent間の非同期コマンド/イベントバス |
 
 未実装のコンポーネント（設計のみ）: Dragonfly。

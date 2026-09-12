@@ -2,7 +2,8 @@
 // exchange described in docs/architecture.md. It dispatches each
 // CreateCommand to whichever VMM driver (internal/compute-agent/vmm.VMM)
 // is registered under its driver_hint -- see docs/specs/firecracker-boot.md
-// (FIRECRACKER) and docs/specs/qemu-boot.md (QEMU). A driver_hint with no
+// (FIRECRACKER) and docs/specs/cloud-hypervisor-boot.md (CLOUD_HYPERVISOR).
+// A driver_hint with no
 // registered driver, or one missing its artifact URLs (shouldn't happen
 // given compute's own validation, but handled defensively), stub-succeeds
 // as before this package had any real VMM integration.
@@ -72,7 +73,7 @@ type Agent struct {
 	LocalStorageConnections volumeref.Connections
 
 	// Drivers boots/tears down VMs, keyed by driver_hint (e.g.
-	// string(compute.VmmDriverFirecracker), string(compute.VmmDriverQEMU)).
+	// string(compute.VmmDriverFirecracker), string(compute.VmmDriverCloudHypervisor)).
 	// cmd/compute-agent/main.go always populates both in production;
 	// handleCreate falls back to the old stub behavior for a driver_hint
 	// with no entry (or a nil map), so tests that don't set this keep

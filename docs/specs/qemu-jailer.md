@@ -1,9 +1,23 @@
-# QEMU用jailer設計（2026-09-12決定）
+# QEMU用jailer設計（2026-09-12決定、同日中に丸ごと撤回）
+
+> **注（2026-09-12、同日中）**: このドキュメント全体が前提としていた
+> `driver_hint=CLOUD_HYPERVISOR`(旧`QEMU`)ドライバが**実QEMUを直接execする
+> 実装であること自体**が、同じ日のうちに撤回された——実qemu-system-x86_64が
+> 約30個の共有ライブラリとレガシーPCファームウェア資産をchroot内に必要とする
+> ことが判明し、「そもそもQEMUである必要があるのか」を再検討した結果、
+> Firecrackerと同じrust-vmm系統の[cloud-hypervisor](https://www.cloudhypervisor.org/)
+> へドライバごと置き換えた（静的バイナリ、BIOS不要、seccomp内蔵——外部jailerが
+> 実質不要になった）。このためminijail/nsjail統合という**このドキュメントの
+> 設計自体がまるごと不要**になっている。詳細は
+> [cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)「QEMUからcloud-hypervisorへの
+> 置き換え」を参照。本文は当日の検討過程の記録として残す（`chvmm`への
+> パッケージ名の言及は当時qemuvmmから改名した際の機械的な置換の名残であり、
+> 実装内容自体はもう存在しない）。
 
 ## 概要
 
-`driver_hint=QEMU`（[QEMU起動仕様](qemu-boot.md)）で起動するVMは、現状
-`internal/compute-agent/qemuvmm`が`qemu-system-x86_64`を直接execしているだけで、
+`driver_hint=QEMU`（[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)）で起動するVMは、現状
+`internal/compute-agent/chvmm`が`qemu-system-x86_64`を直接execしているだけで、
 chrootもuid/gid権限降格もseccompも無い。compute-agentコンテナ自体が特権コンテナ
 （`/dev/kvm`、`NET_ADMIN`、privileged）なので、QEMUプロセス自身もroot・無隔離の
 まま動いている。
@@ -75,12 +89,12 @@ QEMU側に同等以上の隔離を持たせるための設計であり、2026-09
 
 ## kyuusha側の実装イメージ
 
-- `internal/compute-agent/qemuvmm/jail_stage.go`（新規）: `fcvmm/jailer.go`の
+- `internal/compute-agent/chvmm/jail_stage.go`（新規）: `fcvmm/jailer.go`の
   5関数（`resolveExecPath`、`jailChrootDir`、`placeReadOnlyResource`、
   `placeWritableResource`、`mknodDeviceLike`、`placeVolumeLike`）をQEMU側にも
   流用・一般化して複製する（Firecracker固有の命名を外すのみ、大きな設計変更は
   不要——実装コストは低い）。
-- `qemuvmm/manager.go`の`Boot()`内、現在`exec.Command(m.binPath(), args...)`で
+- `chvmm/manager.go`の`Boot()`内、現在`exec.Command(m.binPath(), args...)`で
   QEMUを直接execしている箇所を、`exec.Command("minijail0", jailArgs...)`経由に
   変更する（`fcvmm/manager.go`がjailerバイナリを呼んでいる形と対称的）。
 - 具体的なminijail0フラグ例: `-u <uid> -g <gid> -C <chroot> --seccomp_policy_file

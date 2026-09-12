@@ -9,7 +9,7 @@ kyuusha自体はイメージのバイト列を一切コピー・保管しない�
 
 | フィールド | 説明 |
 |---|---|
-| `spec.format` | `KERNEL_ROOTFS`（カーネル+rootfsペア、直接カーネルブート。FIRECRACKER/QEMUどちらの`driver_hint`でも使える——下記参照） / `QCOW2`（自己完結・ブートローダー内蔵ディスク、QEMU専用。まだどのドライバも消費しない） |
+| `spec.format` | `KERNEL_ROOTFS`（カーネル+rootfsペア、直接カーネルブート。FIRECRACKER/CLOUD_HYPERVISORどちらの`driver_hint`でも使える——下記参照） / `QCOW2`（自己完結・ブートローダー内蔵ディスク、CLOUD_HYPERVISOR専用。まだどのドライバも消費しない） |
 | `spec.kernel` / `spec.rootfs` | `{url, digest}`。`KERNEL_ROOTFS`時のみ必須 |
 | `spec.disk` | `{url, digest}`。`QCOW2`時のみ必須 |
 | `spec.boot_args` | 直接カーネルブート時の起動引数 |
@@ -53,9 +53,9 @@ sequenceDiagram
 1. `image_id`でImageをGet。存在しなければ`ErrValidation`
 2. `status.phase != Ready`なら`ErrValidation`（Pending/ErrorのImageからVMは作れない）
 3. `spec.format`と`VirtualMachineSpec.driver_hint`の対応チェック:
-   `KERNEL_ROOTFS`は`FIRECRACKER`・`QEMU`どちらでも可（同じkernel+rootfsを、
-   [Firecracker起動仕様](firecracker-boot.md)/[QEMU起動仕様](qemu-boot.md)それぞれが
-   自分の直接カーネルブート機構で起動する）、`QCOW2`は`QEMU`必須。不一致なら
+   `KERNEL_ROOTFS`は`FIRECRACKER`・`CLOUD_HYPERVISOR`どちらでも可（同じkernel+rootfsを、
+   [Firecracker起動仕様](firecracker-boot.md)/[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)それぞれが
+   自分の直接カーネルブート機構で起動する）、`QCOW2`は`CLOUD_HYPERVISOR`必須。不一致なら
    `ErrValidation`（フォーマットの自動変換はしない）
 
 いずれも同期的なCreate時拒否で、Quotaと同じ「doomedなVirtualMachineを作ってからErrorにしない」

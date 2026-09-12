@@ -159,7 +159,7 @@ message VolumeRequest {
 enum VmmDriver {
   VMM_DRIVER_UNSPECIFIED = 0; // FIRECRACKERとして扱う
   FIRECRACKER = 1;
-  QEMU = 2;
+  CLOUD_HYPERVISOR = 2; // 2026-09-12までQEMU。実装の変遷はdocs/specs/cloud-hypervisor-boot.md参照
 }
 
 message PciDeviceRequest {
@@ -177,8 +177,8 @@ message VirtualMachineSpec {
   RecoveryPolicy recovery_policy = 6; // UNSPECIFIEDはCreate時にエラー(デフォルト値での暗黙運用をさせない)
   bool persistent_root_disk = 7;      // trueならルートディスクもVolumeとして扱い、再作成時に再アタッチする
   string user_data = 8;               // cloud-init user-data(YAML)。空なら注入しない。実用上64KB程度が目安の上限
-  VmmDriver driver_hint = 9;          // 未指定ならFIRECRACKER。I/O性能やPCIパススルーが要るならQEMUを明示指定
-  repeated PciDeviceRequest pci_devices = 10; // GPU/SR-IOV NIC等。QEMU driver_hint時のみ有効
+  VmmDriver driver_hint = 9;          // 未指定ならFIRECRACKER。I/O性能やPCIパススルーが要るならCLOUD_HYPERVISORを明示指定
+  repeated PciDeviceRequest pci_devices = 10; // GPU/SR-IOV NIC等。CLOUD_HYPERVISOR driver_hint時のみ有効
 }
 
 message VirtualMachineStatus {
@@ -340,7 +340,7 @@ message HypervisorStatus {
   int64  allocatable_memory_mb = 5;
   int32  allocated_vcpu = 6;             // Scheduled以上のVirtualMachineの予約合計
   int64  allocated_memory_mb = 7;
-  repeated string supported_drivers = 8; // 例: ["firecracker", "qemu"]
+  repeated string supported_drivers = 8; // 例: ["FIRECRACKER", "CLOUD_HYPERVISOR"]
   repeated PciDevice available_devices = 9; // vfio-pci束縛済みのPCIデバイス在庫（GPU/SR-IOV NIC等）
 }
 ```
@@ -453,7 +453,7 @@ FirecrackerはQEMU(qcow2をまるごとブート)と異なり、BIOS/GRUBを持�
 enum ImageFormat {
   IMAGE_FORMAT_UNSPECIFIED = 0;
   KERNEL_ROOTFS = 1; // カーネル+rootfsのペア（直接カーネルブートする軽量VMM全般用。Firecracker固有ではない）
-  QCOW2 = 2;          // 自己完結ディスクイメージ（QEMU/libvirt用）
+  QCOW2 = 2;          // 自己完結ディスクイメージ（QEMU/libvirt/cloud-hypervisor等用）
 }
 
 message ImageArtifact {
@@ -485,9 +485,10 @@ message ImageStatus {
 ```
 
 **Create時のバリデーション**: VirtualMachineが参照する`Image.spec.format`は、`VirtualMachineSpec.driver_hint`が
-要求するVMMと対応していなければならない（`KERNEL_ROOTFS`は`FIRECRACKER`・`QEMU`どちらでも可、
-`QCOW2`は`QEMU`のみ——同じ`KERNEL_ROOTFS`資産を両ドライバがそれぞれの直接カーネルブート
-機構で起動できるため、[QEMU起動仕様](specs/qemu-boot.md)参照）。不一致ならCreate時に拒否する。
+要求するVMMと対応していなければならない（`KERNEL_ROOTFS`は`FIRECRACKER`・`CLOUD_HYPERVISOR`
+どちらでも可、`QCOW2`は`CLOUD_HYPERVISOR`のみ——同じ`KERNEL_ROOTFS`資産を両ドライバが
+それぞれの直接カーネルブート機構で起動できるため、
+[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)参照）。不一致ならCreate時に拒否する。
 フォーマット変換（自動トランスコード）は行わない。イメージの作成者（運用者、あるいはKaaS側の
 イメージビルドパイプライン）が対象driverに合った形式で公開する前提とする。
 
@@ -855,11 +856,11 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
     （VMの`status.interface_refs`/`volume_attachment_refs`は既に保持済みなので、
     NetworkInterface/VolumeAttachmentは同名で再Create＝冪等に再取得されるだけで、
     実際に新規作成はされない）
-- **Stopped→再起動はProvisioningへの再入**: Firecracker/QEMUはプロセス単位のVMMなので、Stop=プロセス終了、
-  Start=新規プロセスで同じNetworkInterface/Volume attachmentを再利用してVM作成、という扱いになる
-  （QEMUのpause/resumeのような同一プロセス継続は前提にしない。ライブマイグレーション不要判断と一貫）。
-  根本ディスク（jailer/qemuvmmが確保する書き込み可能rootfsコピー）はStopでは一切削除されず、
-  Startで再利用される（`fcvmm`/`qemuvmm`の`Boot()`が既存rootfsの有無を見て分岐）——
+- **Stopped→再起動はProvisioningへの再入**: Firecracker/cloud-hypervisorはプロセス単位のVMMなので、
+  Stop=プロセス終了、Start=新規プロセスで同じNetworkInterface/Volume attachmentを再利用して
+  VM作成、という扱いになる（同一プロセス継続は前提にしない。ライブマイグレーション不要判断と一貫）。
+  根本ディスク（jailer/chvmmが確保する書き込み可能rootfsコピー）はStopでは一切削除されず、
+  Startで再利用される（`fcvmm`/`chvmm`の`Boot()`が既存rootfsの有無を見て分岐）——
   Firecracker側は加えて、jailer自身が「既にセットアップ済みのchroot」を受け付けない
   （`/dev/net/tun`等のmknodがEEXISTで失敗する）ため、rootfsだけを外へ退避してchroot
   全体を作り直し、rootfsだけ戻す、という一手間が要る（`internal/compute-agent/fcvmm`のBoot()参照）
@@ -1153,8 +1154,9 @@ type MostAvailableFirst struct{}
 **Firecrackerは原理的にPCIパススルーができない。** virtio-pciではなくvirtio-mmioという
 最小限のデバイスモデルを採用しており、そもそもゲストにPCIバスを見せない設計（攻撃面を減らす
 ためのFirecracker自身の意図的なトレードオフ）。したがってGPU/PCIパススルーは
-**QEMU/libvirt側（VFIO）でのみ**成立し、`driver_hint: QEMU`を選ぶ既存の仕組みにそのまま乗る。
-I/O性能が必要なpet系ワークロードに続く、QEMUを選ぶ2つ目の正当な理由になる。
+**cloud-hypervisor/libvirt側（VFIO）でのみ**成立し、`driver_hint: CLOUD_HYPERVISOR`を
+選ぶ既存の仕組みにそのまま乗る。I/O性能が必要なpet系ワークロードに続く、
+cloud-hypervisorを選ぶ2つ目の正当な理由になる。
 
 `Hypervisor.status.available_devices`（vfio-pci束縛済みのPCIデバイス在庫）と`VirtualMachineSpec.pci_devices`
 （`vendor_id`/`device_id`/`count`を直接指定）は、GPUだけでなくSR-IOV NIC等にも使い回せる
@@ -1325,8 +1327,9 @@ RTに関係なく任意のAZ同士を無条件でメッシュ接続すること�
 以下は当初の設計時点の構想（`InstanceSpec`/`Instance`等、実際には存在しない型を含む
 擬似コード）。実装は結局これより薄い形に落ち着いた——compute-agent側の実際のGoインタフェースは
 `internal/compute-agent/vmm.VMM`（`Boot`/`Stop`/`ConsoleLogPath`の3メソッドのみ）で、
-Volume添付やStart/Stop（一時停止）のような、まだ要求のない操作は持たせていない
-（[Firecracker起動仕様](specs/firecracker-boot.md)/[QEMU起動仕様](specs/qemu-boot.md)参照）。
+Volume添付のような、まだ要求のない操作は持たせていない（Start/Stopは2026-09-12実装済み
+——「VirtualMachineのライフサイクル状態機械」節参照）
+（[Firecracker起動仕様](specs/firecracker-boot.md)/[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)参照）。
 
 ```go
 type HypervisorDriver interface {
@@ -1342,26 +1345,28 @@ type HypervisorDriver interface {
 
 - ライブマイグレーション不要という方針上、**Firecrackerを第一候補**とする（軽量・高速起動、KaaSハイパーバイザーの使い捨て運用に合う）
 - `libvirt`ドライバは将来的な選択肢として抽象化のみ残す（実装は後回し。実装したのは
-  libvirt経由ではなく`qemu-system-x86_64`を直接execする素朴な形——下記参照）
+  libvirt経由ではなくcloud-hypervisorを直接execする素朴な形——下記参照。当初は
+  同様に直接execする`qemu-system-x86_64`だったが、2026-09-12にcloud-hypervisorへ
+  置き換えた）
 
 ### `spec.driver_hint`によるドライバ切り替え
 
 FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが頻発するI/O負荷に対して
-QEMUより不利になる可能性がある（要ベンチマーク検証、まだ未実施）。またNUMAトポロジ露出やhugepages対応も
-QEMUほど手厚くない。`recovery_policy: SELF_HEAL`を使うpet/control-planeハイパーバイザー（etcd/PKIサーバ等）で
+不利になる可能性がある（要ベンチマーク検証、まだ未実施）。またNUMAトポロジ露出やhugepages対応も
+手厚くない。`recovery_policy: SELF_HEAL`を使うpet/control-planeハイパーバイザー（etcd/PKIサーバ等）で
 これが問題になりうるため、**全VirtualMachineにFirecrackerを強制せず、`VirtualMachineSpec.driver_hint`で
 使用するVMMドライバを選べるようにする**。
 
 - computeサービスは`driver_hint`（未指定なら`FIRECRACKER`）を見て、スケジューリング時に
   対応する`supported_drivers`を持つHypervisorへ配置する
-- **実装済み**: `FIRECRACKER`（`internal/compute-agent/fcvmm`）・`QEMU`
-  （`internal/compute-agent/qemuvmm`、libvirt経由ではなくQEMUを直接exec）の両方が実際に
-  VMを起動する。どちらも同じ`KERNEL_ROOTFS`形式のImage（カーネル+生rootfs、
-  ブートローダーなし）を、それぞれの直接カーネルブート機構で起動する——QEMU側は
+- **実装済み**: `FIRECRACKER`（`internal/compute-agent/fcvmm`）・`CLOUD_HYPERVISOR`
+  （`internal/compute-agent/chvmm`、libvirt経由ではなくcloud-hypervisorを直接exec）の
+  両方が実際にVMを起動する。どちらも同じ`KERNEL_ROOTFS`形式のImage（カーネル+生rootfs、
+  ブートローダーなし）を、それぞれの直接カーネルブート機構で起動する——
   本来可能な「ブートローダー内蔵の自己完結ディスク」（`QCOW2`）を今回あえて選ばず、
-  同じImage資産を使い回せることを優先した（[QEMU起動仕様](specs/qemu-boot.md)
+  同じImage資産を使い回せることを優先した（[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
   「起動方式」参照。この選択の対価としてWindows等の非Linuxゲストは現状サポート外）
-- I/O性能ベンチマークはまだ未実施。pet/control-planeワークロードで`driver_hint: QEMU`を
+- I/O性能ベンチマークはまだ未実施。pet/control-planeワークロードで`driver_hint: CLOUD_HYPERVISOR`を
   明示指定すべきかのガイドは、それを経てから確定させる
 - 当初は「machine_class(実装都合を隠す間接的なラベル)」経由でドライバを間接的に決める設計だったが、
   固定カタログ自体を廃止したため（「設計原則: 命名はOpenStackを踏襲しない」節）、
@@ -1398,7 +1403,8 @@ type StorageBackend interface {
 
 - block-storageサービスはCephなど将来の実装差し替えに備え`StorageBackend`をドライバとして抽象化する
 - **compute-agentはVMM制御に加え、iSCSI/NVMe-oFイニシエータとしてストレージノードへ接続し、
-  ローカルブロックデバイスとして生やしてからFirecracker(またはQEMU)にvirtio-block経由で渡す**役割を持つ
+  ローカルブロックデバイスとして生やしてからFirecracker(またはcloud-hypervisor)に
+  virtio-block経由で渡す**役割を持つ
   ——**実装済み**（`internal/compute-agent/iscsi`。[Volume仕様](specs/volume.md)
   「compute-agent側の配線」参照）。ライブ検証で見つかった深い実バグとして、実iSCSI
   ログインのカーネルセッション作成（`NETLINK_ISCSI`ソケット）はコンテナ自身の
@@ -1745,9 +1751,10 @@ scrapeするなり`remote_write`で自分の長期保存基盤に転送するな
 
 ### Firecracker: jailerとtapデバイス
 
-（tap配線・cgroup制限は`driver_hint=QEMU`（`internal/compute-agent/qemuvmm`）とも共有する
-仕組み——[QEMU起動仕様](specs/qemu-boot.md)参照。jailer自体はFirecracker固有の概念で、
-QEMU側に相当する隔離機構はそもそも用意していない。）
+（tap配線・cgroup制限は`driver_hint=CLOUD_HYPERVISOR`（`internal/compute-agent/chvmm`）とも
+共有する仕組み——[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)参照。jailer自体は
+Firecracker固有の概念で、cloud-hypervisor側は静的バイナリ+組み込みseccompという別の形で
+相応の隔離を持つ、外部jailer不要という設計。）
 
 - 各VirtualMachineの Firecracker プロセスは**jailerでラップする**（chroot + cgroup + namespace分離）。
   同一ホストに複数テナントのVirtualMachineが同居する前提上、プロセス分離は必須と判断——
@@ -1758,8 +1765,10 @@ QEMU側に相当する隔離機構はそもそも用意していない。）
   イニシエータ側の`nsenter`（[Volume仕様](specs/volume.md)参照）がどちらもcompute-agent
   コンテナ自身のnamespaceに依存しており、jailerへさらに別のnamespaceを重ねる設計は
   当面のスコープ外とした。uid/gidも全VM共有の固定値（VMごとに一意な割当は将来の改善）。
-  QEMU側（`driver_hint=QEMU`）にはまだ同等の隔離が無く、別の未決事項として残っている
-  （docs/open-questions.md参照）
+  `driver_hint=CLOUD_HYPERVISOR`側は外部jailerによるchroot/uid-gid dropこそ無いが、
+  静的バイナリ（共有ライブラリのchroot問題が発生しない）+組み込みseccomp（既定で
+  有効）で相応の防御を持つ——検討経緯は[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
+  「QEMUからcloud-hypervisorへの置き換え」参照
 - cgroupのCPU/メモリ制限（`internal/compute-agent/cgroup`）は`spec.vcpu`/`spec.memory_mb`の
   値からそのまま設定する——**実装済み**。cgroup v2の unified hierarchy のみ対応し、host/
   コンテナ側でcgroup delegationが使えない環境ではエラーをログに残すだけで、VMは無制限
@@ -1778,8 +1787,9 @@ QEMU側に相当する隔離機構はそもそも用意していない。）
 
 Firecrackerはグラフィカルコンソール(VNC/SPICE)を持たず、**シリアルコンソール(ttyS0)のみ**を
 Unixドメインソケット経由で提供する（`ImageSpec.boot_args`の`console=ttyS0`はこれが前提）。
-QEMU側は理論上VNC/SPICEも可能だが、対象がヘッドレスLinuxサーバーであるKaaSハイパーバイザー用途では
-不要と判断し、driverによらず**シリアルコンソールに統一**する。
+cloud-hypervisor側は理論上より豊富なコンソール機構も持ちうるが、対象がヘッドレスLinux
+サーバーであるKaaSハイパーバイザー用途では不要と判断し、driverによらず
+**シリアルコンソールに統一**する。
 
 2種類のAPIを用意する。
 
@@ -1809,11 +1819,11 @@ OPA権限にする。VirtualMachineの一般的なR/Wを持つ人/エージェ�
 
 ### I/Oベンチマーク計画（実行はTODO、ここでは方針のみ）
 
-FirecrackerのvirtIO-block実装がQEMUに対しI/O性能で不利かどうかは未検証。実装着手前に
-`fio`でetcd的な同期fsyncパターン（4KBランダム書き込み、`O_DSYNC`）を両ドライバで比較し、
-`driver_hint`の使い分けガイド（v1はFirecracker一本、pet/control-planeワークロードで
-`QEMU`を明示指定すべきかどうか）の判断材料とする。これは設計事項ではなく実装時に実施する
-タスクとして記録するに留める。
+FirecrackerのvirtIO-block実装がcloud-hypervisorに対しI/O性能で不利かどうかは未検証。
+実装着手前に`fio`でetcd的な同期fsyncパターン（4KBランダム書き込み、`O_DSYNC`）を
+両ドライバで比較し、`driver_hint`の使い分けガイド（v1はFirecracker一本、pet/
+control-planeワークロードで`CLOUD_HYPERVISOR`を明示指定すべきかどうか）の判断材料と
+する。これは設計事項ではなく実装時に実施するタスクとして記録するに留める。
 
 ## インフラ要件（デプロイ前提）
 
@@ -1916,8 +1926,8 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 設計レベルの論点はほぼ出し切ったが、network周りで1点新たに浮上した論点がある
 （3.）。残りは実行タスクと、明示的に先送りした非ゴールのみ。
 
-1. **I/Oベンチマークの実施**（設計は完了、実行がTODO）: Firecracker/QEMUのfio比較を実装着手前に行い、
-   `driver_hint`の使い分けガイドを確定する
+1. **I/Oベンチマークの実施**（設計は完了、実行がTODO）: Firecracker/cloud-hypervisorのfio比較を
+   実装着手前に行い、`driver_hint`の使い分けガイドを確定する
 2. **リソースメトリクスの収集実装の詳細**: `/metrics`/`/metrics/resources`という公開方式・
    データ源（cgroup/tap/ストレージノード）は確定したが、cgroup統計の具体的な読み方、
    Prometheusクライアントライブラリの選定、スクレイプ/収集間隔のチューニングは実装直前に詰める
@@ -1926,7 +1936,8 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
    きっかけ: OVSが事実上の標準として使われる傾向があり、vhost-user（OVS-DPDKとゲストを
    共有メモリで直結し、tapデバイス+カーネルネットワークスタックを経由しない高速パス）への
    対応もあっていいのではという考え。ただし**Firecrackerはvhost-userに非対応**（virtio-netは
-   tapデバイス経由のみ）なので、vhost-userを使うなら`driver_hint=QEMU`が前提になる。現状の
+   tapデバイス経由のみ）なので、vhost-userを使うなら`driver_hint=CLOUD_HYPERVISOR`が
+   前提になる。現状の
    `NetworkInterfaceSpec`にはバックエンド（tap+VLANかOVS+vhost-userか）を表現するフィールドが
    なく、これを足す場合はVMの`driver_hint`との整合性チェックも合わせて設計する必要がある。
 
@@ -1977,7 +1988,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Volume/NetworkInterfaceの排他制御・フェンシング問題への対処方針
 - VLAN IDの割り当て方式（networkサービスが設定済みプールから同期・排他で払い出し）
 - スケジューラ設計（フィルタ5種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む）
-- PCIデバイス(GPU等)パススルーの設計の型（`driver_hint: QEMU`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターン。実装は当面TODO）
+- PCIデバイス(GPU等)パススルーの設計の型（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターン。実装は当面TODO）
 - UI方針（自前のWeb UIは作らずCLI＋Grafanaに任せる。OpenStack Horizonを反面教師に）
 - テナント間VRF分離の実配線ドキュメント化（`docs/network-deployment-guide.md`としてネットワーク運用チーム向けに独立した文書を作成。VLANプール/VRF/ルートリークポリシー/デプロイ前チェックリストを含む）
 - Imageキャッシュのエビクションポリシー（LRU＋参照カウント除外＋サイズ閾値）とpre-staging方針（専用機構は作らずPrometheusで可視化のみ。Dragonflyの判断を先取りしない）
@@ -1995,7 +2006,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Firecrackerのjailer/tapデバイス運用方針
 - ネットワークACL（`NetworkInterfaceSpec.ingress_rules`による最小限のホスト側ファイアウォール。SecurityGroupのような別リソースは導入しない）
 - テナント間の非疎通性はVLANではなくVRF+ルートリーク禁止で担保する（訂正済み。ACLのデフォルト拒否を二重防御として追加）
-- Image設計（`ImageFormat`: `KERNEL_ROOTFS`(直接カーネルブート系VMM用)/`QCOW2`(QEMU/libvirt用)、`driver_hint`との対応バリデーション、コンテンツアドレス型blobストア）
+- Image設計（`ImageFormat`: `KERNEL_ROOTFS`(直接カーネルブート系VMM用)/`QCOW2`(QEMU/libvirt/cloud-hypervisor用)、`driver_hint`との対応バリデーション、コンテンツアドレス型blobストア）
 - Flavor/machine_classという固定カタログの廃止（`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
 - UserData/cloud-init注入（NoCloud seed disk方式、HTTPメタデータサービスは不採用）
 - コントロールプレーンサービス自体の可用性（API面はステートレス複製、reconcile面はetcdの`concurrency.Election`によるリーダー選出）

@@ -7,7 +7,7 @@
 // logged in, or an NFS export already mounted) are entirely the
 // operator's own doing, a host-level prerequisite exactly like /dev/kvm.
 // This package's whole job is finding what that prerequisite already made
-// available and handing back a path fcvmm/qemuvmm can wire into a VM's
+// available and handing back a path fcvmm/chvmm can wire into a VM's
 // jail (copy, or mknod for a block device -- see fcvmm/jailer.go).
 //
 // There is deliberately no Attach/Detach here (unlike this package's

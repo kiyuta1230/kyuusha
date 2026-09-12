@@ -353,8 +353,8 @@ func fromDriver(d computev1.VmmDriver) compute.VmmDriver {
 	switch d {
 	case computev1.VmmDriver_VMM_DRIVER_FIRECRACKER:
 		return compute.VmmDriverFirecracker
-	case computev1.VmmDriver_VMM_DRIVER_QEMU:
-		return compute.VmmDriverQEMU
+	case computev1.VmmDriver_VMM_DRIVER_CLOUD_HYPERVISOR:
+		return compute.VmmDriverCloudHypervisor
 	default:
 		return compute.VmmDriverUnspecified
 	}
@@ -364,8 +364,8 @@ func toDriver(d compute.VmmDriver) computev1.VmmDriver {
 	switch d {
 	case compute.VmmDriverFirecracker:
 		return computev1.VmmDriver_VMM_DRIVER_FIRECRACKER
-	case compute.VmmDriverQEMU:
-		return computev1.VmmDriver_VMM_DRIVER_QEMU
+	case compute.VmmDriverCloudHypervisor:
+		return computev1.VmmDriver_VMM_DRIVER_CLOUD_HYPERVISOR
 	default:
 		return computev1.VmmDriver_VMM_DRIVER_UNSPECIFIED
 	}

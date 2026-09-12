@@ -1,16 +1,16 @@
 // Package vmm is the driver-agnostic contract compute-agent dispatches
-// through: fcvmm.Manager (driver_hint=FIRECRACKER) and qemuvmm.Manager
-// (driver_hint=QEMU) both implement VMM against the same BootSpec/NetIface
-// shapes, so agent.go picks one by cmd.DriverHint instead of hardcoding a
-// single VMM. Both existing drivers boot from the same KERNEL_ROOTFS Image
-// assets (kernel + raw rootfs, no bootloader) -- see docs/specs/
-// firecracker-boot.md and docs/specs/qemu-boot.md. BootSpec deliberately
-// carries only what that boot method needs today; a future driver booting
-// from a self-contained disk image instead (see docs/architecture.md
-// "Firecracker/QEMU実装メモ" on QCOW2 -- not implemented, not currently
-// planned) would most likely need its own additional fields here, or its
-// own BootSpec-like type, rather than forcing every existing driver to
-// carry fields it can't use.
+// through: fcvmm.Manager (driver_hint=FIRECRACKER) and chvmm.Manager
+// (driver_hint=CLOUD_HYPERVISOR) both implement VMM against the same
+// BootSpec/NetIface shapes, so agent.go picks one by cmd.DriverHint instead
+// of hardcoding a single VMM. Both existing drivers boot from the same
+// KERNEL_ROOTFS Image assets (kernel + raw rootfs, no bootloader) -- see
+// docs/specs/firecracker-boot.md and docs/specs/cloud-hypervisor-boot.md.
+// BootSpec deliberately carries only what that boot method needs today; a
+// future driver booting from a self-contained disk image instead (see
+// docs/architecture.md's VMM driver notes on QCOW2 -- not implemented, not
+// currently planned) would most likely need its own additional fields
+// here, or its own BootSpec-like type, rather than forcing every existing
+// driver to carry fields it can't use.
 package vmm
 
 import (
