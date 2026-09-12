@@ -2030,13 +2030,13 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - コンソールアクセス（シリアルコンソールに統一。`GetConsoleLog`(読み取り専用)/`AttachConsole`(対話的、NATS原則の例外で直接gRPC)。`vm.console.attach`を独立したOPA権限に）
 - 技術選定の一貫した基準（難しい分散システムの問題は既製品(CNCF濃度の高いOSS)に乗り、kyuusha固有のドメインロジックのみ自作する）
 - マルチハイパーバイザー前提（単一ホストは特別扱いしない、N=1の場合として同じコードパス）
-- 子リソースIDの決定的生成ルール（`iface-<vm-id>-<index>`, `volattach-<vm-id>-<index>`, `volattach-<vm-id>-root`, `rootvol-<vm-id>`）
-- 孤児リソースGCの実行頻度（10分間隔の定期スイープ）・検出ロジック（親への`Get`が`NotFound`か）
+- 子リソースIDの決定的生成ルール（`iface-<vm-id>-<index>`, `volattach-<vm-id>-<index>`。`volattach-<vm-id>-root`/`rootvol-<vm-id>`は`persistent_root_disk`専用に検討していた命名で、同フィールド削除（「pet/cattleの区別を廃止」節）に伴い実装されないまま消えた）
+- 孤児リソースGCの実行頻度（10分間隔の定期スイープ）・検出ロジック（親への`Get`が`NotFound`か）は**設計のみ決定**——実装（GCコントローラそのもの）はどのリソース種別についてもまだ無い（[network仕様](specs/network.md)のNetworkInterfaceオーファン、[Volume仕様](specs/volume.md)のVolumeAttachmentオーファン、いずれも各仕様書側で未実装と明記——ここでの「解決済み」は設計方針の決定のみを指す）
 - NetworkInterface/Volume/VolumeAttachmentのライフサイクルphase
 - Volume/NetworkInterfaceの排他制御・フェンシング問題への対処方針
 - VLAN IDの割り当て方式（networkサービスが設定済みプールから同期・排他で払い出し）
 - スケジューラ設計（フィルタ5種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む）
-- PCIデバイス(GPU等)パススルーの設計の型（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターン。実装は当面TODO）
+- PCIデバイス(GPU等)パススルーの設計の型（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターン。実装は当面TODO——`HypervisorStatus.available_devices`という受け皿フィールド自体は存在するが、`RegisterHypervisorRequest`側にそれを申告するフィールドが無く、compute-agentがそもそも自己申告する手段が無い。スケジューラの`filterSchedulable`も`spec.pci_devices`を一切読まない。設計の型だけがあり、実装は本当にゼロから）
 - pet/cattleの区別（`recovery_policy`/`persistent_root_disk`/`root_volume_ref`）を廃止（2026-09-12。実質未使用だったフィールドを削除し、ハイパーバイザー喪失時の自動リカバリはKaaS層/オペレータに委ねる判断。「pet/cattleの区別を廃止」節参照）
 - UI方針（自前のWeb UIは作らずCLI＋Grafanaに任せる。OpenStack Horizonを反面教師に）
 - テナント間VRF分離の実配線ドキュメント化（`docs/network-deployment-guide.md`としてネットワーク運用チーム向けに独立した文書を作成。VLANプール/VRF/ルートリークポリシー/デプロイ前チェックリストを含む）

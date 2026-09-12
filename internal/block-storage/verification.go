@@ -22,7 +22,6 @@ package blockstorage
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sort"
 	"time"
@@ -153,36 +152,42 @@ type hypervisorConnInfo struct {
 	connections map[string]bool // connection name -> present
 }
 
-// subscribeHypervisorStorageConnections attaches a durable consumer to
-// compute's own COMPUTE_EVT stream (owned/created by compute, not here --
-// hence the short retry loop: block-storage and compute may start in
-// either order under docker-compose). Never touches compute's gRPC surface.
-func (s *Service) subscribeHypervisorStorageConnections(ctx context.Context) error {
+// runHypervisorStorageConnectionsSubscription attaches a durable consumer to
+// compute's own COMPUTE_EVT stream (owned/created by compute, not here).
+// Never touches compute's gRPC surface. Blocks, retrying indefinitely (not a
+// bounded attempt count) until it manages to subscribe, or ctx is done --
+// see its caller (Run) for why this must never give up permanently:
+// compute's COMPUTE_EVT stream not existing yet (or compute being briefly
+// down) is an ordinary startup race (block-storage and compute may start in
+// either order under docker-compose), not a fatal condition for the rest of
+// block-storage. Logs a warning on each failed attempt so a genuinely stuck
+// wait is still visible in the logs, without treating it as fatal.
+func (s *Service) runHypervisorStorageConnectionsSubscription(ctx context.Context) {
 	var stream jetstream.Stream
-	var err error
-	for attempt := 0; attempt < 30; attempt++ {
+	for {
+		var err error
 		stream, err = s.js.Stream(ctx, "COMPUTE_EVT")
 		if err == nil {
 			break
 		}
+		slog.Warn("block-storage: waiting for compute's COMPUTE_EVT stream", "err", err)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case <-time.After(time.Second):
 		}
 	}
-	if err != nil {
-		return fmt.Errorf("wait for COMPUTE_EVT stream: %w", err)
-	}
+
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:       "block-storage-hypervisor-storage-connections",
 		FilterSubject: "ms.compute.evt.*.storage-connections",
 		AckPolicy:     jetstream.AckExplicitPolicy,
 	})
 	if err != nil {
-		return err
+		slog.Error("block-storage: create hypervisor storage-connections consumer failed", "err", err)
+		return
 	}
-	_, err = cons.Consume(func(msg jetstream.Msg) {
+	if _, err := cons.Consume(func(msg jetstream.Msg) {
 		_ = msg.Ack()
 		var m compute.HypervisorStorageConnectionsMsg
 		if jsonErr := json.Unmarshal(msg.Data(), &m); jsonErr != nil {
@@ -190,8 +195,9 @@ func (s *Service) subscribeHypervisorStorageConnections(ctx context.Context) err
 			return
 		}
 		s.recordHypervisorConnections(ctx, m.Hypervisor, m.Zone, m.StorageConnections)
-	})
-	return err
+	}); err != nil {
+		slog.Error("block-storage: consume hypervisor storage-connections failed", "err", err)
+	}
 }
 
 // subscribeVerifyResults attaches a durable consumer to block-storage's own

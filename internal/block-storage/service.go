@@ -151,15 +151,26 @@ func (s *Service) Run(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 		if err := EnsureStreams(ctx, js); err != nil {
 			return err
 		}
-		if err := s.subscribeHypervisorStorageConnections(ctx); err != nil {
-			return fmt.Errorf("subscribe hypervisor storage-connections: %w", err)
-		}
 		if err := s.subscribeVerifyResults(ctx); err != nil {
 			return fmt.Errorf("subscribe verify results: %w", err)
 		}
 		if err := s.subscribeVolumeAttached(ctx); err != nil {
 			return fmt.Errorf("subscribe volume attached: %w", err)
 		}
+		// subscribeHypervisorStorageConnections depends on compute's own
+		// COMPUTE_EVT stream existing, unlike the two subscriptions just
+		// above (which only need block-storage's own BLOCKSTORAGE_EVT
+		// stream, already ensured a few lines up) -- a genuine cross-service
+		// startup race (compute may not have finished starting, or briefly
+		// be down), not a reason to abort every other subscription and the
+		// sweep loop below if it doesn't resolve quickly. Runs its own
+		// indefinitely-retrying goroutine instead of blocking here (real
+		// bug found and fixed 2026-09-12: this used to be a synchronous,
+		// bounded-retry call in this same sequence, so exhausting its
+		// retries here made Run() return early and silently skipped
+		// subscribeVerifyResults/subscribeVolumeAttached/the sweep loop
+		// entirely, for this process's whole lifetime).
+		go s.runHypervisorStorageConnectionsSubscription(ctx)
 	}
 
 	ticker := time.NewTicker(pendingSweepInterval)
