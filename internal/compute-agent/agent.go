@@ -81,10 +81,29 @@ type Agent struct {
 	Drivers map[string]vmm.VMM
 }
 
-// Run registers with compute (retrying briefly in case it isn't up yet --
-// e.g. at docker-compose startup) and then blocks, processing create
-// commands and publishing heartbeats until ctx is done.
+// reconciler is implemented by any vmm.VMM driver that persists enough
+// state to adopt a still-running VM across a compute-agent restart (see
+// fcvmm.Manager.Reconcile/chvmm.Manager.Reconcile and vmm.BootRecord) --
+// not part of vmm.VMM itself since it's a one-time startup step, not
+// something agent.go ever dispatches by driver_hint.
+type reconciler interface {
+	Reconcile()
+}
+
+// Run reconciles every driver's still-running VMs from a previous process
+// (see the reconciler interface -- must happen before registering/
+// consuming any commands, so a resent Create/Stop for a VM this process
+// forgot about finds it already adopted, not silently missing), registers
+// with compute (retrying briefly in case it isn't up yet -- e.g. at
+// docker-compose startup), and then blocks, processing create commands and
+// publishing heartbeats until ctx is done.
 func (a *Agent) Run(ctx context.Context) error {
+	for _, driver := range a.Drivers {
+		if r, ok := driver.(reconciler); ok {
+			r.Reconcile()
+		}
+	}
+
 	if err := a.register(ctx); err != nil {
 		return fmt.Errorf("register hypervisor: %w", err)
 	}

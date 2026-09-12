@@ -67,6 +67,12 @@ const (
 	bootGracePeriod = 500 * time.Millisecond
 
 	killGracePeriod = 3 * time.Second
+
+	// adoptedPollInterval is how often Reconcile's watchAdopted goroutine
+	// checks whether an adopted VM's process has exited -- there's no
+	// *exec.Cmd to Wait() on for a process this Manager didn't itself
+	// fork, so liveness has to be polled instead of blocked on.
+	adoptedPollInterval = 2 * time.Second
 )
 
 // BootSpec and NetIface are aliases (not new types) for
@@ -128,14 +134,29 @@ type Manager struct {
 // cleanup -- removing a block device special file never touches the real
 // device behind it).
 type runningVM struct {
-	cmd          *exec.Cmd
+	// pid is this VM's real Firecracker process id -- set from
+	// cmd.Process.Pid for a VM this Manager just booted, or from a
+	// vmm.BootRecord's PID for one Reconcile adopted from a previous
+	// compute-agent process's boot. Signaled directly (via os.FindProcess,
+	// which needs no parent/child relationship on Unix), not through cmd,
+	// since an adopted VM has no *exec.Cmd here at all.
+	pid int
+	// exeBasename is what /proc/<pid>/exe should resolve to for pid to
+	// still be this VM's Firecracker process, not an unrelated process that
+	// has since reused the same pid -- see vmm.ProcessAlive.
+	exeBasename  string
 	taps         []string
 	volumeMounts []string
-	// done is closed by Boot's exit-watch goroutine once the process has
-	// exited AND its own cleanup (tap/volume-mount teardown, cgroup removal)
-	// has finished -- Stop/Destroy block on it so neither returns, nor (for
-	// Destroy) removes the jail directory, while a bind-mounted Volume might
-	// still be mounted underneath it.
+	// attached is what Boot resolved and returned for this VM -- kept so an
+	// idempotent re-Boot (see Boot's top-of-function check) can return the
+	// exact same result without re-resolving anything.
+	attached []vmm.AttachedVolume
+	// done is closed once the process has exited AND its own cleanup (tap/
+	// volume-mount teardown, cgroup removal) has finished -- by Boot's
+	// exit-watch goroutine for a VM this Manager booted itself, or by
+	// watchAdopted for one Reconcile adopted. Stop/Destroy block on it so
+	// neither returns, nor (for Destroy) removes the jail directory, while a
+	// bind-mounted Volume might still be mounted underneath it.
 	done chan struct{}
 }
 
@@ -197,12 +218,104 @@ func (m *Manager) ConsoleLogPath(vmID string) string {
 	return filepath.Join(m.runDir(), vmID, "console.log")
 }
 
+// Reconcile adopts every VM under RunDir that has a boot record (see
+// vmm.BootRecord) whose pid is still alive, populating m.running for it as
+// if this Manager had just booted it itself. Must be called once, before
+// this Manager accepts any commands (see cmd/compute-agent/main.go and
+// computeagent.Agent.Run) -- otherwise a compute-agent restart would
+// silently forget every VM it had previously booted that's still running
+// (Stop/Destroy would no-op for them forever), and a resent Boot for one
+// of them would wipe its live jail chroot out from under it. A boot
+// record whose pid is gone (the VM actually exited, e.g. while
+// compute-agent itself was down) is just removed -- nothing to adopt.
+func (m *Manager) Reconcile() {
+	entries, err := os.ReadDir(m.runDir())
+	if err != nil {
+		return // no run dir yet: nothing has ever booted here
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		vmID := e.Name()
+		vmDir := filepath.Join(m.runDir(), vmID)
+		rec, err := vmm.ReadBootRecord(vmDir)
+		if err != nil {
+			continue // no record (never booted for real, or already cleaned up)
+		}
+		if !vmm.ProcessAlive(rec.PID, rec.ExeBasename) {
+			vmm.RemoveBootRecord(vmDir)
+			continue
+		}
+		rv := &runningVM{
+			pid: rec.PID, exeBasename: rec.ExeBasename,
+			taps: rec.Taps, volumeMounts: rec.VolumeMounts, attached: rec.Attached,
+			done: make(chan struct{}),
+		}
+		m.mu.Lock()
+		if m.running == nil {
+			m.running = make(map[string]*runningVM)
+		}
+		m.running[vmID] = rv
+		m.mu.Unlock()
+		slog.Info("fcvmm: adopted a VM still running from a previous compute-agent process", "vm_id", vmID, "pid", rec.PID)
+		go m.watchAdopted(vmID, vmDir, rv)
+	}
+}
+
+// watchAdopted polls an adopted VM's process until it exits, then runs the
+// exact same teardown Boot's own exit-watch goroutine would have -- see
+// runningVM.done's doc comment.
+func (m *Manager) watchAdopted(vmID, vmDir string, rv *runningVM) {
+	ticker := time.NewTicker(adoptedPollInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if !vmm.ProcessAlive(rv.pid, rv.exeBasename) {
+			break
+		}
+	}
+	m.mu.Lock()
+	delete(m.running, vmID)
+	m.mu.Unlock()
+	for _, t := range rv.taps {
+		_ = netsetup.DeleteTap(t)
+	}
+	for _, p := range rv.volumeMounts {
+		_ = unix.Unmount(p, 0)
+	}
+	if rmErr := cgroup.Remove(vmID); rmErr != nil {
+		slog.Warn("fcvmm: removing cgroup for adopted VM", "vm_id", vmID, "err", rmErr)
+	}
+	vmm.RemoveBootRecord(vmDir)
+	slog.Info("fcvmm: adopted VM's process exited", "vm_id", vmID)
+	close(rv.done)
+}
+
 // Boot fetches (or reuses cached copies of) spec's kernel/rootfs, gives the
 // VM its own writable rootfs copy and run directory, and starts Firecracker
 // against them. It returns once Firecracker has either exited immediately
 // (an error) or stayed up past bootGracePeriod (success) -- see that
 // constant's doc for exactly what "success" does and doesn't mean.
 func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume, error) {
+	// Idempotent no-op if spec.VMID is already tracked as running -- either
+	// booted earlier in this same process's life, or adopted by Reconcile
+	// at startup from a previous compute-agent process. Without this, a
+	// resent CreateCommand (e.g. a future retry for a VM stuck in
+	// Provisioning) would blindly wipe this VM's live jail chroot and start
+	// a second, genuinely-duplicate Firecracker process for the same
+	// vm_id. m.running only ever holds entries believed alive (removed the
+	// moment exit-watch/watchAdopted observes the process gone), so no
+	// extra liveness check is needed here -- worst case is a bounded
+	// staleness window of one adoptedPollInterval for an adopted VM whose
+	// process just died.
+	m.mu.Lock()
+	if existing, ok := m.running[spec.VMID]; ok {
+		m.mu.Unlock()
+		slog.Info("fcvmm: boot requested for a vm_id already tracked as running, returning its existing result", "vm_id", spec.VMID, "pid", existing.pid)
+		return existing.attached, nil
+	}
+	m.mu.Unlock()
+
 	if err := os.MkdirAll(m.cacheDir(), 0o755); err != nil {
 		return nil, fmt.Errorf("fcvmm: create cache dir: %w", err)
 	}
@@ -488,13 +601,22 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	case <-time.After(bootGracePeriod):
 	}
 
-	rv := &runningVM{cmd: cmd, taps: taps, volumeMounts: volumeMounts, done: make(chan struct{})}
+	exeBasename := filepath.Base(fcExecPath)
+	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, taps: taps, volumeMounts: volumeMounts, attached: attached, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
 	m.running[spec.VMID] = rv
 	m.mu.Unlock()
+
+	// Best-effort: losing this only costs this VM's restart-safety (see
+	// Reconcile), not the correctness of the process actually running now.
+	if err := vmm.WriteBootRecord(vmDir, vmm.BootRecord{
+		PID: cmd.Process.Pid, ExeBasename: exeBasename, Taps: taps, VolumeMounts: volumeMounts, Attached: attached,
+	}); err != nil {
+		slog.Warn("fcvmm: write boot record, this VM won't be adopted if compute-agent restarts", "vm_id", spec.VMID, "err", err)
+	}
 
 	go func() {
 		err := <-exitCh
@@ -505,6 +627,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("fcvmm: removing cgroup", "vm_id", spec.VMID, "err", rmErr)
 		}
+		vmm.RemoveBootRecord(vmDir)
 		if err != nil {
 			slog.Warn("fcvmm: firecracker process exited", "vm_id", spec.VMID, "err", err)
 		} else {
@@ -529,16 +652,17 @@ func (m *Manager) Stop(vmID string, force bool) {
 	if !ok {
 		return
 	}
+	proc, _ := os.FindProcess(rv.pid) // Unix: always succeeds regardless of parent/child relationship
 	if force {
-		_ = rv.cmd.Process.Signal(syscall.SIGKILL)
+		_ = proc.Signal(syscall.SIGKILL)
 		<-rv.done
 		return
 	}
-	_ = rv.cmd.Process.Signal(syscall.SIGTERM)
+	_ = proc.Signal(syscall.SIGTERM)
 	select {
 	case <-rv.done:
 	case <-time.After(killGracePeriod):
-		_ = rv.cmd.Process.Signal(syscall.SIGKILL) // no-op if it already exited on SIGTERM
+		_ = proc.Signal(syscall.SIGKILL) // no-op if it already exited on SIGTERM
 		<-rv.done
 	}
 }
