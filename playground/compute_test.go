@@ -148,10 +148,9 @@ func TestPlayground_CreateVMReachesRunning(t *testing.T) {
 	}
 
 	vm, err := svc.Create(ctx, "tenant-a", "web-1", compute.VirtualMachineSpec{
-		ImageID:        "img-abc",
-		VCPU:           2,
-		MemoryMB:       4096,
-		RecoveryPolicy: compute.RecoveryPolicyNone,
+		ImageID:  "img-abc",
+		VCPU:     2,
+		MemoryMB: 4096,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

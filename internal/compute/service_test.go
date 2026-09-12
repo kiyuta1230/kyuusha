@@ -38,10 +38,9 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 	}
 
 	m, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
-		ImageID:        "img-abc",
-		VCPU:           2,
-		MemoryMB:       4096,
-		RecoveryPolicy: RecoveryPolicyNone,
+		ImageID:  "img-abc",
+		VCPU:     2,
+		MemoryMB: 4096,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -54,7 +53,7 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 	}
 
 	// Idempotent re-Create with the same name must not mint a new ID.
-	again, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{ImageID: "img-abc", RecoveryPolicy: RecoveryPolicyNone})
+	again, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{ImageID: "img-abc"})
 	if err != nil {
 		t.Fatalf("idempotent Create: %v", err)
 	}
@@ -103,20 +102,11 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 	}
 }
 
-func TestService_CreateRejectsUnspecifiedRecoveryPolicy(t *testing.T) {
-	ctx := context.Background()
-	svc := newTestService(t, ctx)
-
-	if _, err := svc.Create(ctx, "tenant-a", "x", VirtualMachineSpec{}); err == nil {
-		t.Fatal("expected validation error for unset RecoveryPolicy")
-	}
-}
-
 func TestService_GetIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	m, err := svc.Create(ctx, "tenant-a", "", VirtualMachineSpec{ImageID: "img-abc", RecoveryPolicy: RecoveryPolicyNone})
+	m, err := svc.Create(ctx, "tenant-a", "", VirtualMachineSpec{ImageID: "img-abc"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -145,7 +135,7 @@ func TestService_DeleteWithFinalizerBlocksUntilCleared(t *testing.T) {
 	const tenant = "tenant-a"
 
 	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
-		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -175,7 +165,7 @@ func TestService_DeleteWithFinalizerBlocksUntilCleared(t *testing.T) {
 	// Service.Delete's doc comment): a second VM the same size fits even
 	// though the first, finalizer-blocked one still physically exists.
 	if _, err := svc.Create(ctx, tenant, "web-2", VirtualMachineSpec{
-		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512,
 	}); err != nil {
 		t.Fatalf("Create after Delete-with-finalizer freed quota: %v", err)
 	}
@@ -206,7 +196,7 @@ func TestService_FinalizerOwnership(t *testing.T) {
 	const tenant = "tenant-a"
 
 	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
-		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -275,7 +265,7 @@ func TestService_StopRequiresRunning(t *testing.T) {
 	const tenant = "tenant-a"
 
 	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
-		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -315,7 +305,7 @@ func TestService_StartRequiresStopped(t *testing.T) {
 	const tenant = "tenant-a"
 
 	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
-		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -363,13 +353,13 @@ func TestService_WatchFilterByFinalizerName(t *testing.T) {
 	const tenant = "tenant-a"
 
 	vmA, err := svc.Create(ctx, tenant, "vm-a", VirtualMachineSpec{
-		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512,
 	})
 	if err != nil {
 		t.Fatalf("Create vm-a: %v", err)
 	}
 	vmB, err := svc.Create(ctx, tenant, "vm-b", VirtualMachineSpec{
-		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512,
 	})
 	if err != nil {
 		t.Fatalf("Create vm-b: %v", err)

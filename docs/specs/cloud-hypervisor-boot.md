@@ -56,8 +56,7 @@ cloud-hypervisorを選ぶ理由はそこにある:
   まだ未実装だが、将来足す際の受け皿になる
 - **vhost-user networking**: Firecrackerはtapのみでvhost-userに対応しない。
   OVS-DPDKのような高スループット経路を使うには前提になる
-- **NUMA/hugepages/CPU topology**: より柔軟。SELF_HEALのpet的ワークロード
-  (長時間稼働・性能重視のVM)向け
+- **NUMA/hugepages/CPU topology**: より柔軟。長時間稼働・性能重視のワークロード向け
 - **Windowsゲスト対応の可能性**: cloud-hypervisorはUEFI/OVMF経由のブートにも
   対応しており、将来非Linuxゲストが必要になった際の選択肢になりうる
   (現状の直接カーネルブート方式では引き続き非対応、下記参照)

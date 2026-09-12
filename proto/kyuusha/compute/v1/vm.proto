@@ -11,12 +11,6 @@ import "kyuusha/resource/v1/common.proto";
 // and "設計原則: 命名はOpenStackを踏襲しない" (no fixed machine_class catalog:
 // vcpu/memory_mb are requested directly, governed by Quota instead).
 
-enum RecoveryPolicy {
-  RECOVERY_POLICY_UNSPECIFIED = 0; // rejected at Create time; no implicit default
-  RECOVERY_POLICY_NONE = 1;        // cattle
-  RECOVERY_POLICY_SELF_HEAL = 2;   // pet
-}
-
 enum VmmDriver {
   VMM_DRIVER_UNSPECIFIED = 0; // treated as FIRECRACKER
   VMM_DRIVER_FIRECRACKER = 1;
@@ -52,8 +46,15 @@ message VirtualMachineSpec {
   int64 memory_mb = 3;
   repeated NetworkAttachment network_interfaces = 4;
   repeated VolumeRequest volumes = 5;
-  RecoveryPolicy recovery_policy = 6;
-  bool persistent_root_disk = 7;
+  // 6, 7: removed 2026-09-12 (recovery_policy, persistent_root_disk).
+  // Automatic hypervisor-loss recovery ("pet" VMs) was designed but never
+  // implemented (real fencing -- distinguishing a genuinely dead
+  // hypervisor from one merely unreachable over the network -- needs
+  // infrastructure kyuusha isn't taking on; see docs/open-questions.md).
+  // A KaaS layer already re-creates its own worker-node VMs on failure
+  // (e.g. Cluster API's MachineHealthCheck), making kyuusha-side recovery
+  // redundant for that case; a genuinely persistent root disk is a
+  // separate, still-undesigned "volume boot" feature, not this field.
   string user_data = 8;
   VmmDriver driver_hint = 9;
   repeated PciDeviceRequest pci_devices = 10;
@@ -63,7 +64,8 @@ message VirtualMachineStatus {
   string phase = 1;
   repeated kyuusha.resource.v1.Condition conditions = 2;
   string hypervisor = 3;
-  string root_volume_ref = 4;
+  // 4: removed 2026-09-12 (root_volume_ref) -- see VirtualMachineSpec's
+  // comment on the same removal.
   repeated string interface_refs = 5;
   repeated string volume_attachment_refs = 6;
 }

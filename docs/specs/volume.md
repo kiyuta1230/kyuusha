@@ -59,12 +59,12 @@ allow if {
 
 ## 排他制御（VolumeAttachment）
 
-`docs/architecture.md`「未解決の危険: フェンシング問題」「具体的な排他制御」で決めた
+`docs/architecture.md`「未解決だった危険: フェンシング問題」「具体的な排他制御」で決めた
 「ある`volume_id`について`Deleting`/`Error`以外のphaseのVolumeAttachmentは同時に1つまで」
 制約を実装している。ストレージ側に実際のアクセス制御機構が無い（下記「この実装がカバー
-しないもの」参照）ため、この排他ロックが唯一のフェンシング安全網——SELF_HEALで
-Hypervisor障害後に同じVolumeを新しいVMへ再アタッチしようとした場合も、旧
-VolumeAttachmentが明示的に消されるまで新しい方は`Pending`のまま進まない。
+しないもの」参照）ため、この排他ロックが唯一の安全網——同じVolumeを別のVMへ
+再アタッチしようとした場合(オペレータの操作ミス、あるいは旧VMがまだ生きている場合を
+含む)も、旧VolumeAttachmentが明示的に消されるまで新しい方は`Pending`のまま進まない。
 
 ```mermaid
 sequenceDiagram

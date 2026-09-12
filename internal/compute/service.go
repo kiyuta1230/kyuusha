@@ -107,9 +107,6 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	if spec.ImageID == "" {
 		return nil, fmt.Errorf("%w: spec.image_id is required", ErrValidation)
 	}
-	if spec.RecoveryPolicy == RecoveryPolicyUnspecified {
-		return nil, fmt.Errorf("%w: spec.recovery_policy must be set", ErrValidation)
-	}
 	if spec.DriverHint == VmmDriverUnspecified {
 		spec.DriverHint = VmmDriverFirecracker
 	}

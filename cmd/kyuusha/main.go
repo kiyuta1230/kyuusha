@@ -157,7 +157,6 @@ func vmCreate(args []string) {
 	image := fs.String("image", "", "image ID (required)")
 	vcpu := fs.Int("vcpu", 1, "vCPU count")
 	memoryMB := fs.Int64("memory-mb", 1024, "memory in MB")
-	recovery := fs.String("recovery-policy", "none", "none|self-heal")
 	driverHint := fs.String("driver-hint", "", "VMM driver: firecracker|cloud-hypervisor (empty: server default, FIRECRACKER). Must match the Image's format -- KERNEL_ROOTFS accepts either, QCOW2 requires cloud-hypervisor; see docs/specs/image.md")
 	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
 	volumes := fs.String("volumes", "", "comma-separated Volume IDs to attach at boot (see docs/specs/volume.md; attach-before-boot only -- a Volume added after the VM is already Running is not attached)")
@@ -204,7 +203,6 @@ func vmCreate(args []string) {
 			ImageId:           *image,
 			Vcpu:              int32(*vcpu),
 			MemoryMb:          *memoryMB,
-			RecoveryPolicy:    parseRecoveryPolicy(*recovery),
 			DriverHint:        parseVmmDriver(*driverHint),
 			NetworkInterfaces: netifs,
 			Volumes:           volRequests,
@@ -601,15 +599,6 @@ func vmRemoveFinalizer(args []string) {
 		fatal("update: %v", err)
 	}
 	printVM(updated)
-}
-
-func parseRecoveryPolicy(s string) computev1.RecoveryPolicy {
-	switch s {
-	case "self-heal":
-		return computev1.RecoveryPolicy_RECOVERY_POLICY_SELF_HEAL
-	default:
-		return computev1.RecoveryPolicy_RECOVERY_POLICY_NONE
-	}
 }
 
 func parseVmmDriver(s string) computev1.VmmDriver {

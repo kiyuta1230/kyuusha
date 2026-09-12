@@ -151,13 +151,11 @@ func toStatus(err error) error {
 
 func fromSpec(s *computev1.VirtualMachineSpec) compute.VirtualMachineSpec {
 	spec := compute.VirtualMachineSpec{
-		ImageID:            s.GetImageId(),
-		VCPU:               s.GetVcpu(),
-		MemoryMB:           s.GetMemoryMb(),
-		RecoveryPolicy:     fromRecoveryPolicy(s.GetRecoveryPolicy()),
-		PersistentRootDisk: s.GetPersistentRootDisk(),
-		UserData:           s.GetUserData(),
-		DriverHint:         fromDriver(s.GetDriverHint()),
+		ImageID:    s.GetImageId(),
+		VCPU:       s.GetVcpu(),
+		MemoryMB:   s.GetMemoryMb(),
+		UserData:   s.GetUserData(),
+		DriverHint: fromDriver(s.GetDriverHint()),
 	}
 	for _, n := range s.GetNetworkInterfaces() {
 		spec.NetworkInterfaces = append(spec.NetworkInterfaces, compute.NetworkAttachment{
@@ -183,13 +181,11 @@ func fromSpec(s *computev1.VirtualMachineSpec) compute.VirtualMachineSpec {
 
 func toSpec(s compute.VirtualMachineSpec) *computev1.VirtualMachineSpec {
 	out := &computev1.VirtualMachineSpec{
-		ImageId:            s.ImageID,
-		Vcpu:               s.VCPU,
-		MemoryMb:           s.MemoryMB,
-		RecoveryPolicy:     toRecoveryPolicy(s.RecoveryPolicy),
-		PersistentRootDisk: s.PersistentRootDisk,
-		UserData:           s.UserData,
-		DriverHint:         toDriver(s.DriverHint),
+		ImageId:    s.ImageID,
+		Vcpu:       s.VCPU,
+		MemoryMb:   s.MemoryMB,
+		UserData:   s.UserData,
+		DriverHint: toDriver(s.DriverHint),
 	}
 	for _, n := range s.NetworkInterfaces {
 		out.NetworkInterfaces = append(out.NetworkInterfaces, &computev1.NetworkAttachment{
@@ -217,7 +213,6 @@ func toStatusProto(st compute.VirtualMachineStatus) *computev1.VirtualMachineSta
 	out := &computev1.VirtualMachineStatus{
 		Phase:                string(st.Phase),
 		Hypervisor:           st.Hypervisor,
-		RootVolumeRef:        st.RootVolumeRef,
 		InterfaceRefs:        st.InterfaceRefs,
 		VolumeAttachmentRefs: st.VolumeAttachmentRefs,
 	}
@@ -237,7 +232,6 @@ func fromStatusProto(st *computev1.VirtualMachineStatus) compute.VirtualMachineS
 	out := compute.VirtualMachineStatus{
 		Phase:                compute.Phase(st.GetPhase()),
 		Hypervisor:           st.GetHypervisor(),
-		RootVolumeRef:        st.GetRootVolumeRef(),
 		InterfaceRefs:        st.GetInterfaceRefs(),
 		VolumeAttachmentRefs: st.GetVolumeAttachmentRefs(),
 	}
@@ -325,28 +319,6 @@ func toEvent(e compute.Event) *computev1.VirtualMachineEvent {
 		out.Vm = toVM(e.Object)
 	}
 	return out
-}
-
-func fromRecoveryPolicy(p computev1.RecoveryPolicy) compute.RecoveryPolicy {
-	switch p {
-	case computev1.RecoveryPolicy_RECOVERY_POLICY_NONE:
-		return compute.RecoveryPolicyNone
-	case computev1.RecoveryPolicy_RECOVERY_POLICY_SELF_HEAL:
-		return compute.RecoveryPolicySelfHeal
-	default:
-		return compute.RecoveryPolicyUnspecified
-	}
-}
-
-func toRecoveryPolicy(p compute.RecoveryPolicy) computev1.RecoveryPolicy {
-	switch p {
-	case compute.RecoveryPolicyNone:
-		return computev1.RecoveryPolicy_RECOVERY_POLICY_NONE
-	case compute.RecoveryPolicySelfHeal:
-		return computev1.RecoveryPolicy_RECOVERY_POLICY_SELF_HEAL
-	default:
-		return computev1.RecoveryPolicy_RECOVERY_POLICY_UNSPECIFIED
-	}
 }
 
 func fromDriver(d computev1.VmmDriver) compute.VmmDriver {

@@ -140,12 +140,6 @@ message Condition {
 ### サービス共通のRPCパターン（例: VirtualMachine）
 
 ```protobuf
-enum RecoveryPolicy {
-  RECOVERY_POLICY_UNSPECIFIED = 0; // Create時にバリデーションで拒否。明示必須にする
-  NONE = 1;      // cattle。ハイパーバイザー喪失時、kyuushaは何もしない（KaaSが上位で判断・再スケジュール）
-  SELF_HEAL = 2; // pet。ハイパーバイザー喪失を検知したらkyuushaが別ハイパーバイザーで作り直す
-}
-
 message NetworkAttachment {
   string subnet_id = 1;
   bool primary = 2; // spec.network_interfaces中、ちょうど1つがtrueであることをCreate時にバリデーション
@@ -173,9 +167,9 @@ message VirtualMachineSpec {
   int32  vcpu = 2;
   int64  memory_mb = 3;
   repeated NetworkAttachment network_interfaces = 4; // 1台のVirtualMachineに複数インターフェースを許容
-  repeated VolumeRequest volumes = 5;  // データボリューム。ルートディスクはpersistent_root_diskで別扱い
-  RecoveryPolicy recovery_policy = 6; // UNSPECIFIEDはCreate時にエラー(デフォルト値での暗黙運用をさせない)
-  bool persistent_root_disk = 7;      // trueならルートディスクもVolumeとして扱い、再作成時に再アタッチする
+  repeated VolumeRequest volumes = 5;  // データボリューム。ルートディスクは常にephemeral（下記「pet/cattleの区別を廃止」参照）
+  // 6, 7: 2026-09-12に削除（recovery_policy, persistent_root_disk）。
+  // 「pet/cattleの区別を廃止」節参照
   string user_data = 8;               // cloud-init user-data(YAML)。空なら注入しない。実用上64KB程度が目安の上限
   VmmDriver driver_hint = 9;          // 未指定ならFIRECRACKER。I/O性能やPCIパススルーが要るならCLOUD_HYPERVISORを明示指定
   repeated PciDeviceRequest pci_devices = 10; // GPU/SR-IOV NIC等。CLOUD_HYPERVISOR driver_hint時のみ有効
@@ -185,7 +179,7 @@ message VirtualMachineStatus {
   string phase = 1;           // Pending / Scheduled / Provisioning / Running / Stopping / Stopped / Starting / Deleting / Error
   repeated Condition conditions = 2;
   string hypervisor = 3;            // 配置先ハイパーバイザー
-  string root_volume_ref = 4; // persistent_root_disk時、実体を保持するVolumeへの参照
+  // 4: 2026-09-12に削除（root_volume_ref）
   repeated string interface_refs = 5; // spec.network_interfacesと同順のNetworkInterfaceへの参照
   repeated string volume_attachment_refs = 6; // spec.volumesと同順のVolumeAttachmentへの参照
 }
@@ -438,10 +432,10 @@ message VolumeAttachmentStatus {
 `VolumeAttachment`のIDも決定的に生成する: データボリュームは`volattach-<vm-id>-<index>`
 （`spec.volumes`のindex基準）、ルートディスクは`volattach-<vm-id>-root`。
 
-ルートディスク(`persistent_root_disk: true`時)も同じ`Volume`/`VolumeAttachment`で表現し、
-computeが決定的ID(`rootvol-<vm-id>`)で作成する。`persistent_root_disk: false`(デフォルト)の
-場合、ルートディスクはblock-storageを経由せず、compute-agentがVMMドライバ経由でイメージから
-直接ephemeralなディスクを作る（このほうがcattleハイパーバイザーの共通経路として依存が少なく軽い）。
+ルートディスクを`Volume`/`VolumeAttachment`で表現する(`persistent_root_disk`)案も検討したが、
+2026-09-12に見送った（下記「pet/cattleの区別を廃止」参照）——ルートディスクは常に
+block-storageを経由せず、compute-agentがVMMドライバ経由でイメージから直接ephemeralな
+ディスクを作る。
 
 ### imageサービスのリソース: Image
 
@@ -578,8 +572,9 @@ compute-agentはVMM起動前に、(1)対象ハイパーバイザーのローカ�
 初回ハイパーバイザーでの初回起動は数GBのpullが発生し得るため、Provisioningの所要時間は常に一定ではない
 （キャッシュ済み/ピアフェッチ/Dragonfly配信中なら速い）。
 
-**ephemeralルートディスクの実体**: `persistent_root_disk: false`の場合、compute-agentは
-ハイパーバイザーにキャッシュ済みのrootfsブロブを**VirtualMachineごとにcopy-on-writeクローン**し
+**ephemeralルートディスクの実体**: ルートディスクは常にephemeral（下記「pet/cattleの区別を
+廃止」参照）。compute-agentはハイパーバイザーにキャッシュ済みのrootfsブロブを
+**VirtualMachineごとにcopy-on-writeクローン**し
 （CoW対応ファイルシステム上での`reflink`コピー等）、それをvirtio-blockとしてFirecrackerに渡す。
 共有キャッシュ本体には書き込まず、VirtualMachine削除時にクローンだけを破棄する。
 
@@ -877,10 +872,13 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
   イメージ不存在・スケジューリング不能・agentからの恒久的失敗報告など、有限回数以内に
   自然回復しないと判断される失敗のみ`Error`にする（quota超過はCreate時の同期バリデーションで
   拒否するため、VirtualMachineが生成されてから`Error`になることはない。「Quota設計」節を参照）
-- **ハイパーバイザー喪失時の分岐**: `spec.recovery_policy == SELF_HEAL`の場合、ハイパーバイザー喪失検知（後述）を契機に
-  `Running`/`Stopped`から`Scheduled`（新ハイパーバイザー）へ差し戻し、`Provisioning`を再実行する。既存の
-  `NetworkInterface`（IPは維持しtapのみ再配線）と、`persistent_root_disk`なら`status.root_volume_ref`の
-  Volumeを再利用する。`NONE`の場合は`Error`へ遷移し`HypervisorUnreachable`を記録するのみ（復旧はKaaS側の責務）
+- **ハイパーバイザー喪失時、VMは何もしない(2026-09-12確認・決定)**: 死活監視
+  （`sweepHypervisorHealth`）はHypervisor自身の`status.phase`を`NotReady`にするだけで、
+  そのHypervisor上のVMには一切触れない——`Running`のまま固まる。かつて構想していた
+  「`recovery_policy: SELF_HEAL`なら別ハイパーバイザーへ自動再スケジュール、`NONE`なら
+  `Error`+`HypervisorUnreachable`」という分岐はどちらも実装されなかった。`recovery_policy`
+  自体を削除したので「pet/cattleの区別を廃止」参照——復旧はKaaS側（例:
+  Cluster APIのMachineHealthCheck）またはオペレータの手動対応に委ねる、という判断
 
 ## Finalizer: 外部システムによる削除ブロック
 
@@ -1155,27 +1153,32 @@ type MostAvailableFirst struct{}
 最小限のデバイスモデルを採用しており、そもそもゲストにPCIバスを見せない設計（攻撃面を減らす
 ためのFirecracker自身の意図的なトレードオフ）。したがってGPU/PCIパススルーは
 **cloud-hypervisor/libvirt側（VFIO）でのみ**成立し、`driver_hint: CLOUD_HYPERVISOR`を
-選ぶ既存の仕組みにそのまま乗る。I/O性能が必要なpet系ワークロードに続く、
-cloud-hypervisorを選ぶ2つ目の正当な理由になる。
+選ぶ既存の仕組みにそのまま乗る。
 
 `Hypervisor.status.available_devices`（vfio-pci束縛済みのPCIデバイス在庫）と`VirtualMachineSpec.pci_devices`
 （`vendor_id`/`device_id`/`count`を直接指定）は、GPUだけでなくSR-IOV NIC等にも使い回せる
 汎用設計にしてある。デバイスIDは実ハードウェアのPCI ID(ベンダーID/デバイスID)そのものであり、
 `machine_class`のような実装都合の間接カタログではないため、「avoid indirection」の命名原則にも反しない。
 
-`recovery_policy: SELF_HEAL`での再スケジュールも、新ハイパーバイザーに同条件の空きPCIデバイスが
-必要という制約が増えるだけで、既存のフローに素直に乗る。設計の型を用意しただけで、
-実装は当面のTODOとする（GPUワークロードの具体的な需要が出てから着手すれば良い）。
+設計の型を用意しただけで、実装は当面のTODOとする（GPUワークロードの具体的な需要が
+出てから着手すれば良い）。
 
-## ハイパーバイザー死活監視とリカバリ
+## ハイパーバイザー死活監視とリカバリ（2026-09-12: 自動リカバリは見送り、下記参照）
 
-`recovery_policy: SELF_HEAL`を機能させるには、ハイパーバイザー(ハイパーバイザー)の死活監視が要る。
+ハイパーバイザーの死活監視自体は実装済み（`sweepHypervisorHealth`、
+`internal/compute/hypervisor_service.go`）:
 
-- compute-agentは自ハイパーバイザーの生存を`agent.heartbeat.<hypervisor>`のようなsubjectへ定期送信する
-- compute側のハイパーバイザー監視コンポーネントが最終heartbeat時刻を追跡し、閾値超過で該当ハイパーバイザーを`NotReady`と判定する
-- `NotReady`になったハイパーバイザー上の全VirtualMachineをreconcileし、上記「ハイパーバイザー喪失時の分岐」に従って処理する
+- compute-agentは自ハイパーバイザーの生存をNATS経由で定期的にheartbeatする
+- compute側が最終heartbeat時刻を追跡し、閾値超過で該当ハイパーバイザーを`NotReady`と判定する
 
-### 未解決の危険: フェンシング問題
+ただし**`NotReady`になったハイパーバイザー上のVirtualMachineには何もしない**（`Running`のまま
+固まる）——かつては`recovery_policy: SELF_HEAL`を機能させるためにここから先（該当ハイパーバイザー
+上の全VirtualMachineを新ハイパーバイザーへ再スケジュール）を実装する計画だったが、下記の
+フェンシング問題の重さと、そもそもこの責務をkyuushaが負う価値自体を2026-09-12に再検討し、
+実装しないことに決めた——詳細は「pet/cattleの区別を廃止」参照。以下はその検討時に残った
+設計メモ（歴史的記録）。
+
+### 未解決だった危険: フェンシング問題
 
 heartbeat途絶は必ずしも「VMが停止した」ことを意味しない。ネットワーク分断でheartbeatだけ届かず、
 実際には旧ハイパーバイザーでVMが動き続けているケースがあり得る。この状態で新ハイパーバイザーにVirtualMachineを作り直すと、
@@ -1201,6 +1204,49 @@ SCSI Persistent Reservation（SCSI-3 PR）というストレージ側のフェ�
 `Condition{type: WaitingForOldAttachmentRelease}`を報告し続ける。`NetworkInterface`の`Rebinding`も
 同様に、旧ハイパーバイザーでのtap取り外し確認（compute-agentからのNATS経由の確認応答、またはハイパーバイザー自体の
 `NotReady`確定後の一定grace period経過）を待ってから新ハイパーバイザーへのtap配線を許可する。
+
+## pet/cattleの区別を廃止（2026-09-12）
+
+Stop/Start実装（上記「VirtualMachineのライフサイクル状態機械」参照）を機に、そもそも
+セルフヒール(`recovery_policy: SELF_HEAL`)が必要かどうかを改めて検討し、
+`recovery_policy`・`persistent_root_disk`・`status.root_volume_ref`の3フィールドを
+まとめて削除することにした。
+
+**きっかけ**: この3フィールドは実装当初からずっと、Create時バリデーション以外のどこからも
+参照されていなかった（`recovery_policy`はCreate時に`UNSPECIFIED`を拒否するだけ、
+`persistent_root_disk`/`root_volume_ref`はgRPCの型変換コードのみ）。ハイパーバイザー
+死活監視（`sweepHypervisorHealth`）も、Hypervisor自身の`status.phase`を`NotReady`に
+するだけでVMには一切手を触れない。つまり`recovery_policy`は「Create時に選ばされるだけで、
+選んだ後は何の意味も持たない」フィールドだった。
+
+**判断: セルフヒールはkyuusha自身が引き受ける責務ではない**:
+
+1. **ワーカーノード用途**: 一般的なKaaS管理レイヤー（例: Cluster APIの
+   `MachineHealthCheck`）が、ノードの死を検知したら`Machine`を削除→再作成し、
+   それがIaaS側のVM Delete→Createを自動的にトリガーする、という自己修復ループを
+   **既に持っている**。kyuusha自身が同じことを二重に持つ意味は薄い
+2. **control-plane VM用途（etcd/PKIサーバ等、本来の`SELF_HEAL`の動機）**: これも
+   実際にはetcd自身のクォーラム/メンバーシップ機構やPKIサーバのバックアップ運用で
+   対処するのが一般的で、「IaaSがVMの死を検知して勝手に同じVMを再作成する」という
+   粒度の自動化は、この用途でもあまり一般的ではない
+3. どちらの用途でも、上記「未解決だった危険: フェンシング問題」が示す通り、
+   本物のフェンシング（IPMI/BMC経由の強制電源断、SCSI-3 PR等）を欠いた自動リカバリは
+   二重起動によるデータ破損リスクを内包する。このリスクを引き受けてまで実装する
+   価値が、上記1.・2.の理由により薄いと判断した
+
+**削除した3フィールド**: `recovery_policy`（`RecoveryPolicy`列挙体ごと）、
+`persistent_root_disk`、`status.root_volume_ref`。ルートディスクは常にephemeral
+（ハイパーバイザーローカル、Stop/Startでは保持されるがDelete/ハイパーバイザー喪失で
+消える）という単一のモデルになった。永続化したいデータは明示的に`Volume`を
+アタッチする、という既存の経路のみを残す。
+
+**フューチャーワーク: ボリュームブート**: 削除した`persistent_root_disk`とは別に、
+「ルートディスクとして既存の`Volume`を明示的に指せる」という、より素直な形の
+永続ルートディスク機能は将来検討の余地がある。ただし今回廃止した自動フェンシングは
+含めない——ハイパーバイザー障害をオペレータが確認した後、同じVolumeを指す新しいVMを
+**手動で**Createし直す、という運用を想定する（フェンシング役を人間が担うことで、
+kyuusha自身は二重起動リスクを負わない）。まだ設計していない、独立した設計課題として
+扱う。
 
 ## ネットワーク分離の実現方式（KaaSクラスタ間）
 
@@ -1353,8 +1399,8 @@ type HypervisorDriver interface {
 
 FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが頻発するI/O負荷に対して
 不利になる可能性がある（要ベンチマーク検証、まだ未実施）。またNUMAトポロジ露出やhugepages対応も
-手厚くない。`recovery_policy: SELF_HEAL`を使うpet/control-planeハイパーバイザー（etcd/PKIサーバ等）で
-これが問題になりうるため、**全VirtualMachineにFirecrackerを強制せず、`VirtualMachineSpec.driver_hint`で
+手厚くない。こうした特定ワークロード（etcd等の同期fsync多用サーバ）でこれが問題になりうるため、
+**全VirtualMachineにFirecrackerを強制せず、`VirtualMachineSpec.driver_hint`で
 使用するVMMドライバを選べるようにする**。
 
 - computeサービスは`driver_hint`（未指定なら`FIRECRACKER`）を見て、スケジューリング時に
@@ -1366,7 +1412,7 @@ FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが
   本来可能な「ブートローダー内蔵の自己完結ディスク」（`QCOW2`）を今回あえて選ばず、
   同じImage資産を使い回せることを優先した（[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
   「起動方式」参照。この選択の対価としてWindows等の非Linuxゲストは現状サポート外）
-- I/O性能ベンチマークはまだ未実施。pet/control-planeワークロードで`driver_hint: CLOUD_HYPERVISOR`を
+- I/O性能ベンチマークはまだ未実施。同期fsync多用ワークロードで`driver_hint: CLOUD_HYPERVISOR`を
   明示指定すべきかのガイドは、それを経てから確定させる
 - 当初は「machine_class(実装都合を隠す間接的なラベル)」経由でドライバを間接的に決める設計だったが、
   固定カタログ自体を廃止したため（「設計原則: 命名はOpenStackを踏襲しない」節）、
@@ -1374,12 +1420,13 @@ FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが
 
 ## block-storageのバックエンド抽象化
 
-### 前提: ローカルディスクでは`SELF_HEAL`が成立しない
+### 前提: ローカルディスクでは`Volume`の存在意義が成立しない
 
-`Volume`の実体が各compute hypervisor上のローカルディスクだと、ハイパーバイザー障害時に`SELF_HEAL`が別ハイパーバイザーへ
-VirtualMachineを再作成しても、Volumeの中身は旧ハイパーバイザーに物理的に残ったままで持っていけない。pet系
-（etcd/PKIサーバ）の永続化が意味をなさなくなるため、**block-storageのバックエンドはどのcompute
-hypervisorからでもネットワーク越しにattachできることが必須要件**になる。
+`Volume`の実体が各compute hypervisor上のローカルディスクだと、そのVolumeを使うVirtualMachineが
+別のhypervisorへ再作成された場合、中身が物理的に付いてこない——ephemeralなルートディスクと
+何も変わらなくなり、そもそもVolumeという別リソースを用意した意味が無くなる。したがって
+**block-storageのバックエンドはどのcompute hypervisorからでもネットワーク越しにattachできる
+ことが必須要件**になる。
 
 ### v1のデフォルト（2026-09初版）: 専用ストレージノード + iSCSI/NVMe-oF（ZFSバックエンド）
 
@@ -1520,8 +1567,9 @@ compute-agentの間で直接やり取りする専用のNATS stream（`BLOCKSTORA
 
 ### 正直な弱点（訂正前の記述）: ストレージノード自体の冗長化は別問題
 
-この方式はストレージノードが単一障害点になりうる。「pet系の永続Volumeにこそ本当の可用性が
-必要」という文脈を踏まえ、Ceph相当の分散システムを持ち込まずに冗長化する手段として、
+この方式はストレージノードが単一障害点になりうる。「Volumeという独立リソースを用意した
+以上、本当の可用性が必要」という文脈を踏まえ、Ceph相当の分散システムを持ち込まずに
+冗長化する手段として、
 **DRBDによる2ハイパーバイザー間の同期ミラーリング**を将来オプションとして検討する（Cephより運用コストが
 低く、実績もある構成）。
 
@@ -1530,9 +1578,9 @@ compute-agentの間で直接やり取りする専用のNATS stream（`BLOCKSTORA
 厩舎が特定の冗長化方式を前提にする必要はない。
 
 **導入タイミング**: v1は単一ストレージノードを許容する（開発/PoCでは十分）。ただし
-`persistent_root_disk: true`や明示的な`Volume`（＝pet系ワークロード）を本番相当で使い始める時点で、
-単一ストレージノードはまさにその可用性要求と矛盾するため、DRBDミラー構成への切り替えを
-導入条件とする。cattle系のみの運用であれば単一ハイパーバイザーのままで問題ない（block-storageを経由しないため）。
+明示的な`Volume`を本番相当で使い始める時点で、単一ストレージノードはまさにその可用性
+要求と矛盾するため、DRBDミラー構成への切り替えを導入条件とする。Volumeを一切使わない
+運用であれば単一ハイパーバイザーのままで問題ない（block-storageを経由しないため）。
 
 **iSCSI/NVMe-oFの選定**: **NVMe-oF/TCP**を第一候補とする。RDMA対応NICのような特殊なハードウェアを
 要求せず通常のEthernet上で動作し、iSCSIよりレイテンシ・CPUオーバーヘッドの面で有利。
@@ -1871,8 +1919,8 @@ control-planeワークロードで`CLOUD_HYPERVISOR`を明示指定すべきか�
 
 #### ブロックストレージノード（NVMe-oF/TCP + ZFS）
 
-- **用途**: `Volume`/`VolumeAttachment`の実体。`persistent_root_disk: true`のVirtualMachineと、
-  明示的なデータVolumeの永続化に使う（cattle系のデフォルト運用ではそもそも経由しない）
+- **用途**: `Volume`/`VolumeAttachment`の実体。明示的にVolumeをアタッチしたVirtualMachineの
+  データ永続化に使う（Volumeを使わないデフォルト運用ではそもそも経由しない）
 - **技術要件**: 専用ストレージノード（1台〜数台）。ZFSでVolumeを管理し、**NVMe-oF/TCPを
   第一候補**としてexport（RDMA対応NIC等の特殊ハードウェア不要、通常のEthernetで動作。
   Linuxカーネルの`nvmet`/`nvme-cli`）。対象機材がNVMe-oF未対応の場合はiSCSIを
@@ -1882,7 +1930,7 @@ control-planeワークロードで`CLOUD_HYPERVISOR`を明示指定すべきか�
 - **可用性の責任分界**: ハイパーバイザーの用意・冗長化（DRBDによる2ハイパーバイザー間ミラーリング）はデプロイ環境側の
   責務。ただし個々のVolumeのCreate/Export操作自体は、kyuushaのblock-storageサービスが
   `StorageBackend`ドライバを通じて能動的に行う（「操作」はkyuushaの責務、「基盤の堅牢性」は
-  デプロイ側の責務、という分担）。DRBD導入は、pet系ワークロードが本番相当で使われ始めた時点を
+  デプロイ側の責務、という分担）。DRBD導入は、Volumeが本番相当で使われ始めた時点を
   導入の目安とする（単一ハイパーバイザーのままだと、まさに可用性が必要なワークロードと矛盾するため）
 
 ### 任意の外部依存
@@ -1989,6 +2037,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - VLAN IDの割り当て方式（networkサービスが設定済みプールから同期・排他で払い出し）
 - スケジューラ設計（フィルタ5種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む）
 - PCIデバイス(GPU等)パススルーの設計の型（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターン。実装は当面TODO）
+- pet/cattleの区別（`recovery_policy`/`persistent_root_disk`/`root_volume_ref`）を廃止（2026-09-12。実質未使用だったフィールドを削除し、ハイパーバイザー喪失時の自動リカバリはKaaS層/オペレータに委ねる判断。「pet/cattleの区別を廃止」節参照）
 - UI方針（自前のWeb UIは作らずCLI＋Grafanaに任せる。OpenStack Horizonを反面教師に）
 - テナント間VRF分離の実配線ドキュメント化（`docs/network-deployment-guide.md`としてネットワーク運用チーム向けに独立した文書を作成。VLANプール/VRF/ルートリークポリシー/デプロイ前チェックリストを含む）
 - Imageキャッシュのエビクションポリシー（LRU＋参照カウント除外＋サイズ閾値）とpre-staging方針（専用機構は作らずPrometheusで可視化のみ。Dragonflyの判断を先取りしない）
@@ -1998,7 +2047,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - イメージ作成体験（Firecrackerのスナップショット機能はwarm boot専用に限定し、Image作成手段としては使わない。Dockerfile/OCIイメージのエコシステムでrootfsの中身を定義し、`kyuusha image build`というCLIの薄いツールでext4変換＋カーネルペアリング＋Create一気通貫を実現）
 - Availability Zone設計（Subnet/Hypervisorにzoneを持たせ、AZを跨ぐVLANストレッチはしない。Regionはスコープ外）
 - block-storageのバックエンド方式（専用ストレージノード+NVMe-oF/TCP(ZFS)をv1デフォルトに、`StorageBackend`ドライバとして抽象化。Cephは将来オプション）
-- DRBDミラーリング導入タイミング（pet系ワークロードが本番相当で使われ始めた時点）
+- DRBDミラーリング導入タイミング（Volumeが本番相当で使われ始めた時点）
 - NATS JetStreamのsubject/stream設計（`ms.<service>.<cmd|evt>.<hypervisor>...`、CMD/EVTストリームの分離）
 - gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）。2026-09-11、ハイパーバイザー専用mTLS証明書の動的発行（本格PKI）は不採用と確定し、bootstrapトークンへの任意`hypervisor_id`クレーム+`HypervisorSpec.revoked`による軽量な個体識別・失効に代替（将来のRegisterを拒否するのみ、既存セッションの強制切断は不可という割り切り込み）
 - 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）。2026-09-11、`tenant_role=viewer`（テナント内read-only）と`role=storage-admin`（block-storageサービスのみにscopeしたadmin相当）を実装——静的な列挙のみで、動的カスタムロール定義は見送り

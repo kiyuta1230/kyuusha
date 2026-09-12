@@ -9,14 +9,6 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 )
 
-type RecoveryPolicy string
-
-const (
-	RecoveryPolicyUnspecified RecoveryPolicy = "" // Create時にエラー(暗黙運用させない)
-	RecoveryPolicyNone        RecoveryPolicy = "NONE"
-	RecoveryPolicySelfHeal    RecoveryPolicy = "SELF_HEAL"
-)
-
 type VmmDriver string
 
 const (
@@ -42,16 +34,14 @@ type PciDeviceRequest struct {
 }
 
 type VirtualMachineSpec struct {
-	ImageID            string
-	VCPU               int32
-	MemoryMB           int64
-	NetworkInterfaces  []NetworkAttachment
-	Volumes            []VolumeRequest
-	RecoveryPolicy     RecoveryPolicy
-	PersistentRootDisk bool
-	UserData           string
-	DriverHint         VmmDriver
-	PciDevices         []PciDeviceRequest
+	ImageID           string
+	VCPU              int32
+	MemoryMB          int64
+	NetworkInterfaces []NetworkAttachment
+	Volumes           []VolumeRequest
+	UserData          string
+	DriverHint        VmmDriver
+	PciDevices        []PciDeviceRequest
 }
 
 type Phase string
@@ -76,7 +66,6 @@ type VirtualMachineStatus struct {
 	Phase                Phase
 	Conditions           []resource.Condition
 	Hypervisor           string
-	RootVolumeRef        string
 	InterfaceRefs        []string
 	VolumeAttachmentRefs []string
 	// StopForce carries Stop's force argument from Service.Stop through to
