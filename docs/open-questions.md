@@ -133,7 +133,7 @@ Volume検証と独立にVM起動のたびに実際のアタッチ経路で発生
 - 検証コマンドのリトライ間隔・上限（現状は無期限、10秒ごと）は未チューニング
 - Volume検証コマンドのリトライ間隔・上限（現状は無期限、10秒ごと）は未チューニング
 
-## QEMU用のjailer相当の隔離方式（2トラックに分割決定、下記参照）
+## QEMU用のjailer相当の隔離方式（2026-09-12改訂: 既製バイナリ統合に方針転換）
 
 2026-09に`driver_hint=FIRECRACKER`のVMをjailer（chroot + uid/gid権限降格）でラップした
 （[Firecracker起動仕様](specs/firecracker-boot.md)「jailer」、docs/architecture.md
@@ -142,22 +142,26 @@ QEMUをラップできないため、`driver_hint=QEMU`にはまだ同等の隔�
 
 libvirt経由でQEMUを使う案は見送り（kyuusha全体の「運用コストの重い既製品を避ける」
 路線とズレる、コンテナ環境でのnamespace関連の深いバグを既に何度も踏んでいる実績から
-libvirt+SELinux/AppArmorでも同種の沼にハマるリスクが高い）。自前実装の方向で確定——
-ただしchroot/uid-drop（低リスク、`fcvmm/jailer.go`のパターンを流用できる）と
-namespace分離+seccomp（高リスク、標準ライブラリに無くlibseccompかBPF自前実装が要る）
-の難易度差が大きいため、2026-09-11に以下へ分割することを決定:
+libvirt+SELinux/AppArmorでも同種の沼にハマるリスクが高い）。
 
-1. **kyuusha本体**: chroot + uid/gid dropのみの軽い版（Firecracker側のjailerと
-   同じスコープ）。**意図的に保留中**（2026-09-11、ユーザー判断）——別プロジェクト
-   （2番目）が思ったより早く仕上がる可能性があり、その場合この軽い版自体が
-   無駄になる。別プロジェクトの進み具合を見てから着手するかどうかを決める
-2. **別プロジェクト（新規に立ち上げ、別セッションで着手予定）**: namespace分離+
-   seccompまで含む本格的な「QEMU用jailer」を、Firecracker用`jailer`と同じ立ち位置
-   （汎用的な既製ツール）で育てる
+2026-09-11時点では「chroot/uid-dropは低リスクで自前実装できるが、namespace分離+
+seccompは高リスク（標準ライブラリに無くlibseccompかBPF自前実装が要る）」という前提で、
+軽い版をkyuusha本体に、本格版を別プロジェクトに分割する方針を採った
+（[QEMU jailerハンドオフ](qemu-jailer-handoff.md)に経緯を記録、現在は撤回済みとして
+history用に残している）。
 
-詳しい経緯・検討した選択肢・新プロジェクトが目指すべき機能・kyuusha側の参考実装は
-[QEMU jailerハンドオフ](qemu-jailer-handoff.md)に切り出した——別プロジェクトを
-立ち上げる新しいセッションは、まずそちらを読むこと。
+**2026-09-12、この前提が崩れたため方針転換**: 調査の結果、chroot + namespace
+（PID/mount/net）+ seccomp-bpf + uid/gid降格を一通り持つ既製の汎用exec型jailer
+（minijail、nsjail）が実在することが判明した。特にminijailは、crosvm（ChromeOS/
+Androidの実プロダクションVMM）がVMM本体のjailingに実際に使っている前例がある。
+これにより「別プロジェクトとして一から自前実装する」動機（既製品が無い、一番
+リスクの高い部分を切り離したい）の両方が弱まったため、**別プロジェクトは作らず、
+kyuusha本体のタスクとしてminijail（またはnsjail）を`internal/compute-agent/qemuvmm`
+から直接execする形に統合する**方針へ変更した。
+
+詳しい調査結果・比較表・v1スコープ（chroot+namespace+seccomp+uid/gid dropを
+minijail/nsjailにまるごと任せる、network namespace分離は見送り）・実装イメージは
+[QEMU jailer設計](specs/qemu-jailer.md)を参照。
 
 ## ロールベースの細かい認可（RPCメソッド・リソース種別単位）をやるべきか
 
