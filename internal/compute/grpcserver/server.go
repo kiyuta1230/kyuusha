@@ -85,6 +85,22 @@ func (s *Server) Delete(ctx context.Context, req *computev1.DeleteVirtualMachine
 	return &emptypb.Empty{}, nil
 }
 
+func (s *Server) Stop(ctx context.Context, req *computev1.StopVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	vm, err := s.svc.Stop(ctx, req.GetTenantId(), req.GetId(), req.GetForce())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toVM(*vm), nil
+}
+
+func (s *Server) Start(ctx context.Context, req *computev1.StartVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	vm, err := s.svc.Start(ctx, req.GetTenantId(), req.GetId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toVM(*vm), nil
+}
+
 func (s *Server) Watch(req *computev1.WatchVirtualMachinesRequest, stream computev1.VirtualMachineService_WatchServer) error {
 	events, err := s.svc.Watch(stream.Context(), req.GetTenantId(), req.GetSinceResourceVersion(), req.GetFinalizerName())
 	if err != nil {
@@ -124,6 +140,8 @@ func toStatus(err error) error {
 		return status.Error(codes.OutOfRange, err.Error())
 	case errors.Is(err, compute.ErrQuotaExceeded):
 		return status.Error(codes.ResourceExhausted, err.Error())
+	case errors.Is(err, compute.ErrInvalidPhase):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	if status.Code(err) != codes.Unknown {
 		return err

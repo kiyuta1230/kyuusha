@@ -124,6 +124,20 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	defer deleteConsumeCtx.Stop()
 
+	stopCons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "compute-agent-" + a.Hypervisor + "-stop",
+		FilterSubject: compute.CmdSubjectStop(a.Hypervisor),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	stopConsumeCtx, err := stopCons.Consume(a.handleStop)
+	if err != nil {
+		return err
+	}
+	defer stopConsumeCtx.Stop()
+
 	// block-storage's verify-volume command (internal/block-storage/
 	// verification.go) -- a separate stream block-storage owns/creates,
 	// not compute's own COMPUTE_CMD, so EnsureStreams here too (idempotent,
@@ -264,13 +278,16 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 }
 
 // handleDelete tears down whatever real process may have booted for this
-// VM. Every registered driver's Stop is tried: exactly one of them (if
-// any) actually booted a given VM, since a VM's Image format determines
-// which drivers can even consume it (see internal/compute/image.go's
-// validateImage), and each driver's Stop is already documented as a no-op
-// for a vm_id it never booted, so trying them all is safe and needs no
-// separate bookkeeping of which driver "owns" a VM. Fire-and-forget: no
-// result event, see reconciler.go's releaseIfReserved.
+// VM, AND removes its jail/run directory (its root disk included) -- unlike
+// handleStop, this VM is never coming back, so its disk should not linger
+// either (see docs/architecture.md's VM lifecycle). Every registered
+// driver's Destroy is tried: exactly one of them (if any) actually booted a
+// given VM, since a VM's Image format determines which drivers can even
+// consume it (see internal/compute/image.go's validateImage), and each
+// driver's Destroy is already documented as a no-op for a vm_id it never
+// booted, so trying them all is safe and needs no separate bookkeeping of
+// which driver "owns" a VM. Fire-and-forget: no result event, see
+// reconciler.go's releaseIfReserved.
 func (a *Agent) handleDelete(msg jetstream.Msg) {
 	_ = msg.Ack()
 
@@ -280,7 +297,46 @@ func (a *Agent) handleDelete(msg jetstream.Msg) {
 		return
 	}
 	for _, driver := range a.Drivers {
-		driver.Stop(cmd.VMID)
+		driver.Destroy(cmd.VMID)
+	}
+}
+
+// handleStop tears down whatever real process may have booted for this VM,
+// WITHOUT removing its jail/run directory (its root disk survives -- see
+// docs/architecture.md's VM lifecycle and handleDelete's contrasting
+// comment). Every registered driver's Stop is tried, same reasoning as
+// handleDelete trying every Destroy. Unlike handleDelete, this reports back
+// on EvtSubjectStopResult: Service.Stop's Stopping->Stopped transition
+// (reconciler.go's handleStopResult) needs to know once the process is
+// actually gone, not merely signaled -- each driver's Stop already blocks
+// until that's true.
+func (a *Agent) handleStop(msg jetstream.Msg) {
+	_ = msg.Ack()
+
+	var cmd compute.StopCommand
+	if err := json.Unmarshal(msg.Data(), &cmd); err != nil {
+		slog.Error("compute-agent: bad stop command", "err", err)
+		return
+	}
+
+	ctx, span := tracer.Start(context.Background(), "compute-agent.handle_stop",
+		trace.WithLinks(telemetry.LinkFromNATSHeader(msg.Headers())),
+		trace.WithAttributes(attribute.String("vm_id", cmd.VMID), attribute.String("hypervisor", a.Hypervisor)),
+	)
+	defer span.End()
+
+	for _, driver := range a.Drivers {
+		driver.Stop(cmd.VMID, cmd.Force)
+	}
+
+	result := compute.StopResult{VMID: cmd.VMID, Success: true}
+	payload, _ := json.Marshal(result)
+	resultMsg := nats.NewMsg(compute.EvtSubjectStopResult(a.Hypervisor))
+	resultMsg.Data = payload
+	telemetry.InjectNATSHeader(ctx, resultMsg.Header)
+	if _, err := a.JS.PublishMsg(ctx, resultMsg); err != nil {
+		span.RecordError(err)
+		slog.Error("compute-agent: publish stop-result failed", "vm_id", cmd.VMID, "err", err)
 	}
 }
 

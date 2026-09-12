@@ -22,8 +22,16 @@ func CmdSubjectDelete(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.cmd.%s.vm.delete", hypervisor)
 }
 
+func CmdSubjectStop(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.cmd.%s.vm.stop", hypervisor)
+}
+
 func EvtSubjectCreateResult(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.evt.%s.vm.create-result", hypervisor)
+}
+
+func EvtSubjectStopResult(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.evt.%s.vm.stop-result", hypervisor)
 }
 
 func EvtSubjectHeartbeat(hypervisor string) string {
@@ -168,6 +176,26 @@ type CreateResult struct {
 // never reached Provisioning): Stop is a no-op in that case.
 type DeleteCommand struct {
 	VMID string `json:"vm_id"`
+}
+
+// StopCommand is published to CmdSubjectStop(hypervisor) when a VM enters
+// Stopping (see Service.Stop/reconciler.go's PhaseStopping case).
+// compute-agent stops the real VMM process (SIGTERM+grace, or immediately on
+// Force) but deliberately does NOT remove the jail/run directory backing
+// this VM's root disk -- that only happens at real Delete, via each VMM
+// driver's Destroy (see internal/compute-agent/vmm.VMM) -- so the disk
+// survives for a later Start to reuse. Unlike DeleteCommand, this carries a
+// result event (EvtSubjectStopResult) back, since Service.Stop needs to know
+// when Stopping actually finished to advance the VM to Stopped.
+type StopCommand struct {
+	VMID  string `json:"vm_id"`
+	Force bool   `json:"force"`
+}
+
+type StopResult struct {
+	VMID    string `json:"vm_id"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
 }
 
 type HeartbeatMsg struct {

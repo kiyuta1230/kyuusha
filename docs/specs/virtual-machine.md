@@ -111,12 +111,47 @@ fcvmm/qemuvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`
   `driver_hint=QEMU`にはまだ同等のものがない（QEMU用の隔離方式自体が
   docs/open-questions.mdの未決事項）
 
+## 停止/起動（`Stop`/`Start`、2026-09-12実装）
+
+`VirtualMachineService.Stop(vm_id, force)`/`Start(vm_id)`の2 RPCのみ追加。
+`reboot`/`hard-reboot`はサーバー側に対応するRPCや状態を一切持たない、CLIだけの
+組み合わせ（[CLI仕様](cli.md)参照）。
+
+- **Stop**: `Running`のみ許可（それ以外は`FailedPrecondition`）。`Stopping`へ遷移し、
+  Reconcilerが`StopCommand{vm_id, force}`をcompute-agentへpublishする。agentは
+  登録済みの全VMMドライバへ`Stop(vmID, force)`を試す（`Destroy`と同様、実際に
+  そのVMを起動していたドライバ以外は無害なno-op）。`force=false`ならSIGTERM→
+  ドライバ固有の猶予期間→SIGKILL、`force=true`なら即SIGKILLで、**いずれもプロセスの
+  実終了を待ってから**`vm.stop-result`イベントで結果を返す（`DeleteCommand`と異なり
+  結果イベントが要る——Stopping→Stoppedの遷移が実際の終了確認に依存するため）。
+  成功で`Stopped`、失敗（終了を確認できなかった）は`Running`へ差し戻し、
+  `StopFailed`conditionを記録する。tap/volumeマウント等の後始末はプロセス終了時の
+  既存の仕組みがそのまま走るが、**jail/runディレクトリ（根本ディスクの実体）は
+  削除しない**——それがStopとDelete/Destroyの唯一の違い。
+- **Start**: `Stopped`のみ許可。`Starting`という純粋に一時的なphaseを経て、
+  reconcile()は`Scheduled`と全く同じ処理（`provisionAndPublish`）を流用する。
+  新規のNATSコマンド種別は無く、既存の`CreateCommand`をそのまま再構築して送るだけ
+  （`status.interface_refs`/`volume_attachment_refs`は既に保持済みなので、
+  NetworkInterface/VolumeAttachmentは同名で再Create＝冪等に再取得されるだけで実際の
+  新規作成は起きない）。compute-agent側の`Boot()`は、対象VM IDの書き込み可能rootfs
+  コピーが既に存在すればそれをそのまま再利用し（Imageからの再コピーをスキップ）、
+  存在しなければ通常のCreate同様に新規コピーする、という1分岐が入っているだけ。
+  Firecracker側（`internal/compute-agent/fcvmm`）はさらに、jailer自身が
+  「既にセットアップ済みのchroot」を受け付けない（`/dev/net/tun`等のmknodが
+  `EEXIST`で失敗する）ため、rootfsだけを外へ退避してchroot全体を作り直し、
+  rootfsだけ元へ戻す、という一手間が要る。
+
 ## 削除
 
 VMが削除されると、Reconcilerは（Hypervisor容量の解放と同時に）`DeleteCommand`を
 fire-and-forgetでpublishする（結果イベントなし——VM削除自体はこれの完了を待たない）。
-compute-agentは該当VM IDのVMMプロセスにSIGTERMを送り、3秒待ってSIGKILLする。stub経路で
-一度も実プロセスを起動していないVMのDeleteCommandは無害（何もしない）。
+compute-agentは該当VM IDについて、登録済みの全VMMドライバの`Destroy(vmID)`を試す
+（実際にそのVMを起動していたドライバ以外は無害なno-op）——プロセスを停止（SIGKILL）
+した上で、jail/runディレクトリそのものを削除する。`Stop`と違い根本ディスクの実体も
+ここで消える（上記「停止/起動」節参照）。2026-09-12より前は`Stop`相当の処理しか
+呼んでおらず、Delete後もディスクの実体がホスト側に永久にリークし続ける実バグが
+あった（`Destroy`という別メソッドを新設して修正）。stub経路で一度も実プロセスを
+起動していないVMのDeleteCommandは無害（何もしない）。
 
 `DeleteCommand`のpublishに続けて、そのVMが持っていた全VolumeAttachmentも
 fire-and-forgetで削除する（[Volume仕様](volume.md)参照）——これをしないと、そのVolumeは

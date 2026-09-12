@@ -173,7 +173,7 @@ func (x VirtualMachineEvent_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VirtualMachineEvent_Type.Descriptor instead.
 func (VirtualMachineEvent_Type) EnumDescriptor() ([]byte, []int) {
-	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{13, 0}
+	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{15, 0}
 }
 
 type NetworkAttachment struct {
@@ -931,6 +931,131 @@ func (x *DeleteVirtualMachineRequest) GetDryRun() bool {
 	return false
 }
 
+// StopVirtualMachineRequest: Running -> Stopping -> Stopped. Tears down the
+// real VMM process (compute-agent confirms back), but never removes the
+// jail/run directory backing this VM's root disk -- that only happens at
+// actual Delete (see docs/architecture.md "VM lifecycle": kyuusha's
+// ephemeral root disk survives a Stop/Start cycle, only Delete destroys it).
+type StopVirtualMachineRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Id       string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	// force=true sends SIGKILL immediately instead of the default
+	// SIGTERM-then-grace-period-then-SIGKILL.
+	Force         bool `protobuf:"varint,3,opt,name=force,proto3" json:"force,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StopVirtualMachineRequest) Reset() {
+	*x = StopVirtualMachineRequest{}
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StopVirtualMachineRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StopVirtualMachineRequest) ProtoMessage() {}
+
+func (x *StopVirtualMachineRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StopVirtualMachineRequest.ProtoReflect.Descriptor instead.
+func (*StopVirtualMachineRequest) Descriptor() ([]byte, []int) {
+	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *StopVirtualMachineRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *StopVirtualMachineRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *StopVirtualMachineRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+// StartVirtualMachineRequest: Stopped -> Starting -> Provisioning -> Running,
+// reusing the same network/volume/boot plumbing Create's own scheduling
+// already uses (see reconciler.go's provisionAndPublish) -- the VM's
+// existing NetworkInterfaces/VolumeAttachments are reattached, and its
+// already-placed root disk is reused rather than recopied from the Image
+// (see internal/compute-agent/fcvmm and .../qemuvmm's Boot).
+type StartVirtualMachineRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Id            string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StartVirtualMachineRequest) Reset() {
+	*x = StartVirtualMachineRequest{}
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StartVirtualMachineRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StartVirtualMachineRequest) ProtoMessage() {}
+
+func (x *StartVirtualMachineRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StartVirtualMachineRequest.ProtoReflect.Descriptor instead.
+func (*StartVirtualMachineRequest) Descriptor() ([]byte, []int) {
+	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *StartVirtualMachineRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *StartVirtualMachineRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
 type WatchVirtualMachinesRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	TenantId             string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -948,7 +1073,7 @@ type WatchVirtualMachinesRequest struct {
 
 func (x *WatchVirtualMachinesRequest) Reset() {
 	*x = WatchVirtualMachinesRequest{}
-	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[12]
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -960,7 +1085,7 @@ func (x *WatchVirtualMachinesRequest) String() string {
 func (*WatchVirtualMachinesRequest) ProtoMessage() {}
 
 func (x *WatchVirtualMachinesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[12]
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -973,7 +1098,7 @@ func (x *WatchVirtualMachinesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchVirtualMachinesRequest.ProtoReflect.Descriptor instead.
 func (*WatchVirtualMachinesRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{12}
+	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *WatchVirtualMachinesRequest) GetTenantId() string {
@@ -1008,7 +1133,7 @@ type VirtualMachineEvent struct {
 
 func (x *VirtualMachineEvent) Reset() {
 	*x = VirtualMachineEvent{}
-	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[13]
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1020,7 +1145,7 @@ func (x *VirtualMachineEvent) String() string {
 func (*VirtualMachineEvent) ProtoMessage() {}
 
 func (x *VirtualMachineEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[13]
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1033,7 +1158,7 @@ func (x *VirtualMachineEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VirtualMachineEvent.ProtoReflect.Descriptor instead.
 func (*VirtualMachineEvent) Descriptor() ([]byte, []int) {
-	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{13}
+	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *VirtualMachineEvent) GetType() VirtualMachineEvent_Type {
@@ -1069,7 +1194,7 @@ type StreamConsoleRequest struct {
 
 func (x *StreamConsoleRequest) Reset() {
 	*x = StreamConsoleRequest{}
-	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[14]
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1081,7 +1206,7 @@ func (x *StreamConsoleRequest) String() string {
 func (*StreamConsoleRequest) ProtoMessage() {}
 
 func (x *StreamConsoleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[14]
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1094,7 +1219,7 @@ func (x *StreamConsoleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamConsoleRequest.ProtoReflect.Descriptor instead.
 func (*StreamConsoleRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{14}
+	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *StreamConsoleRequest) GetTenantId() string {
@@ -1134,7 +1259,7 @@ type ConsoleChunk struct {
 
 func (x *ConsoleChunk) Reset() {
 	*x = ConsoleChunk{}
-	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[15]
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1146,7 +1271,7 @@ func (x *ConsoleChunk) String() string {
 func (*ConsoleChunk) ProtoMessage() {}
 
 func (x *ConsoleChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[15]
+	mi := &file_kyuusha_compute_v1_vm_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1159,7 +1284,7 @@ func (x *ConsoleChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsoleChunk.ProtoReflect.Descriptor instead.
 func (*ConsoleChunk) Descriptor() ([]byte, []int) {
-	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{15}
+	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ConsoleChunk) GetData() []byte {
@@ -1233,7 +1358,14 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x1bDeleteVirtualMachineRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x17\n" +
-	"\adry_run\x18\x03 \x01(\bR\x06dryRun\"\x97\x01\n" +
+	"\adry_run\x18\x03 \x01(\bR\x06dryRun\"^\n" +
+	"\x19StopVirtualMachineRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12\x14\n" +
+	"\x05force\x18\x03 \x01(\bR\x05force\"I\n" +
+	"\x1aStartVirtualMachineRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\"\x97\x01\n" +
 	"\x1bWatchVirtualMachinesRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x124\n" +
 	"\x16since_resource_version\x18\x02 \x01(\x03R\x14sinceResourceVersion\x12%\n" +
@@ -1263,13 +1395,15 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\tVmmDriver\x12\x1a\n" +
 	"\x16VMM_DRIVER_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16VMM_DRIVER_FIRECRACKER\x10\x01\x12\x13\n" +
-	"\x0fVMM_DRIVER_QEMU\x10\x022\xae\x05\n" +
+	"\x0fVMM_DRIVER_QEMU\x10\x022\xe6\x06\n" +
 	"\x15VirtualMachineService\x12]\n" +
 	"\x06Create\x12/.kyuusha.compute.v1.CreateVirtualMachineRequest\x1a\".kyuusha.compute.v1.VirtualMachine\x12W\n" +
 	"\x03Get\x12,.kyuusha.compute.v1.GetVirtualMachineRequest\x1a\".kyuusha.compute.v1.VirtualMachine\x12g\n" +
 	"\x04List\x12..kyuusha.compute.v1.ListVirtualMachinesRequest\x1a/.kyuusha.compute.v1.ListVirtualMachinesResponse\x12]\n" +
 	"\x06Update\x12/.kyuusha.compute.v1.UpdateVirtualMachineRequest\x1a\".kyuusha.compute.v1.VirtualMachine\x12Q\n" +
-	"\x06Delete\x12/.kyuusha.compute.v1.DeleteVirtualMachineRequest\x1a\x16.google.protobuf.Empty\x12c\n" +
+	"\x06Delete\x12/.kyuusha.compute.v1.DeleteVirtualMachineRequest\x1a\x16.google.protobuf.Empty\x12Y\n" +
+	"\x04Stop\x12-.kyuusha.compute.v1.StopVirtualMachineRequest\x1a\".kyuusha.compute.v1.VirtualMachine\x12[\n" +
+	"\x05Start\x12..kyuusha.compute.v1.StartVirtualMachineRequest\x1a\".kyuusha.compute.v1.VirtualMachine\x12c\n" +
 	"\x05Watch\x12/.kyuusha.compute.v1.WatchVirtualMachinesRequest\x1a'.kyuusha.compute.v1.VirtualMachineEvent0\x01\x12]\n" +
 	"\rStreamConsole\x12(.kyuusha.compute.v1.StreamConsoleRequest\x1a .kyuusha.compute.v1.ConsoleChunk0\x01BCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1b\x06proto3"
 
@@ -1286,7 +1420,7 @@ func file_kyuusha_compute_v1_vm_proto_rawDescGZIP() []byte {
 }
 
 var file_kyuusha_compute_v1_vm_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_kyuusha_compute_v1_vm_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_kyuusha_compute_v1_vm_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_kyuusha_compute_v1_vm_proto_goTypes = []any{
 	(RecoveryPolicy)(0),                 // 0: kyuusha.compute.v1.RecoveryPolicy
 	(VmmDriver)(0),                      // 1: kyuusha.compute.v1.VmmDriver
@@ -1303,13 +1437,15 @@ var file_kyuusha_compute_v1_vm_proto_goTypes = []any{
 	(*ListVirtualMachinesResponse)(nil), // 12: kyuusha.compute.v1.ListVirtualMachinesResponse
 	(*UpdateVirtualMachineRequest)(nil), // 13: kyuusha.compute.v1.UpdateVirtualMachineRequest
 	(*DeleteVirtualMachineRequest)(nil), // 14: kyuusha.compute.v1.DeleteVirtualMachineRequest
-	(*WatchVirtualMachinesRequest)(nil), // 15: kyuusha.compute.v1.WatchVirtualMachinesRequest
-	(*VirtualMachineEvent)(nil),         // 16: kyuusha.compute.v1.VirtualMachineEvent
-	(*StreamConsoleRequest)(nil),        // 17: kyuusha.compute.v1.StreamConsoleRequest
-	(*ConsoleChunk)(nil),                // 18: kyuusha.compute.v1.ConsoleChunk
-	(*v1.Condition)(nil),                // 19: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),               // 20: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),               // 21: google.protobuf.Empty
+	(*StopVirtualMachineRequest)(nil),   // 15: kyuusha.compute.v1.StopVirtualMachineRequest
+	(*StartVirtualMachineRequest)(nil),  // 16: kyuusha.compute.v1.StartVirtualMachineRequest
+	(*WatchVirtualMachinesRequest)(nil), // 17: kyuusha.compute.v1.WatchVirtualMachinesRequest
+	(*VirtualMachineEvent)(nil),         // 18: kyuusha.compute.v1.VirtualMachineEvent
+	(*StreamConsoleRequest)(nil),        // 19: kyuusha.compute.v1.StreamConsoleRequest
+	(*ConsoleChunk)(nil),                // 20: kyuusha.compute.v1.ConsoleChunk
+	(*v1.Condition)(nil),                // 21: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),               // 22: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),               // 23: google.protobuf.Empty
 }
 var file_kyuusha_compute_v1_vm_proto_depIdxs = []int32{
 	3,  // 0: kyuusha.compute.v1.VirtualMachineSpec.network_interfaces:type_name -> kyuusha.compute.v1.NetworkAttachment
@@ -1317,8 +1453,8 @@ var file_kyuusha_compute_v1_vm_proto_depIdxs = []int32{
 	0,  // 2: kyuusha.compute.v1.VirtualMachineSpec.recovery_policy:type_name -> kyuusha.compute.v1.RecoveryPolicy
 	1,  // 3: kyuusha.compute.v1.VirtualMachineSpec.driver_hint:type_name -> kyuusha.compute.v1.VmmDriver
 	5,  // 4: kyuusha.compute.v1.VirtualMachineSpec.pci_devices:type_name -> kyuusha.compute.v1.PciDeviceRequest
-	19, // 5: kyuusha.compute.v1.VirtualMachineStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	20, // 6: kyuusha.compute.v1.VirtualMachine.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	21, // 5: kyuusha.compute.v1.VirtualMachineStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	22, // 6: kyuusha.compute.v1.VirtualMachine.meta:type_name -> kyuusha.resource.v1.ObjectMeta
 	6,  // 7: kyuusha.compute.v1.VirtualMachine.spec:type_name -> kyuusha.compute.v1.VirtualMachineSpec
 	7,  // 8: kyuusha.compute.v1.VirtualMachine.status:type_name -> kyuusha.compute.v1.VirtualMachineStatus
 	6,  // 9: kyuusha.compute.v1.CreateVirtualMachineRequest.spec:type_name -> kyuusha.compute.v1.VirtualMachineSpec
@@ -1331,17 +1467,21 @@ var file_kyuusha_compute_v1_vm_proto_depIdxs = []int32{
 	11, // 16: kyuusha.compute.v1.VirtualMachineService.List:input_type -> kyuusha.compute.v1.ListVirtualMachinesRequest
 	13, // 17: kyuusha.compute.v1.VirtualMachineService.Update:input_type -> kyuusha.compute.v1.UpdateVirtualMachineRequest
 	14, // 18: kyuusha.compute.v1.VirtualMachineService.Delete:input_type -> kyuusha.compute.v1.DeleteVirtualMachineRequest
-	15, // 19: kyuusha.compute.v1.VirtualMachineService.Watch:input_type -> kyuusha.compute.v1.WatchVirtualMachinesRequest
-	17, // 20: kyuusha.compute.v1.VirtualMachineService.StreamConsole:input_type -> kyuusha.compute.v1.StreamConsoleRequest
-	8,  // 21: kyuusha.compute.v1.VirtualMachineService.Create:output_type -> kyuusha.compute.v1.VirtualMachine
-	8,  // 22: kyuusha.compute.v1.VirtualMachineService.Get:output_type -> kyuusha.compute.v1.VirtualMachine
-	12, // 23: kyuusha.compute.v1.VirtualMachineService.List:output_type -> kyuusha.compute.v1.ListVirtualMachinesResponse
-	8,  // 24: kyuusha.compute.v1.VirtualMachineService.Update:output_type -> kyuusha.compute.v1.VirtualMachine
-	21, // 25: kyuusha.compute.v1.VirtualMachineService.Delete:output_type -> google.protobuf.Empty
-	16, // 26: kyuusha.compute.v1.VirtualMachineService.Watch:output_type -> kyuusha.compute.v1.VirtualMachineEvent
-	18, // 27: kyuusha.compute.v1.VirtualMachineService.StreamConsole:output_type -> kyuusha.compute.v1.ConsoleChunk
-	21, // [21:28] is the sub-list for method output_type
-	14, // [14:21] is the sub-list for method input_type
+	15, // 19: kyuusha.compute.v1.VirtualMachineService.Stop:input_type -> kyuusha.compute.v1.StopVirtualMachineRequest
+	16, // 20: kyuusha.compute.v1.VirtualMachineService.Start:input_type -> kyuusha.compute.v1.StartVirtualMachineRequest
+	17, // 21: kyuusha.compute.v1.VirtualMachineService.Watch:input_type -> kyuusha.compute.v1.WatchVirtualMachinesRequest
+	19, // 22: kyuusha.compute.v1.VirtualMachineService.StreamConsole:input_type -> kyuusha.compute.v1.StreamConsoleRequest
+	8,  // 23: kyuusha.compute.v1.VirtualMachineService.Create:output_type -> kyuusha.compute.v1.VirtualMachine
+	8,  // 24: kyuusha.compute.v1.VirtualMachineService.Get:output_type -> kyuusha.compute.v1.VirtualMachine
+	12, // 25: kyuusha.compute.v1.VirtualMachineService.List:output_type -> kyuusha.compute.v1.ListVirtualMachinesResponse
+	8,  // 26: kyuusha.compute.v1.VirtualMachineService.Update:output_type -> kyuusha.compute.v1.VirtualMachine
+	23, // 27: kyuusha.compute.v1.VirtualMachineService.Delete:output_type -> google.protobuf.Empty
+	8,  // 28: kyuusha.compute.v1.VirtualMachineService.Stop:output_type -> kyuusha.compute.v1.VirtualMachine
+	8,  // 29: kyuusha.compute.v1.VirtualMachineService.Start:output_type -> kyuusha.compute.v1.VirtualMachine
+	18, // 30: kyuusha.compute.v1.VirtualMachineService.Watch:output_type -> kyuusha.compute.v1.VirtualMachineEvent
+	20, // 31: kyuusha.compute.v1.VirtualMachineService.StreamConsole:output_type -> kyuusha.compute.v1.ConsoleChunk
+	23, // [23:32] is the sub-list for method output_type
+	14, // [14:23] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
 	14, // [14:14] is the sub-list for extension extendee
 	0,  // [0:14] is the sub-list for field type_name
@@ -1358,7 +1498,7 @@ func file_kyuusha_compute_v1_vm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_compute_v1_vm_proto_rawDesc), len(file_kyuusha_compute_v1_vm_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

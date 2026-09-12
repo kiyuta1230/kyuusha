@@ -263,6 +263,94 @@ func TestService_FinalizerOwnership(t *testing.T) {
 	}
 }
 
+// TestService_StopRequiresRunning exercises the VM lifecycle's phase
+// guard (docs/architecture.md's VM lifecycle: Stop only makes sense on a
+// VM compute-agent might actually have a live process for) and confirms a
+// valid Stop moves Running -> Stopping and stashes force on Status
+// (consumed by reconciler.go's PhaseStopping case, see nats.go's
+// StopCommand).
+func TestService_StopRequiresRunning(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := svc.Stop(ctx, tenant, vm.Meta.ID, false); !errors.Is(err, ErrInvalidPhase) {
+		t.Fatalf("Stop on Pending VM: got %v, want ErrInvalidPhase", err)
+	}
+
+	vm.Status.Phase = PhaseRunning
+	vm.Status.Hypervisor = "hypervisor-1"
+	running, err := svc.Update(ctx, vm)
+	if err != nil {
+		t.Fatalf("Update to Running: %v", err)
+	}
+
+	stopped, err := svc.Stop(ctx, tenant, running.Meta.ID, true)
+	if err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if stopped.Status.Phase != PhaseStopping {
+		t.Fatalf("Phase = %q, want Stopping", stopped.Status.Phase)
+	}
+	if !stopped.Status.StopForce {
+		t.Fatal("StopForce = false, want true (Stop was called with force=true)")
+	}
+
+	if _, err := svc.Stop(ctx, tenant, stopped.Meta.ID, false); !errors.Is(err, ErrInvalidPhase) {
+		t.Fatalf("Stop on already-Stopping VM: got %v, want ErrInvalidPhase", err)
+	}
+}
+
+// TestService_StartRequiresStopped mirrors TestService_StopRequiresRunning
+// for the Stopped -> Starting transition.
+func TestService_StartRequiresStopped(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, RecoveryPolicy: RecoveryPolicyNone,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := svc.Start(ctx, tenant, vm.Meta.ID); !errors.Is(err, ErrInvalidPhase) {
+		t.Fatalf("Start on Pending VM: got %v, want ErrInvalidPhase", err)
+	}
+
+	vm.Status.Phase = PhaseStopped
+	vm.Status.Hypervisor = "hypervisor-1"
+	vm.Status.InterfaceRefs = []string{"iface-1"}
+	stoppedVM, err := svc.Update(ctx, vm)
+	if err != nil {
+		t.Fatalf("Update to Stopped: %v", err)
+	}
+
+	started, err := svc.Start(ctx, tenant, stoppedVM.Meta.ID)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if started.Status.Phase != PhaseStarting {
+		t.Fatalf("Phase = %q, want Starting", started.Status.Phase)
+	}
+	// Start must not disturb the VM's existing Hypervisor assignment or
+	// InterfaceRefs -- see Service.Start's doc comment: reconcile() reuses
+	// them exactly as-is via provisionAndPublish, nothing here re-derives them.
+	if started.Status.Hypervisor != "hypervisor-1" {
+		t.Fatalf("Hypervisor = %q, want unchanged hypervisor-1", started.Status.Hypervisor)
+	}
+
+	if _, err := svc.Start(ctx, tenant, started.Meta.ID); !errors.Is(err, ErrInvalidPhase) {
+		t.Fatalf("Start on already-Starting VM: got %v, want ErrInvalidPhase", err)
+	}
+}
+
 // TestService_WatchFilterByFinalizerName exercises the finalizer_name Watch
 // filter (docs/architecture.md "Finalizer" 's "外部システムが大量にWatch
 // する" concern): an external controller that only cares about VMs it has

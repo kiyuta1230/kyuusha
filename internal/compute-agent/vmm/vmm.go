@@ -32,11 +32,24 @@ type VMM interface {
 	// status.hypervisor"); nil on any error, since nothing was attached for
 	// certain.
 	Boot(ctx context.Context, spec BootSpec) ([]AttachedVolume, error)
-	// Stop tears down vmID's VMM process if this driver has one running. A
-	// no-op if this driver never booted a real process for vmID (a stub-
-	// succeeded VM booted by a different driver, or one that already
-	// exited).
-	Stop(vmID string)
+	// Stop tears down vmID's VMM process if this driver has one running,
+	// blocking until it has actually exited (force=false sends SIGTERM,
+	// waits a driver-specific grace period, then SIGKILLs if still up;
+	// force=true SIGKILLs immediately) -- unlike Boot, callers need this
+	// synchronous, since Service.Stop's Stopping->Stopped transition (see
+	// docs/architecture.md's VM lifecycle) is only correct once the process
+	// is actually gone, not merely signaled. A no-op if this driver never
+	// booted a real process for vmID (a stub-succeeded VM booted by a
+	// different driver, or one that already exited). Does NOT remove the
+	// jail/run directory backing the VM's root disk -- see Destroy.
+	Stop(vmID string, force bool)
+	// Destroy stops vmID (as Stop, force) if still running and then removes
+	// the jail/run directory entirely, including its root disk -- the real
+	// teardown Delete needs (see docs/architecture.md's VM lifecycle: a
+	// Stop/Start cycle must not lose the disk, but Delete must). A no-op
+	// (returns immediately, nothing to remove) if this driver never booted a
+	// real process for vmID.
+	Destroy(vmID string)
 	// ConsoleLogPath is where Boot(vmID's spec) captures the VMM process's
 	// stdout/stderr (== the guest's serial console, ttyS0). Exists only
 	// once Boot has actually run for this vmID.

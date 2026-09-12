@@ -111,6 +111,11 @@ type Manager struct {
 type runningVM struct {
 	cmd  *exec.Cmd
 	taps []string
+	// done is closed by Boot's exit-watch goroutine once the process has
+	// exited and its own cleanup (tap teardown, cgroup removal) has
+	// finished -- Stop/Destroy block on it, same reasoning as fcvmm's
+	// identical field.
+	done chan struct{}
 }
 
 func (m *Manager) binPath() string {
@@ -168,10 +173,16 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// QEMU's virtio-blk backend opens the drive read-write and writes guest
 	// changes straight into the backing file, so every VM needs its own
 	// copy -- the cached master is shared read-only across VMs booted from
-	// the same Image.
+	// the same Image. If this vm_id already has one (a Start after Stop,
+	// see docs/architecture.md's VM lifecycle: Stop never removes vmDir --
+	// only Destroy does, called from Delete, not from here), reuse it as-is
+	// instead of recopying from the Image, so the guest's own writes since
+	// its last boot survive the restart.
 	rootfsCopy := filepath.Join(vmDir, "rootfs.raw")
-	if err := copyFile(masterRootfs, rootfsCopy); err != nil {
-		return nil, fmt.Errorf("qemuvmm: copy rootfs: %w", err)
+	if _, err := os.Stat(rootfsCopy); err != nil {
+		if err := copyFile(masterRootfs, rootfsCopy); err != nil {
+			return nil, fmt.Errorf("qemuvmm: copy rootfs: %w", err)
+		}
 	}
 
 	// Wire every real network interface before QEMU starts (it opens each
@@ -321,11 +332,12 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	case <-time.After(bootGracePeriod):
 	}
 
+	rv := &runningVM{cmd: cmd, taps: taps, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
-	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps}
+	m.running[spec.VMID] = rv
 	m.mu.Unlock()
 
 	go func() {
@@ -342,29 +354,49 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		} else {
 			slog.Info("qemuvmm: qemu process exited", "vm_id", spec.VMID)
 		}
+		close(rv.done)
 	}()
 
 	return attached, nil
 }
 
-// Stop tears down vmID's QEMU process if one is running. A no-op if this
-// compute-agent never booted a real process for it (a VM some other driver
-// booted, or one that already exited) -- deletion isn't gated on this, see
-// reconciler.go's releaseIfReserved.
-func (m *Manager) Stop(vmID string) {
+// Stop tears down vmID's QEMU process if one is running, blocking until it
+// has actually exited -- see vmm.VMM's doc comment for why this must be
+// synchronous, and fcvmm's identical Stop for the same reasoning. A no-op if
+// this compute-agent never booted a real process for it (a VM some other
+// driver booted, or one that already exited). Does not touch the VM's run
+// directory (its root disk) -- see Destroy.
+func (m *Manager) Stop(vmID string, force bool) {
 	m.mu.Lock()
 	rv, ok := m.running[vmID]
 	m.mu.Unlock()
 	if !ok {
 		return
 	}
+	if force {
+		_ = rv.cmd.Process.Signal(syscall.SIGKILL)
+		<-rv.done
+		return
+	}
 	_ = rv.cmd.Process.Signal(syscall.SIGTERM)
-	go func() {
-		time.Sleep(killGracePeriod)
+	select {
+	case <-rv.done:
+	case <-time.After(killGracePeriod):
 		_ = rv.cmd.Process.Signal(syscall.SIGKILL) // no-op if it already exited on SIGTERM
-	}()
-	// Tap cleanup happens in Boot's exit-watch goroutine once the process
-	// actually exits, not here -- same reasoning as fcvmm.
+		<-rv.done
+	}
+}
+
+// Destroy stops vmID (forcefully, if still running) and then removes its
+// entire run directory, including the root disk copy Boot placed there --
+// the real teardown Delete needs (see docs/architecture.md's VM lifecycle
+// and fcvmm's identical Destroy). A no-op if this compute-agent never
+// booted a real process for vmID.
+func (m *Manager) Destroy(vmID string) {
+	m.Stop(vmID, true)
+	if err := os.RemoveAll(filepath.Join(m.runDir(), vmID)); err != nil {
+		slog.Warn("qemuvmm: destroy: remove run dir failed", "vm_id", vmID, "err", err)
+	}
 }
 
 // ensureCached downloads rawURL into CacheDir if not already present, keyed

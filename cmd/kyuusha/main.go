@@ -57,7 +57,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  kyuusha vm <create|get|list|watch|console|delete|add-finalizer|remove-finalizer> [flags]
+  kyuusha vm <create|get|list|watch|console|delete|stop|start|reboot|hard-reboot|add-finalizer|remove-finalizer> [flags]
   kyuusha tenant <create|get|list|watch|update|delete> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
   kyuusha hypervisor bootstrap-token create -zone=... [flags]   (dev-only, local signing; see internal/bootstraptoken)
@@ -88,6 +88,14 @@ func vmCmd(args []string) {
 		vmConsole(args[1:])
 	case "delete":
 		vmDelete(args[1:])
+	case "stop":
+		vmStop(args[1:])
+	case "start":
+		vmStart(args[1:])
+	case "reboot":
+		vmReboot(args[1:], false)
+	case "hard-reboot":
+		vmReboot(args[1:], true)
 	case "add-finalizer":
 		vmAddFinalizer(args[1:])
 	case "remove-finalizer":
@@ -283,6 +291,107 @@ func vmDelete(args []string) {
 	ctx := authedContext(context.Background(), *token)
 	if _, err := client.Delete(ctx, &computev1.DeleteVirtualMachineRequest{TenantId: *tenant, Id: *id}); err != nil {
 		fatal("delete: %v", err)
+	}
+}
+
+func vmStop(args []string) {
+	fs := flag.NewFlagSet("vm stop", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	force := fs.Bool("force", false, "SIGKILL immediately instead of SIGTERM-then-grace-period-then-SIGKILL")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+	vm, err := client.Stop(ctx, &computev1.StopVirtualMachineRequest{TenantId: *tenant, Id: *id, Force: *force})
+	if err != nil {
+		fatal("stop: %v", err)
+	}
+	printVM(vm)
+}
+
+func vmStart(args []string) {
+	fs := flag.NewFlagSet("vm start", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+	vm, err := client.Start(ctx, &computev1.StartVirtualMachineRequest{TenantId: *tenant, Id: *id})
+	if err != nil {
+		fatal("start: %v", err)
+	}
+	printVM(vm)
+}
+
+// vmReboot implements reboot/hard-reboot client-side, as Stop (waiting for
+// Stopped) followed by Start -- there is no separate server-side RPC or
+// state for either (see docs/architecture.md's VM lifecycle): the server
+// only ever knows Stop and Start. hardForce=true passes force=true to Stop
+// (immediate SIGKILL) instead of the default graceful shutdown.
+func vmReboot(args []string, hardForce bool) {
+	name := "vm reboot"
+	if hardForce {
+		name = "vm hard-reboot"
+	}
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+
+	if _, err := client.Stop(ctx, &computev1.StopVirtualMachineRequest{TenantId: *tenant, Id: *id, Force: hardForce}); err != nil {
+		fatal("stop: %v", err)
+	}
+	waitForPhase(ctx, client, *tenant, *id, "Stopped")
+
+	vm, err := client.Start(ctx, &computev1.StartVirtualMachineRequest{TenantId: *tenant, Id: *id})
+	if err != nil {
+		fatal("start: %v", err)
+	}
+	printVM(vm)
+}
+
+// waitForPhase polls Get until id reaches wantPhase, same "one-shot CLI
+// tool, not a controller loop" simplicity as vmAddFinalizer's doc comment --
+// Watch (as waitForTerminal uses) would work too, but a plain poll is
+// simpler here and this is not a hot path.
+func waitForPhase(ctx context.Context, client computev1.VirtualMachineServiceClient, tenant, id, wantPhase string) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		vm, err := client.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: tenant, Id: id})
+		if err != nil {
+			fatal("get: %v", err)
+		}
+		phase := vm.GetStatus().GetPhase()
+		if phase == wantPhase {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "... phase=%s (waiting for %s)\n", phase, wantPhase)
+		select {
+		case <-ctx.Done():
+			fatal("timed out waiting for phase=%s (last seen: %s)", wantPhase, phase)
+		case <-time.After(time.Second):
+		}
 	}
 }
 

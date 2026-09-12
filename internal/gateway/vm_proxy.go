@@ -48,6 +48,14 @@ func (p *VirtualMachineProxy) Delete(ctx context.Context, req *computev1.DeleteV
 	return p.backend.Delete(ctx, req)
 }
 
+func (p *VirtualMachineProxy) Stop(ctx context.Context, req *computev1.StopVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	return p.backend.Stop(ctx, req)
+}
+
+func (p *VirtualMachineProxy) Start(ctx context.Context, req *computev1.StartVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	return p.backend.Start(ctx, req)
+}
+
 func (p *VirtualMachineProxy) Watch(req *computev1.WatchVirtualMachinesRequest, stream computev1.VirtualMachineService_WatchServer) error {
 	backendStream, err := p.backend.Watch(stream.Context(), req)
 	if err != nil {

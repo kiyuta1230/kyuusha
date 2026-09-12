@@ -115,6 +115,14 @@ func placeVolumeLike(src, dst string, jailUID, jailGID uint32) (mounted bool, er
 		return false, fmt.Errorf("stat %s: %w", src, err)
 	}
 	if st.Mode&syscall.S_IFMT == syscall.S_IFBLK {
+		// A restart (Start after Stop) may find dst already mknod'd from a
+		// prior boot of this same VM -- Stop never removes it (only Destroy
+		// does; see manager.go's Boot doc comment on jail reuse). Remove and
+		// recreate rather than erroring on EEXIST or trusting a stale
+		// major:minor blindly (the real device's identity can't change
+		// underneath the same Volume, but there's no reason to rely on
+		// that when recreating it is just as cheap).
+		_ = os.Remove(dst)
 		return false, mknodDeviceLike(src, dst, jailUID, jailGID)
 	}
 	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE, 0o644)

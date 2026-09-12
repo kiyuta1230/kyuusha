@@ -52,6 +52,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	if err := r.consumeResults(ctx); err != nil {
 		return fmt.Errorf("consume results: %w", err)
 	}
+	if err := r.consumeStopResults(ctx); err != nil {
+		return fmt.Errorf("consume stop results: %w", err)
+	}
 	if err := r.subscribeHeartbeats(); err != nil {
 		return fmt.Errorf("subscribe heartbeats: %w", err)
 	}
@@ -146,94 +149,130 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			r.svc.releaseHypervisorCapacity(ctx, hypervisorID, vm.Spec.VCPU, vm.Spec.MemoryMB)
 		}
 
-	case PhaseScheduled:
-		// Create the NetworkInterface objects themselves now, not at Create
-		// time: creating them earlier (e.g. while still Pending, possibly
-		// never scheduled) would leak them with no owning VM ever having run.
-		// createNetworkInterfaces names each with the deterministic
-		// iface-<vm-id>-<index> convention (docs/architecture.md), so a
-		// retry of this same reconcile (e.g. after the Update below fails)
-		// re-creates nothing -- network's Create is idempotent by name.
-		netifs, err := createNetworkInterfaces(ctx, r.svc.subnetClient, r.svc.netifClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.NetworkInterfaces)
-		if err != nil {
-			slog.Error("provision: create network interfaces failed", "vm_id", vm.Meta.ID, "err", err)
-			return
-		}
-		refs := make([]string, len(netifs))
-		for i, n := range netifs {
-			refs[i] = n.IfaceID
-		}
-		vm.Status.InterfaceRefs = refs
+	case PhaseScheduled, PhaseStarting:
+		// PhaseStarting (Service.Start, a Stopped VM) reuses this exact same
+		// body as a freshly-Scheduled VM: vm.Status.Hypervisor is already set
+		// either way (a fresh schedule just set it above; a restarting VM
+		// kept it across Stop, since Stop never releases the reservation --
+		// see Service.Stop), and createNetworkInterfaces/
+		// createVolumeAttachments below are idempotent by name, so for a
+		// restart they simply refetch (and re-validate the freshness of) the
+		// same NetworkInterfaces/VolumeAttachments this VM already had rather
+		// than creating new ones.
+		r.provisionAndPublish(ctx, vm)
 
-		// Same reasoning as NetworkInterfaces: VolumeAttachments are created
-		// now, not at Create time, so a VM that's never actually scheduled
-		// never leaves one behind with no owning VM. volInfos only carries
-		// the ones that actually reached Attached (see createVolumeAttachments'
-		// doc) -- this VM boots without whichever didn't, rather than being
-		// blocked on them (attach-before-boot only, see docs/specs/volume.md).
-		volInfos, volRefs, err := createVolumeAttachments(ctx, r.svc.volumeClient, r.svc.volumeAttachmentClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.Volumes)
-		if err != nil {
-			slog.Error("provision: create volume attachments failed", "vm_id", vm.Meta.ID, "err", err)
-			return
-		}
-		vm.Status.VolumeAttachmentRefs = volRefs
-
-		vm.Status.Phase = PhaseProvisioning
-		if _, err := r.svc.Update(ctx, &vm); err != nil {
-			slog.Error("provision: update failed", "vm_id", vm.Meta.ID, "err", err)
-			return
-		}
-
-		// This span is the root of its own trace, not a continuation of
-		// whatever triggered the original Create() call: reconcile() runs off
-		// an internal Watch loop, arbitrarily long after that call returned.
-		// Its context is injected into the NATS message header so the
-		// consuming compute-agent can link back to it (see
-		// docs/specs/nats-messaging.md); vm_id is the correlation key that
-		// actually lets this VM's whole lifecycle be found across the
-		// resulting separate traces.
-		ctx, span := tracer.Start(ctx, "compute.publish_create_command", trace.WithAttributes(
-			attribute.String("vm_id", vm.Meta.ID),
-			attribute.String("hypervisor", vm.Status.Hypervisor),
-		))
-		defer span.End()
-
-		cmd := CreateCommand{
-			VMID:       vm.Meta.ID,
-			TenantID:   vm.Meta.TenantID,
-			ImageID:    vm.Spec.ImageID,
-			VCPU:       vm.Spec.VCPU,
-			MemoryMB:   vm.Spec.MemoryMB,
-			DriverHint: string(vm.Spec.DriverHint),
-			Interfaces: netifs,
-			UserData:   vm.Spec.UserData,
-			Volumes:    volInfos,
-		}
-		// Resolve the Image to concrete boot inputs now (not at Create time:
-		// the Image could have changed, and compute-agent has no image
-		// service client of its own -- see nats.go's CreateCommand doc).
-		// Create() already validated this Image exists/is Ready/matches
-		// driver_hint, so a failure here is an unexpected race (e.g. the
-		// Image was deleted between Create and this reconcile); leave the VM
-		// in Provisioning and log rather than guess at a recovery.
-		img, err := r.svc.imageClient.Get(ctx, &imagev1.GetImageRequest{TenantId: vm.Meta.TenantID, Id: vm.Spec.ImageID})
-		if err != nil {
-			span.RecordError(err)
-			slog.Error("provision: resolve image failed", "vm_id", vm.Meta.ID, "image_id", vm.Spec.ImageID, "err", err)
-			return
-		}
-		cmd.KernelURL = img.GetSpec().GetKernel().GetUrl()
-		cmd.RootfsURL = img.GetSpec().GetRootfs().GetUrl()
-		cmd.BootArgs = img.GetSpec().GetBootArgs()
-
-		payload, _ := json.Marshal(cmd)
-		msg := nats.NewMsg(CmdSubjectCreate(vm.Status.Hypervisor))
+	case PhaseStopping:
+		// Tell compute-agent to tear down the real VMM process; it reports
+		// back on EvtSubjectStopResult (handleStopResult) once it actually
+		// has, which is what advances this VM to Stopped -- see
+		// nats.go's StopCommand doc for why the jail/run directory (the root
+		// disk) is deliberately left alone here. Fire-and-forget, same as
+		// DeleteCommand: a dropped publish leaves the VM stuck in Stopping
+		// with no separate retry sweep (unlike PhasePending's
+		// runPendingSweep) -- accepted as the same class of gap that already
+		// exists for a dropped CreateCommand publish leaving a VM stuck in
+		// Provisioning.
+		payload, _ := json.Marshal(StopCommand{VMID: vm.Meta.ID, Force: vm.Status.StopForce})
+		msg := nats.NewMsg(CmdSubjectStop(vm.Status.Hypervisor))
 		msg.Data = payload
-		telemetry.InjectNATSHeader(ctx, msg.Header)
 		if _, err := r.js.PublishMsg(ctx, msg); err != nil {
-			span.RecordError(err)
-			slog.Error("provision: publish create command failed", "vm_id", vm.Meta.ID, "err", err)
+			slog.Error("stop: publish stop command failed", "vm_id", vm.Meta.ID, "err", err)
 		}
+	}
+}
+
+// provisionAndPublish creates (idempotently) this VM's NetworkInterfaces and
+// VolumeAttachments and tells compute-agent to boot it, advancing the VM to
+// Provisioning first. Shared by PhaseScheduled (a freshly-scheduled VM) and
+// PhaseStarting (Service.Start on a previously-Stopped VM) -- see reconcile's
+// case comment for why the exact same steps are correct for both.
+func (r *Reconciler) provisionAndPublish(ctx context.Context, vm VirtualMachine) {
+	// Create the NetworkInterface objects themselves now, not at Create
+	// time: creating them earlier (e.g. while still Pending, possibly
+	// never scheduled) would leak them with no owning VM ever having run.
+	// createNetworkInterfaces names each with the deterministic
+	// iface-<vm-id>-<index> convention (docs/architecture.md), so a
+	// retry of this same reconcile (e.g. after the Update below fails)
+	// re-creates nothing -- network's Create is idempotent by name.
+	netifs, err := createNetworkInterfaces(ctx, r.svc.subnetClient, r.svc.netifClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.NetworkInterfaces)
+	if err != nil {
+		slog.Error("provision: create network interfaces failed", "vm_id", vm.Meta.ID, "err", err)
+		return
+	}
+	refs := make([]string, len(netifs))
+	for i, n := range netifs {
+		refs[i] = n.IfaceID
+	}
+	vm.Status.InterfaceRefs = refs
+
+	// Same reasoning as NetworkInterfaces: VolumeAttachments are created
+	// now, not at Create time, so a VM that's never actually scheduled
+	// never leaves one behind with no owning VM. volInfos only carries
+	// the ones that actually reached Attached (see createVolumeAttachments'
+	// doc) -- this VM boots without whichever didn't, rather than being
+	// blocked on them (attach-before-boot only, see docs/specs/volume.md).
+	volInfos, volRefs, err := createVolumeAttachments(ctx, r.svc.volumeClient, r.svc.volumeAttachmentClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.Volumes)
+	if err != nil {
+		slog.Error("provision: create volume attachments failed", "vm_id", vm.Meta.ID, "err", err)
+		return
+	}
+	vm.Status.VolumeAttachmentRefs = volRefs
+
+	vm.Status.Phase = PhaseProvisioning
+	if _, err := r.svc.Update(ctx, &vm); err != nil {
+		slog.Error("provision: update failed", "vm_id", vm.Meta.ID, "err", err)
+		return
+	}
+
+	// This span is the root of its own trace, not a continuation of
+	// whatever triggered the original Create() call: reconcile() runs off
+	// an internal Watch loop, arbitrarily long after that call returned.
+	// Its context is injected into the NATS message header so the
+	// consuming compute-agent can link back to it (see
+	// docs/specs/nats-messaging.md); vm_id is the correlation key that
+	// actually lets this VM's whole lifecycle be found across the
+	// resulting separate traces.
+	ctx, span := tracer.Start(ctx, "compute.publish_create_command", trace.WithAttributes(
+		attribute.String("vm_id", vm.Meta.ID),
+		attribute.String("hypervisor", vm.Status.Hypervisor),
+	))
+	defer span.End()
+
+	cmd := CreateCommand{
+		VMID:       vm.Meta.ID,
+		TenantID:   vm.Meta.TenantID,
+		ImageID:    vm.Spec.ImageID,
+		VCPU:       vm.Spec.VCPU,
+		MemoryMB:   vm.Spec.MemoryMB,
+		DriverHint: string(vm.Spec.DriverHint),
+		Interfaces: netifs,
+		UserData:   vm.Spec.UserData,
+		Volumes:    volInfos,
+	}
+	// Resolve the Image to concrete boot inputs now (not at Create time:
+	// the Image could have changed, and compute-agent has no image
+	// service client of its own -- see nats.go's CreateCommand doc).
+	// Create() already validated this Image exists/is Ready/matches
+	// driver_hint, so a failure here is an unexpected race (e.g. the
+	// Image was deleted between Create and this reconcile); leave the VM
+	// in Provisioning and log rather than guess at a recovery.
+	img, err := r.svc.imageClient.Get(ctx, &imagev1.GetImageRequest{TenantId: vm.Meta.TenantID, Id: vm.Spec.ImageID})
+	if err != nil {
+		span.RecordError(err)
+		slog.Error("provision: resolve image failed", "vm_id", vm.Meta.ID, "image_id", vm.Spec.ImageID, "err", err)
+		return
+	}
+	cmd.KernelURL = img.GetSpec().GetKernel().GetUrl()
+	cmd.RootfsURL = img.GetSpec().GetRootfs().GetUrl()
+	cmd.BootArgs = img.GetSpec().GetBootArgs()
+
+	payload, _ := json.Marshal(cmd)
+	msg := nats.NewMsg(CmdSubjectCreate(vm.Status.Hypervisor))
+	msg.Data = payload
+	telemetry.InjectNATSHeader(ctx, msg.Header)
+	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+		span.RecordError(err)
+		slog.Error("provision: publish create command failed", "vm_id", vm.Meta.ID, "err", err)
 	}
 }
 
@@ -366,6 +405,77 @@ func (r *Reconciler) handleCreateResult(ctx context.Context, res CreateResult) {
 	}
 	if _, err := r.svc.Update(ctx, vm); err != nil {
 		slog.Error("create-result: update failed", "vm_id", vm.Meta.ID, "err", err)
+	}
+}
+
+// consumeStopResults handles compute-agent's vm.stop-result events,
+// advancing the VM from Stopping to Stopped (or back to Running on failure)
+// once the agent reports back -- mirrors consumeResults/handleCreateResult.
+func (r *Reconciler) consumeStopResults(ctx context.Context) error {
+	stream, err := r.js.Stream(ctx, evtStreamName)
+	if err != nil {
+		return err
+	}
+	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "compute-reconciler-stop-results",
+		FilterSubject: "ms.compute.evt.*.vm.stop-result",
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = cons.Consume(func(msg jetstream.Msg) {
+		defer msg.Ack()
+
+		var res StopResult
+		if err := json.Unmarshal(msg.Data(), &res); err != nil {
+			slog.Error("stop-result: bad payload", "err", err)
+			return
+		}
+
+		spanCtx, span := tracer.Start(ctx, "compute.handle_stop_result",
+			trace.WithLinks(telemetry.LinkFromNATSHeader(msg.Headers())),
+			trace.WithAttributes(attribute.String("vm_id", res.VMID)),
+		)
+		defer span.End()
+		r.handleStopResult(spanCtx, res)
+	})
+	return err
+}
+
+func (r *Reconciler) handleStopResult(ctx context.Context, res StopResult) {
+	vms, err := r.svc.List(ctx, "")
+	if err != nil {
+		slog.Error("stop-result: list failed", "err", err)
+		return
+	}
+	var vm *VirtualMachine
+	for i := range vms {
+		if vms[i].Meta.ID == res.VMID {
+			vm = &vms[i]
+			break
+		}
+	}
+	if vm == nil || vm.Status.Phase != PhaseStopping {
+		return // stale or unknown result; ignore
+	}
+
+	if res.Success {
+		vm.Status.Phase = PhaseStopped
+	} else {
+		// The VMM process is presumably still up (Stop never got to tear it
+		// down); go back to Running rather than stranding the VM in
+		// Stopping forever with no real handler left to advance it.
+		vm.Status.Phase = PhaseRunning
+		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+			Type:             "StopFailed",
+			Status:           resource.ConditionTrue,
+			Message:          res.Error,
+			LastTransitionAt: time.Now(),
+		})
+	}
+	if _, err := r.svc.Update(ctx, vm); err != nil {
+		slog.Error("stop-result: update failed", "vm_id", vm.Meta.ID, "err", err)
 	}
 }
 

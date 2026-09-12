@@ -23,6 +23,7 @@ var (
 	ErrValidation    = errors.New("vm: validation failed")
 	ErrHistoryPruned = errors.New("vm: watch resume point too old, relist required")
 	ErrQuotaExceeded = errors.New("vm: tenant quota exceeded")
+	ErrInvalidPhase  = errors.New("vm: not in a phase this operation allows")
 )
 
 // EventType and Event are re-exported from the generic resource.Store so
@@ -299,6 +300,61 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 	s.usage[tenantID] = usage
 
 	return nil
+}
+
+// Stop moves a Running VM to Stopping: reconcile() (reconciler.go) picks up
+// the transition and tells compute-agent to tear down the real VMM process,
+// reporting back on EvtSubjectStopResult once it actually has (see
+// handleStopResult) -- Stop itself does not wait for that here, matching
+// this system's general "Create -> Watch until done" async pattern (see
+// docs/architecture.md) rather than blocking the RPC on it.
+//
+// force is stashed on Status.StopForce only to cross into reconcile()'s
+// Watch-driven loop (see virtualmachine.go's doc comment on that field) --
+// it is not part of the VM's durable state.
+//
+// Unlike Delete, this does NOT touch tenant_usage or release the
+// Hypervisor's capacity reservation: the whole point of Stop (as opposed to
+// Delete) is that the VM keeps its assignment and its root disk, ready for a
+// later Start -- see docs/architecture.md's VM lifecycle section.
+func (s *Service) Stop(ctx context.Context, tenantID, id string, force bool) (*VirtualMachine, error) {
+	vm, err := s.store.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if vm.Status.Phase != PhaseRunning {
+		return nil, fmt.Errorf("%w: vm must be Running to Stop (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
+	}
+	vm.Status.Phase = PhaseStopping
+	vm.Status.StopForce = force
+	out, err := s.store.Update(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Start moves a Stopped VM to Starting: reconcile() (reconciler.go) picks up
+// the transition and drives it straight through Provisioning exactly like a
+// freshly-Scheduled VM (see provisionAndPublish), reattaching its existing
+// NetworkInterfaces/VolumeAttachments and telling compute-agent to boot it
+// again -- each VMM driver's Boot detects and reuses the already-placed root
+// disk from before Stop rather than recopying it from the Image (see
+// internal/compute-agent/fcvmm and .../qemuvmm).
+func (s *Service) Start(ctx context.Context, tenantID, id string) (*VirtualMachine, error) {
+	vm, err := s.store.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if vm.Status.Phase != PhaseStopped {
+		return nil, fmt.Errorf("%w: vm must be Stopped to Start (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
+	}
+	vm.Status.Phase = PhaseStarting
+	out, err := s.store.Update(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Watch replays history newer than sinceRV (0 for "from the start") and then

@@ -131,6 +131,12 @@ type runningVM struct {
 	cmd          *exec.Cmd
 	taps         []string
 	volumeMounts []string
+	// done is closed by Boot's exit-watch goroutine once the process has
+	// exited AND its own cleanup (tap/volume-mount teardown, cgroup removal)
+	// has finished -- Stop/Destroy block on it so neither returns, nor (for
+	// Destroy) removes the jail directory, while a bind-mounted Volume might
+	// still be mounted underneath it.
+	done chan struct{}
 }
 
 func (m *Manager) binPath() string {
@@ -223,8 +229,40 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 	jailUID, jailGID := m.jailUID(), m.jailGID()
 	chroot := jailChrootDir(m.jailChrootBaseDir(), fcExecPath, spec.VMID)
+	rootfsCopy := filepath.Join(chroot, "rootfs.ext4")
+
+	// A restart (Start after Stop) finds this VM's chroot already populated
+	// from its previous boot -- but jailer itself does NOT tolerate that:
+	// it unconditionally mknods dev/net/tun (and similar) on every
+	// invocation and errors (EEXIST) if the chroot already has them from
+	// before (confirmed: "Failed to create /dev/net/tun via mknod inside
+	// the jail: File exists"). Only rootfs.ext4 -- the actual root disk --
+	// needs to survive a restart (see docs/architecture.md's VM lifecycle);
+	// everything else jailer owns (dev/, run/, its own copy of the
+	// Firecracker binary, firecracker.pid) must be wiped so jailer sees a
+	// chroot it recognizes as fresh. Preserve just the rootfs across that
+	// wipe by moving it out and back. tmp must live OUTSIDE chroot (chroot's
+	// parent directory, which os.RemoveAll(chroot) below never touches) --
+	// placing it inside chroot itself (as a first version of this fix did)
+	// gets it deleted right along with everything else being wiped.
+	var preservedRootfs string
+	if _, err := os.Stat(rootfsCopy); err == nil {
+		tmp := filepath.Join(filepath.Dir(chroot), "rootfs.ext4.reuse")
+		if err := os.Rename(rootfsCopy, tmp); err != nil {
+			return nil, fmt.Errorf("fcvmm: preserve existing rootfs before rebuilding jail: %w", err)
+		}
+		preservedRootfs = tmp
+	}
+	if err := os.RemoveAll(chroot); err != nil {
+		return nil, fmt.Errorf("fcvmm: clear jail dir: %w", err)
+	}
 	if err := os.MkdirAll(chroot, 0o755); err != nil {
 		return nil, fmt.Errorf("fcvmm: create jail chroot dir: %w", err)
+	}
+	if preservedRootfs != "" {
+		if err := os.Rename(preservedRootfs, rootfsCopy); err != nil {
+			return nil, fmt.Errorf("fcvmm: restore reused rootfs: %w", err)
+		}
 	}
 
 	// jailer copies the Firecracker binary itself in, but nothing else --
@@ -240,10 +278,14 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// Firecracker opens its root drive read-write and writes guest changes
 	// straight into the backing file, so every VM needs its own copy -- the
 	// cached master is shared read-only across VMs booted from the same
-	// Image.
-	rootfsCopy := filepath.Join(chroot, "rootfs.ext4")
-	if err := placeWritableResource(masterRootfs, rootfsCopy, jailUID, jailGID); err != nil {
-		return nil, fmt.Errorf("fcvmm: copy rootfs into jail: %w", err)
+	// Image. rootfsCopy having just survived the wipe above (a restart)
+	// means the guest's own writes since its last boot are reused as-is
+	// instead of recopying from the Image; only a genuinely new VM (or one
+	// whose jail was somehow lost between boots) gets a fresh copy here.
+	if _, err := os.Stat(rootfsCopy); err != nil {
+		if err := placeWritableResource(masterRootfs, rootfsCopy, jailUID, jailGID); err != nil {
+			return nil, fmt.Errorf("fcvmm: copy rootfs into jail: %w", err)
+		}
 	}
 
 	apiSock := filepath.Join(chroot, "api.sock")
@@ -445,11 +487,12 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	case <-time.After(bootGracePeriod):
 	}
 
+	rv := &runningVM{cmd: cmd, taps: taps, volumeMounts: volumeMounts, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
-	m.running[spec.VMID] = &runningVM{cmd: cmd, taps: taps, volumeMounts: volumeMounts}
+	m.running[spec.VMID] = rv
 	m.mu.Unlock()
 
 	go func() {
@@ -466,30 +509,63 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		} else {
 			slog.Info("fcvmm: firecracker process exited", "vm_id", spec.VMID)
 		}
+		close(rv.done)
 	}()
 
 	return attached, nil
 }
 
-// Stop tears down vmID's Firecracker process if one is running. A no-op if
-// this compute-agent never booted a real process for it (stub-succeeded
-// path, or it already exited) -- deletion isn't gated on this, see
-// reconciler.go's releaseIfReserved.
-func (m *Manager) Stop(vmID string) {
+// Stop tears down vmID's Firecracker process if one is running, blocking
+// until it has actually exited (and this Manager's own cleanup for it has
+// finished -- see runningVM.done) -- see vmm.VMM's doc comment for why this
+// must be synchronous. A no-op if this compute-agent never booted a real
+// process for it (stub-succeeded path, or it already exited). Does not
+// touch the jail/run directory -- see Destroy.
+func (m *Manager) Stop(vmID string, force bool) {
 	m.mu.Lock()
 	rv, ok := m.running[vmID]
 	m.mu.Unlock()
 	if !ok {
 		return
 	}
+	if force {
+		_ = rv.cmd.Process.Signal(syscall.SIGKILL)
+		<-rv.done
+		return
+	}
 	_ = rv.cmd.Process.Signal(syscall.SIGTERM)
-	go func() {
-		time.Sleep(killGracePeriod)
+	select {
+	case <-rv.done:
+	case <-time.After(killGracePeriod):
 		_ = rv.cmd.Process.Signal(syscall.SIGKILL) // no-op if it already exited on SIGTERM
-	}()
-	// Tap cleanup happens in Boot's exit-watch goroutine once the process
-	// actually exits, not here -- deleting a tap while Firecracker still
-	// has it open is unnecessary churn for no benefit.
+		<-rv.done
+	}
+}
+
+// Destroy stops vmID (forcefully, if still running) and then removes its
+// entire jail directory, including the root disk Boot placed there -- the
+// real teardown Delete needs (see docs/architecture.md's VM lifecycle:
+// unlike Stop, Delete must not leave the disk behind). A no-op (nothing to
+// remove) if this compute-agent never booted a real process for vmID: it
+// never got a jail directory at all.
+func (m *Manager) Destroy(vmID string) {
+	m.Stop(vmID, true)
+
+	fcExecPath, err := resolveExecPath(m.binPath())
+	if err != nil {
+		slog.Warn("fcvmm: destroy: resolve firecracker binary, cannot locate jail to remove", "vm_id", vmID, "err", err)
+		return
+	}
+	// jailChrootDir returns .../<vmID>/root; its parent is everything jailer
+	// created for this VM, all of which is safe to remove now that the
+	// process is confirmed gone.
+	vmJailDir := filepath.Dir(jailChrootDir(m.jailChrootBaseDir(), fcExecPath, vmID))
+	if err := os.RemoveAll(vmJailDir); err != nil {
+		slog.Warn("fcvmm: destroy: remove jail dir failed", "vm_id", vmID, "dir", vmJailDir, "err", err)
+	}
+	if err := os.RemoveAll(filepath.Join(m.runDir(), vmID)); err != nil {
+		slog.Warn("fcvmm: destroy: remove run dir failed", "vm_id", vmID, "err", err)
+	}
 }
 
 // ensureCached downloads rawURL into CacheDir if not already present,

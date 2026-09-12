@@ -63,8 +63,13 @@ const (
 	PhaseRunning      Phase = "Running"
 	PhaseStopping     Phase = "Stopping"
 	PhaseStopped      Phase = "Stopped"
-	PhaseDeleting     Phase = "Deleting"
-	PhaseError        Phase = "Error"
+	// PhaseStarting is Stopped -> Starting -> Provisioning: a purely
+	// transient phase reconcile() moves a VM straight through in the same
+	// pass (see reconciler.go's provisionAndPublish), reusing the exact same
+	// network/volume/boot plumbing PhaseScheduled uses -- see Service.Start.
+	PhaseStarting Phase = "Starting"
+	PhaseDeleting Phase = "Deleting"
+	PhaseError    Phase = "Error"
 )
 
 type VirtualMachineStatus struct {
@@ -74,6 +79,13 @@ type VirtualMachineStatus struct {
 	RootVolumeRef        string
 	InterfaceRefs        []string
 	VolumeAttachmentRefs []string
+	// StopForce carries Stop's force argument from Service.Stop through to
+	// reconcile()'s PhaseStopping case (see nats.go's StopCommand) -- not
+	// exposed over the wire (see grpcserver's toStatusProto/fromStatusProto):
+	// it's a one-shot request parameter riding along on Status only because
+	// that's the one channel reconcile()'s Watch-driven loop actually
+	// observes, not a real piece of durable VM state.
+	StopForce bool
 }
 
 type VirtualMachine struct {

@@ -102,6 +102,30 @@ message DeleteVirtualMachineRequest {
   bool dry_run = 3;
 }
 
+// StopVirtualMachineRequest: Running -> Stopping -> Stopped. Tears down the
+// real VMM process (compute-agent confirms back), but never removes the
+// jail/run directory backing this VM's root disk -- that only happens at
+// actual Delete (see docs/architecture.md "VM lifecycle": kyuusha's
+// ephemeral root disk survives a Stop/Start cycle, only Delete destroys it).
+message StopVirtualMachineRequest {
+  string tenant_id = 1;
+  string id = 2;
+  // force=true sends SIGKILL immediately instead of the default
+  // SIGTERM-then-grace-period-then-SIGKILL.
+  bool force = 3;
+}
+
+// StartVirtualMachineRequest: Stopped -> Starting -> Provisioning -> Running,
+// reusing the same network/volume/boot plumbing Create's own scheduling
+// already uses (see reconciler.go's provisionAndPublish) -- the VM's
+// existing NetworkInterfaces/VolumeAttachments are reattached, and its
+// already-placed root disk is reused rather than recopied from the Image
+// (see internal/compute-agent/fcvmm and .../qemuvmm's Boot).
+message StartVirtualMachineRequest {
+  string tenant_id = 1;
+  string id = 2;
+}
+
 message WatchVirtualMachinesRequest {
   string tenant_id = 1;
   int64 since_resource_version = 2;
@@ -144,6 +168,11 @@ service VirtualMachineService {
   rpc List(ListVirtualMachinesRequest) returns (ListVirtualMachinesResponse);
   rpc Update(UpdateVirtualMachineRequest) returns (VirtualMachine);
   rpc Delete(DeleteVirtualMachineRequest) returns (google.protobuf.Empty);
+  // See StopVirtualMachineRequest/StartVirtualMachineRequest above. Both
+  // reject with FailedPrecondition if the VM isn't in the required phase
+  // (Running for Stop, Stopped for Start).
+  rpc Stop(StopVirtualMachineRequest) returns (VirtualMachine);
+  rpc Start(StartVirtualMachineRequest) returns (VirtualMachine);
   rpc Watch(WatchVirtualMachinesRequest) returns (stream VirtualMachineEvent);
   // Serial console (see docs/specs/firecracker-boot.md). Only meaningful
   // for a VM that has actually been scheduled and had a real VMM boot

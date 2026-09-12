@@ -56,7 +56,7 @@ PVC/CDIというコンテナ向けボリューム抽象の流用、CNI(コンテ
 
 - VirtualMachineは「Podに包まれたコンテナ」ではなく、compute-agentが直接VMMプロセス(Firecracker/libvirt)を管理する第一級リソース
 - VirtualMachineのライフサイクルはコンテナのwaiting/running/terminatedではなく、VMネイティブな状態機械
-  （例: `Pending → Scheduled → Provisioning → Running → Stopping → Stopped → Deleting`）で表現する
+  （例: `Pending → Scheduled → Provisioning → Running → Stopping → Stopped → Starting → Deleting`）で表現する
 - vCPU/メモリはコンテナのresource requests/limitsを模倣せず、`VirtualMachineSpec`にVMの語彙でそのまま持つ
   （将来CPU pinning/NUMA/hugepagesが必要になっても、素直にspecフィールドとして追加できる形にする）
 - ボリュームはPVC/CDIのようなコンテナ向け間接層を経由せず、block-storageサービスへの
@@ -182,7 +182,7 @@ message VirtualMachineSpec {
 }
 
 message VirtualMachineStatus {
-  string phase = 1;           // Pending / Scheduled / Provisioning / Running / Stopping / Stopped / Deleting / Error
+  string phase = 1;           // Pending / Scheduled / Provisioning / Running / Stopping / Stopped / Starting / Deleting / Error
   repeated Condition conditions = 2;
   string hypervisor = 3;            // 配置先ハイパーバイザー
   string root_volume_ref = 4; // persistent_root_disk時、実体を保持するVolumeへの参照
@@ -809,8 +809,9 @@ waiting/running/terminatedをそのまま持ち込まない）。
 | `Scheduled` | 配置先ハイパーバイザー決定（`status.hypervisor`確定） | compute(スケジューラ) |
 | `Provisioning` | NetworkInterface/Volume attachment確保待ち→compute-agentへのVM作成指示。`status.conditions`に`NetworkReady`/`VolumesReady`/`Started`が積まれる | compute-agent |
 | `Running` | agentがVM起動を確認 | compute-agent |
-| `Stopping` | ユーザーがStop要求 | compute-agent |
-| `Stopped` | agentが停止を確認。NetworkInterface/Volume attachmentは保持したまま | compute-agent |
+| `Stopping` | `Stop` RPC要求。compute-agentへ`StopCommand`（`force`込み）を送信 | compute-agent |
+| `Stopped` | agentが停止（プロセス終了）を確認（`vm.stop-result`）。NetworkInterface/Volume attachment、および根本ディスク（jail/runディレクトリ）は保持したまま | compute-agent |
+| `Starting` | `Start` RPC要求。純粋に一時的なphaseで、reconcile()が同じreconcile呼び出し内でProvisioningまで進める（下記補足） | compute |
 | `Deleting` | ユーザーがDelete要求（どのphaseからでも遷移可）。VM破棄→子リソース補償削除 | compute-agent → compute |
 | `Error` | 回復不能な失敗。子リソースの補償削除は完了済みだが、VirtualMachine自体は削除せず留まる（理由調査のため） | compute |
 
@@ -818,17 +819,18 @@ waiting/running/terminatedをそのまま持ち込まない）。
 
 ```
 Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──▶ Running
-                                               │  │              │
-                                               │  └─(致命的失敗)─▶ Error
-                                               │                  │
-                                               │              Stopping ──▶ Stopped
-                                               │                  │           │
-                                               │                  │      (Start要求)
-                                               │                  │           │
-                                               │                  ▼           ▼
-                                               └────────────▶ Provisioning(再入)
+                                  ▲            │  │              │
+                                  │            │  └─(致命的失敗)─▶ Error
+                                  │            │                  │
+                                  │            │              Stopping ──▶ Stopped
+                                  │            │                  │           │
+                                  │            │             (Stop失敗)   (Start要求)
+                                  │            │                  │           │
+                                  │            ▼                  ▼           ▼
+                                  │       Provisioning(再入) ◀── Starting ◀───┘
+                                  └────────────┘(Stop失敗はRunningへ差し戻し、上記とは別経路)
 
-(Pending/Scheduled/Provisioning/Running/Stopping/Stopped/Error のどこからでも)
+(Pending/Scheduled/Provisioning/Running/Stopping/Stopped/Starting/Error のどこからでも)
         │
         ▼
     Deleting ──▶ (リソース削除・DELETEDイベント)
@@ -836,9 +838,36 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
 
 ### 補足
 
-- **Stopped→再起動はProvisioningへの再入**: Firecrackerはプロセス単位のVMMなので、Stop=プロセス終了、
+- **実装（2026-09-12、`Stop`/`Start` RPC）**: `VirtualMachineService.Stop(vm_id, force)`/`Start(vm_id)`の
+  2 RPCのみ追加。`reboot`/`hard-reboot`はサーバー側に対応するRPCや状態を一切持たない、CLIだけの
+  組み合わせ（`kyuusha vm reboot` = `Stop`→`Stopped`になるまでポーリング→`Start`、
+  `hard-reboot`は`Stop(force=true)`版）。
+  - `Stop`: `Running`のみ許可（`FailedPrecondition`でそれ以外を拒否）。`Stopping`へ遷移し、
+    `force`は`status`上の一時フィールド（`StopForce`、wireには出さない）としてreconcile()の
+    Watchループへ橋渡しするだけの実装上の都合——恒久的なVM状態ではない。reconcile()が
+    `StopCommand{vm_id, force}`をcompute-agentへ発行し、agentは対応するVMMドライバの
+    `Stop(vmID, force)`（`force=false`ならSIGTERM→猶予期間→SIGKILL、`true`なら即SIGKILL）を
+    **プロセスの実終了を待ってから**`vm.stop-result`イベントで返す。成功で`Stopped`、
+    失敗（プロセスが実際には終了していない）は`Running`へ差し戻す
+  - `Start`: `Stopped`のみ許可。`Starting`は純粋に一時的なphaseで、reconcile()は
+    `PhaseScheduled`と全く同じ処理（`provisionAndPublish`）を`Starting`にも流用する——
+    新規のNATSコマンド種別は無く、既存の`CreateCommand`をそのまま再構築して送るだけ
+    （VMの`status.interface_refs`/`volume_attachment_refs`は既に保持済みなので、
+    NetworkInterface/VolumeAttachmentは同名で再Create＝冪等に再取得されるだけで、
+    実際に新規作成はされない）
+- **Stopped→再起動はProvisioningへの再入**: Firecracker/QEMUはプロセス単位のVMMなので、Stop=プロセス終了、
   Start=新規プロセスで同じNetworkInterface/Volume attachmentを再利用してVM作成、という扱いになる
-  （QEMUのpause/resumeのような同一プロセス継続は前提にしない。ライブマイグレーション不要判断と一貫）
+  （QEMUのpause/resumeのような同一プロセス継続は前提にしない。ライブマイグレーション不要判断と一貫）。
+  根本ディスク（jailer/qemuvmmが確保する書き込み可能rootfsコピー）はStopでは一切削除されず、
+  Startで再利用される（`fcvmm`/`qemuvmm`の`Boot()`が既存rootfsの有無を見て分岐）——
+  Firecracker側は加えて、jailer自身が「既にセットアップ済みのchroot」を受け付けない
+  （`/dev/net/tun`等のmknodがEEXISTで失敗する）ため、rootfsだけを外へ退避してchroot
+  全体を作り直し、rootfsだけ戻す、という一手間が要る（`internal/compute-agent/fcvmm`のBoot()参照）
+- **Deleteは根本ディスクを含めて完全に破棄する**: Stopとは非対称に、VMMドライバの`Destroy(vmID)`
+  （`Stop`とは別の新規メソッド）が、プロセス停止に加えてjail/runディレクトリそのものを
+  `os.RemoveAll`する。以前はどのコードパスもこのディレクトリを削除しておらず、Delete後も
+  ディスクの実体が永久にリークし続ける実バグがあった（2026-09-12発見・修正、`handleDelete`が
+  呼ぶメソッドを`Stop`から`Destroy`へ変更）
 - **NetworkInterfaceとVolumeで削除方針が非対称**: `Deleting`時、NetworkInterfaceはVirtualMachine専用に作られた
   リソースなので完全削除する。一方Volumeは VirtualMachineより長生きしうる独立リソースなので、
   Volume自体は消さず`VolumeAttachment`（結びつきの部分）だけ削除する
