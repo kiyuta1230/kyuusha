@@ -22,12 +22,40 @@ import (
 
 var tracer = otel.Tracer("github.com/kiyuta1230/kyuusha/internal/compute")
 
-// pendingSweepInterval implements docs/architecture.md's "Pendingのまま...
+// retrySweepInterval implements docs/architecture.md's "Pendingのまま...
 // 報告し続け" retry: reconcile() only runs off VM Watch events, so a VM that
 // failed to schedule (no Hypervisor had room) would otherwise never be
 // retried once capacity frees up elsewhere, since freeing capacity is a
 // Hypervisor change, not a VM change, and doesn't appear on this Watch.
-const pendingSweepInterval = 10 * time.Second
+// runRetrySweep also uses this interval as its poll rate for the separate,
+// staleness-gated Provisioning/Stopping retry below (stuckPhaseThreshold).
+const retrySweepInterval = 10 * time.Second
+
+// stuckPhaseThreshold is how long a VM must sit in Provisioning or Stopping
+// before runRetrySweep resends its command (unlike Pending above, which is
+// retried unconditionally every tick) -- long enough that a VM taking its
+// normal course (a real Boot/Stop only takes a few seconds end to end, see
+// fcvmm/chvmm's bootGracePeriod) is never resent, since a resend -- while
+// safe, see below -- is still a redundant NATS round trip for a VM that was
+// never actually stuck.
+//
+// Deliberately scoped to "the compute-agent this VM is already scheduled
+// onto either never got the message, or restarted and lost track of
+// reporting back" -- NOT "the hypervisor itself is gone"
+// (see [[kyuusha_selfheal_dropped_pet_cattle]]): resending to a genuinely-
+// dead hypervisor's subject just queues in NATS with nothing to consume it,
+// same as today, no fencing/rescheduling risk.
+//
+// Safe to resend at all only because fcvmm/chvmm's Boot is now idempotent
+// against an already-running vm_id (see vmm.BootRecord and each driver's
+// Reconcile) -- before that fix, resending Create risked starting a
+// second, duplicate process. Resending is also what actually advances a
+// stuck VM's phase: Boot's idempotent no-op still flows through
+// handleCreate's normal path, which still publishes a CreateResult (and
+// handleStop *always* publishes a StopResult, success or not) -- the
+// resend itself is the retry that finally answers back, not just a safety
+// check with nothing left to do.
+const stuckPhaseThreshold = 30 * time.Second
 
 // Reconciler drives VirtualMachines from Pending through Provisioning by
 // talking to compute-agent over NATS, scheduling them onto real, self-
@@ -59,7 +87,7 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		return fmt.Errorf("subscribe heartbeats: %w", err)
 	}
 	go r.svc.runHealthSweep(ctx)
-	go r.runPendingSweep(ctx)
+	go r.runRetrySweep(ctx)
 	go r.publishHypervisorStorageConnections(ctx)
 
 	events, err := r.svc.Watch(ctx, "", 0, "") // all tenants, unfiltered: internal use only
@@ -77,8 +105,15 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	return nil
 }
 
-func (r *Reconciler) runPendingSweep(ctx context.Context) {
-	ticker := time.NewTicker(pendingSweepInterval)
+// runRetrySweep drives two independent retries off the same periodic VM
+// listing: Pending (unconditional every tick, see retrySweepInterval) and
+// Provisioning/Stopping (only once stuck past stuckPhaseThreshold -- see
+// its doc comment for why this is now safe and why it's scoped the way it
+// is). stuckSince is owned entirely by this goroutine (nothing else reads
+// or writes it), so no locking is needed despite living across ticks.
+func (r *Reconciler) runRetrySweep(ctx context.Context) {
+	stuckSince := make(map[string]time.Time) // vm_id -> first tick this process observed it stuck in Provisioning/Stopping
+	ticker := time.NewTicker(retrySweepInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -89,9 +124,40 @@ func (r *Reconciler) runPendingSweep(ctx context.Context) {
 			if err != nil {
 				continue
 			}
+			seenStuck := make(map[string]bool, len(vms))
 			for _, vm := range vms {
-				if vm.Status.Phase == PhasePending {
+				switch vm.Status.Phase {
+				case PhasePending:
 					r.reconcile(ctx, vm)
+				case PhaseProvisioning, PhaseStopping:
+					seenStuck[vm.Meta.ID] = true
+					since, ok := stuckSince[vm.Meta.ID]
+					if !ok {
+						stuckSince[vm.Meta.ID] = time.Now()
+						continue
+					}
+					if time.Since(since) < stuckPhaseThreshold {
+						continue
+					}
+					slog.Warn("retry sweep: VM stuck past threshold, resending its command", "vm_id", vm.Meta.ID, "phase", vm.Status.Phase, "stuck_for", time.Since(since))
+					if vm.Status.Phase == PhaseProvisioning {
+						r.provisionAndPublish(ctx, vm)
+					} else {
+						r.publishStopCommand(ctx, vm)
+					}
+					// Reset rather than delete: retry again only after
+					// another full threshold if it's still stuck next tick,
+					// not on every subsequent tick.
+					stuckSince[vm.Meta.ID] = time.Now()
+				}
+			}
+			// A vm_id no longer seen in Provisioning/Stopping (progressed,
+			// or deleted) shouldn't keep counting toward a future stuck
+			// window if it ever re-enters that phase later (e.g. Start
+			// after Stop going through Provisioning again).
+			for id := range stuckSince {
+				if !seenStuck[id] {
+					delete(stuckSince, id)
 				}
 			}
 		}
@@ -162,22 +228,28 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 		r.provisionAndPublish(ctx, vm)
 
 	case PhaseStopping:
-		// Tell compute-agent to tear down the real VMM process; it reports
-		// back on EvtSubjectStopResult (handleStopResult) once it actually
-		// has, which is what advances this VM to Stopped -- see
-		// nats.go's StopCommand doc for why the jail/run directory (the root
-		// disk) is deliberately left alone here. Fire-and-forget, same as
-		// DeleteCommand: a dropped publish leaves the VM stuck in Stopping
-		// with no separate retry sweep (unlike PhasePending's
-		// runPendingSweep) -- accepted as the same class of gap that already
-		// exists for a dropped CreateCommand publish leaving a VM stuck in
-		// Provisioning.
-		payload, _ := json.Marshal(StopCommand{VMID: vm.Meta.ID, Force: vm.Status.StopForce})
-		msg := nats.NewMsg(CmdSubjectStop(vm.Status.Hypervisor))
-		msg.Data = payload
-		if _, err := r.js.PublishMsg(ctx, msg); err != nil {
-			slog.Error("stop: publish stop command failed", "vm_id", vm.Meta.ID, "err", err)
-		}
+		r.publishStopCommand(ctx, vm)
+	}
+}
+
+// publishStopCommand tells compute-agent to tear down the real VMM process;
+// it reports back on EvtSubjectStopResult (handleStopResult) once it
+// actually has, which is what advances this VM to Stopped -- see nats.go's
+// StopCommand doc for why the jail/run directory (the root disk) is
+// deliberately left alone here. Fire-and-forget: a dropped publish (or one
+// that reaches a compute-agent that's since crashed) leaves the VM stuck in
+// Stopping -- runStaleSweep below re-calls this for a VM that's been
+// Stopping too long, same as it re-calls provisionAndPublish for a stuck
+// Provisioning VM. Safe to call more than once for the same VM: handleStop
+// always reports StopResult{Success:true} even when it finds nothing to
+// stop (already gone, or never a real process at all), so a redundant
+// resend just produces a redundant (harmless) StopResult.
+func (r *Reconciler) publishStopCommand(ctx context.Context, vm VirtualMachine) {
+	payload, _ := json.Marshal(StopCommand{VMID: vm.Meta.ID, Force: vm.Status.StopForce})
+	msg := nats.NewMsg(CmdSubjectStop(vm.Status.Hypervisor))
+	msg.Data = payload
+	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+		slog.Error("stop: publish stop command failed", "vm_id", vm.Meta.ID, "err", err)
 	}
 }
 
