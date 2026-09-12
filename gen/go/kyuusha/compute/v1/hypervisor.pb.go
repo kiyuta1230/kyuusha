@@ -281,7 +281,7 @@ type HypervisorStatus struct {
 	AllocatableMemoryMb int64                  `protobuf:"varint,5,opt,name=allocatable_memory_mb,json=allocatableMemoryMb,proto3" json:"allocatable_memory_mb,omitempty"`
 	AllocatedVcpu       int32                  `protobuf:"varint,6,opt,name=allocated_vcpu,json=allocatedVcpu,proto3" json:"allocated_vcpu,omitempty"`
 	AllocatedMemoryMb   int64                  `protobuf:"varint,7,opt,name=allocated_memory_mb,json=allocatedMemoryMb,proto3" json:"allocated_memory_mb,omitempty"`
-	SupportedDrivers    []string               `protobuf:"bytes,8,rep,name=supported_drivers,json=supportedDrivers,proto3" json:"supported_drivers,omitempty"` // e.g. ["firecracker", "qemu"]
+	SupportedDrivers    []string               `protobuf:"bytes,8,rep,name=supported_drivers,json=supportedDrivers,proto3" json:"supported_drivers,omitempty"` // e.g. ["FIRECRACKER", "CLOUD_HYPERVISOR"]
 	AvailableDevices    []*PciDevice           `protobuf:"bytes,9,rep,name=available_devices,json=availableDevices,proto3" json:"available_devices,omitempty"`
 	StorageConnections  []*StorageConnection   `protobuf:"bytes,10,rep,name=storage_connections,json=storageConnections,proto3" json:"storage_connections,omitempty"`
 	unknownFields       protoimpl.UnknownFields

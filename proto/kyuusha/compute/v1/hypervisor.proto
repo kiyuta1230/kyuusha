@@ -62,7 +62,7 @@ message HypervisorStatus {
   int64 allocatable_memory_mb = 5;
   int32 allocated_vcpu = 6;
   int64 allocated_memory_mb = 7;
-  repeated string supported_drivers = 8; // e.g. ["firecracker", "qemu"]
+  repeated string supported_drivers = 8; // e.g. ["FIRECRACKER", "CLOUD_HYPERVISOR"]
   repeated PciDevice available_devices = 9;
   repeated StorageConnection storage_connections = 10;
 }
