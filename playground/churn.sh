@@ -30,7 +30,19 @@ if ! (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null; then
 fi
 exec 3>&-
 
-admin_token="$(go run ./cmd/kyuusha token mint -tenant=bootstrap-admin -role=admin -sub=churn-admin@example.com)"
+# churn.sh is meant to run indefinitely (that's the whole point -- keep the
+# fleet dashboards moving), so tokens are minted with a long TTL and are
+# additionally re-minted periodically (see refresh_tokens_if_stale below).
+# Without this, a run longer than the CLI's default 1h -ttl silently turns
+# into a no-op loop that only logs "!! ... token is expired" -- and worse,
+# cleanup()'s own delete calls use the same tokens, so Ctrl+C after that
+# point can't clean up what it created either, leaving an orphaned tenant
+# behind. Both bit us for real on 2026-09-13.
+token_ttl="24h"
+token_refresh_after=$((12 * 3600)) # re-mint well before token_ttl elapses
+token_minted_at=0
+
+admin_token="$(go run ./cmd/kyuusha token mint -tenant=bootstrap-admin -role=admin -sub=churn-admin@example.com -ttl="$token_ttl")"
 tenant_name="churn-$(date +%s)"
 tenant_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 \
   -name="$tenant_name" -display-name="Churn Demo" \
@@ -39,7 +51,21 @@ tenant_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -
 tenant="$(echo "$tenant_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 echo "==> tenant=$tenant"
 export KYUUSHA_TOKEN
-KYUUSHA_TOKEN="$(go run ./cmd/kyuusha token mint -tenant="$tenant")"
+KYUUSHA_TOKEN="$(go run ./cmd/kyuusha token mint -tenant="$tenant" -ttl="$token_ttl")"
+token_minted_at=$(date +%s)
+
+refresh_tokens() {
+  admin_token="$(go run ./cmd/kyuusha token mint -tenant=bootstrap-admin -role=admin -sub=churn-admin@example.com -ttl="$token_ttl")"
+  KYUUSHA_TOKEN="$(go run ./cmd/kyuusha token mint -tenant="$tenant" -ttl="$token_ttl")"
+  token_minted_at=$(date +%s)
+  echo "==> tokens refreshed (next refresh in ~$((token_refresh_after / 3600))h)"
+}
+
+refresh_tokens_if_stale() {
+  if (($(date +%s) - token_minted_at >= token_refresh_after)); then
+    refresh_tokens
+  fi
+}
 
 image_line="$(go run ./cmd/kyuusha image create -addr=localhost:8080 -tenant="$tenant" -name=churn-image \
   -format=kernel_rootfs -kernel-url=http://image-assets/vmlinux -rootfs-url=http://image-assets/rootfs.ext4)"
@@ -122,6 +148,7 @@ delete_slot() {
 cleanup() {
   echo
   echo "==> churn.sh: stopping, cleaning up..."
+  refresh_tokens # unconditional: guarantees deletes below work no matter how stale the old tokens are
   for ((i = 0; i < max_vms; i++)); do
     [ -n "${vm_ids[i]:-}" ] && delete_slot "$i"
   done
@@ -138,6 +165,7 @@ trap cleanup INT TERM
 # up once and flatlining, which is more interesting to watch on a
 # dashboard.
 while true; do
+  refresh_tokens_if_stale
   i=$((RANDOM % max_vms))
   if [ -z "${vm_ids[i]}" ]; then
     create_slot "$i"
