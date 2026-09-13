@@ -12,7 +12,10 @@ import (
 
 func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	if _, err := svc.CreateSubnet(ctx, "tenant-a", "x", SubnetSpec{CIDR: "10.0.1.0/24"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected ErrValidation for missing zone, got %v", err)
@@ -32,7 +35,10 @@ func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{
 		Zone: "zone-a", CIDR: "10.0.1.0/24", AllocatableIPRanges: []string{"10.0.1.10-10.0.1.10"},
@@ -59,7 +65,10 @@ func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T)
 
 func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -91,7 +100,10 @@ func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 
 func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	first, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -106,9 +118,67 @@ func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 	}
 }
 
+// TestService_NewServiceRebuildsPoolsFromExistingResources proves the real
+// bug found 2026-09-13: vlanPool/ipPool/nextMACOct are all purely
+// in-memory, so without rebuildPools, every restart of this process -- not
+// just a hypothetical multi-replica scenario -- would forget every VLAN
+// ID/IP/MAC address already allocated and could hand the exact same one
+// out again (the MAC half of this was caught live, serendipitously, while
+// verifying the VLAN/IP fix against the real playground stack: two
+// NetworkInterfaces created before/after a real network-1 container
+// restart both got the identical mac_address). Constructs two Services
+// against the SAME etcd client/namespace (not resourcetest.Client(t)
+// called twice, which would give each its own isolated namespace) to
+// simulate a real restart: the second NewService call is the fresh process,
+// the first Subnet/NetworkInterface it never itself created.
+func TestService_NewServiceRebuildsPoolsFromExistingResources(t *testing.T) {
+	ctx := context.Background()
+	etcdClient := resourcetest.Client(t)
+
+	svc1, err := NewService(ctx, etcdClient, nil)
+	if err != nil {
+		t.Fatalf("NewService (first): %v", err)
+	}
+	sn, err := svc1.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	if err != nil {
+		t.Fatalf("CreateSubnet: %v", err)
+	}
+	iface, err := svc1.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID})
+	if err != nil {
+		t.Fatalf("CreateNetworkInterface: %v", err)
+	}
+
+	svc2, err := NewService(ctx, etcdClient, nil)
+	if err != nil {
+		t.Fatalf("NewService (second, simulating a restart): %v", err)
+	}
+
+	sn2, err := svc2.CreateSubnet(ctx, "tenant-a", "sn2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"})
+	if err != nil {
+		t.Fatalf("CreateSubnet (after restart): %v", err)
+	}
+	if sn2.Status.VLANID == sn.Status.VLANID {
+		t.Fatalf("got the same vlan_id (%d) as the pre-restart Subnet -- rebuildPools did not restore vlanPool's state", sn2.Status.VLANID)
+	}
+
+	iface2, err := svc2.CreateNetworkInterface(ctx, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID})
+	if err != nil {
+		t.Fatalf("CreateNetworkInterface (after restart): %v", err)
+	}
+	if iface2.Status.IPAddress == iface.Status.IPAddress {
+		t.Fatalf("got the same ip_address (%s) as the pre-restart NetworkInterface -- rebuildPools did not restore ipPool's state", iface2.Status.IPAddress)
+	}
+	if iface2.Status.MACAddress == iface.Status.MACAddress {
+		t.Fatalf("got the same mac_address (%s) as the pre-restart NetworkInterface -- rebuildPools did not restore nextMACOct's state", iface2.Status.MACAddress)
+	}
+}
+
 func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	// Drain zone-a's pool directly (allocating one Subnet per VLAN ID would
 	// be needlessly slow); Create should then leave a Subnet Pending rather
@@ -159,9 +229,12 @@ func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRejectsUnknownSubnet(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
-	_, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: "subnet-does-not-exist"})
+	_, err = svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: "subnet-does-not-exist"})
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected ErrValidation for unknown subnet_id, got %v", err)
 	}
@@ -169,7 +242,10 @@ func TestService_CreateNetworkInterfaceRejectsUnknownSubnet(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -184,7 +260,10 @@ func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
 	if err != nil {
@@ -230,7 +309,10 @@ func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T)
 // this closes (VM Delete never touches its NetworkInterfaces today).
 func TestService_SweepOrphanedNetworkInterfacesDeletesOnlyMissingVMs(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), &FakeVirtualMachineClient{Existing: map[string]bool{"vm-exists": true}})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeVirtualMachineClient{Existing: map[string]bool{"vm-exists": true}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
 	if err != nil {
@@ -257,7 +339,10 @@ func TestService_SweepOrphanedNetworkInterfacesDeletesOnlyMissingVMs(t *testing.
 
 func TestService_CreateNetworkInterfaceReportsIPPoolExhausted(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	// /30 has exactly 2 usable host addresses.
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/30"})

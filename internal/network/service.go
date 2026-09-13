@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -87,8 +89,12 @@ type Service struct {
 	computeClient computev1.VirtualMachineServiceClient
 }
 
-func NewService(etcdClient *clientv3.Client, computeClient computev1.VirtualMachineServiceClient) *Service {
-	return &Service{
+// NewService constructs a Service and synchronously rebuilds its VLAN/IP
+// pools from etcd (see rebuildPools) before returning -- callers must not
+// start serving Create requests until this returns, or a Create racing the
+// rebuild could hand out an id/address the rebuild was about to reserve.
+func NewService(ctx context.Context, etcdClient *clientv3.Client, computeClient computev1.VirtualMachineServiceClient) (*Service, error) {
+	svc := &Service{
 		subnets: resource.NewStore[Subnet, *Subnet](etcdClient, "subnet", resource.StoreErrors{
 			NotFound:      ErrSubnetNotFound,
 			Conflict:      ErrSubnetConflict,
@@ -103,6 +109,70 @@ func NewService(etcdClient *clientv3.Client, computeClient computev1.VirtualMach
 		vlans:         newVLANPool(),
 		ips:           newIPPool(),
 	}
+	if err := svc.rebuildPools(ctx); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// rebuildPools restores vlans/ips/nextMACOct's in-memory allocation state
+// from every existing Subnet/NetworkInterface in etcd. Without this,
+// vlanPool/ipPool/nextMACOct -- all purely in-memory, populated only by
+// allocations made within this process's own lifetime -- forget every VLAN
+// ID/IP address/MAC address already allocated on EVERY restart of this
+// process, not just a hypothetical multi-replica scenario: a plain
+// crash-and-restart is enough. The next allocation could then hand out an
+// id/address already live on an existing Subnet/NetworkInterface (found
+// live 2026-09-13: nextMACOct resetting to 0 meant the very first
+// NetworkInterface created after any restart got the exact same MAC
+// address as the very first one ever created, process-wide) -- a real
+// conflict this rebuild prevents by seeding the in-memory state with
+// reality before accepting any new request.
+func (s *Service) rebuildPools(ctx context.Context) error {
+	subnets, err := s.subnets.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("network: rebuild pools: list subnets: %w", err)
+	}
+	for _, sn := range subnets {
+		if sn.Status.VLANID != 0 {
+			s.vlans.markUsed(sn.Spec.Zone, sn.Status.VLANID)
+		}
+	}
+	ifaces, err := s.interfaces.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("network: rebuild pools: list network interfaces: %w", err)
+	}
+	var maxMACOct uint32
+	for _, n := range ifaces {
+		if n.Status.IPAddress != "" {
+			s.ips.markUsed(n.Spec.SubnetID, n.Status.IPAddress)
+		}
+		if oct, ok := parseMACOct(n.Status.MACAddress); ok && oct > maxMACOct {
+			maxMACOct = oct
+		}
+	}
+	s.nextMACOct = maxMACOct
+	return nil
+}
+
+// parseMACOct extracts allocateMAC's counter value back out of a MAC
+// address it produced ("02:00:00:00:<hi>:<lo>"), or ok=false if mac isn't
+// in exactly that shape (e.g. empty, for a NetworkInterface that never got
+// past Pending before this Status field was ever set).
+func parseMACOct(mac string) (n uint32, ok bool) {
+	parts := strings.Split(mac, ":")
+	if len(parts) != 6 || parts[0] != "02" || parts[1] != "00" || parts[2] != "00" || parts[3] != "00" {
+		return 0, false
+	}
+	hi, err := strconv.ParseUint(parts[4], 16, 8)
+	if err != nil {
+		return 0, false
+	}
+	lo, err := strconv.ParseUint(parts[5], 16, 8)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(hi)<<8 | uint32(lo), true
 }
 
 // Run retries Pending Subnets/NetworkInterfaces (pool exhaustion at Create

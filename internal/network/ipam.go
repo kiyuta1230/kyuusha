@@ -54,6 +54,19 @@ func (p *vlanPool) release(zone string, id int32) {
 	delete(p.used[zone], id)
 }
 
+// markUsed records id as already allocated in zone without drawing a new
+// one -- used only to rebuild this pool's state from etcd at startup (see
+// Service.rebuildPools), since allocate() itself always hands out a fresh
+// id and has no "claim this specific one" mode.
+func (p *vlanPool) markUsed(zone string, id int32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.used[zone] == nil {
+		p.used[zone] = make(map[int32]bool)
+	}
+	p.used[zone][id] = true
+}
+
 // ipPool hands out exclusive IPv4 addresses per Subnet, drawn from that
 // Subnet's own spec.cidr (network/broadcast addresses and, if set,
 // gateway_ip are never handed out, regardless of allocatableRanges below).
@@ -149,6 +162,17 @@ func (p *ipPool) release(subnetID, ip string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.used[subnetID], ip)
+}
+
+// markUsed records ip as already allocated in subnetID without drawing a
+// new one -- see vlanPool.markUsed's identical reasoning.
+func (p *ipPool) markUsed(subnetID, ip string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.used[subnetID] == nil {
+		p.used[subnetID] = make(map[string]bool)
+	}
+	p.used[subnetID][ip] = true
 }
 
 // validateAllocatableIPRanges checks each range parses and falls entirely

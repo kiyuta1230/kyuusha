@@ -97,7 +97,11 @@ func main() {
 	}
 	defer computeConn.Close()
 
-	svc := network.NewService(etcdClient, computev1.NewVirtualMachineServiceClient(computeConn))
+	svc, err := network.NewService(ctx, etcdClient, computev1.NewVirtualMachineServiceClient(computeConn))
+	if err != nil {
+		slog.Error("new network service", "err", err)
+		os.Exit(1)
+	}
 	go func() {
 		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("pending sweep stopped", "err", err)
