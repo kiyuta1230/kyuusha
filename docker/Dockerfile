@@ -15,6 +15,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/compute ./cmd/compute
+RUN CGO_ENABLED=0 go build -o /out/compute-reconciler ./cmd/compute-reconciler
 RUN CGO_ENABLED=0 go build -o /out/compute-agent ./cmd/compute-agent
 RUN CGO_ENABLED=0 go build -o /out/kyuusha ./cmd/kyuusha
 RUN CGO_ENABLED=0 go build -o /out/api-gateway ./cmd/api-gateway
@@ -28,6 +29,16 @@ COPY --from=builder /out/compute /usr/local/bin/compute
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
 COPY hack/devkeys/jwt-dev.pub /etc/kyuusha/jwt-dev.pub
 ENTRYPOINT ["/usr/local/bin/compute", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt", "-bootstrap-token-public-key=/etc/kyuusha/jwt-dev.pub"]
+
+# Runs compute's actual reconcile loop, split out of the compute (gRPC API)
+# binary above so the API can be scaled to any number of stateless replicas
+# without duplicating scheduling/NATS-command work -- see
+# cmd/compute-reconciler's own package doc comment for the single-replica
+# deployment invariant this depends on instead of etcd leader election.
+FROM alpine:3 AS compute-reconciler
+COPY --from=builder /out/compute-reconciler /usr/local/bin/compute-reconciler
+COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
+ENTRYPOINT ["/usr/local/bin/compute-reconciler", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
 
 FROM alpine:3 AS api-gateway
 COPY --from=builder /out/api-gateway /usr/local/bin/api-gateway

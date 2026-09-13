@@ -1677,26 +1677,41 @@ etcdにとって軽微なので、まずは定期compactionの設定だけで様
 持たないため、複数レプリカをロードバランサ配下に並べるだけでHAを達成できる。api-gatewayは
 純粋なステートレスプロキシ＋JWT検証なので同様。特別な設計は不要。
 
-### Reconcile面: リーダー選出（etcdのconcurrency.Electionを使う）
+### Reconcile面: プロセス分割による単一化（当初案のリーダー選出から変更、2026-09-13）
 
 複数レプリカがそれぞれ独自にreconcileループ（`Pending`のVirtualMachineを見つけてスケジューリングする等）
 を回すと、二重処理・レースが発生する（`resource_version`の楽観的並行性制御で最悪の破損は
 防げるが、無駄な競合が常態化する）。
 
-k8sのcontroller-managerと同じ**リーダー選出**を採用する（オブジェクトモデルではなく、
-この種のコントローラー実行の一般的な手法として妥当なため借用）。当初案は「新規依存を
-増やさず既存のDBでリースする」だったが、その既存DB自体が無かった（上記訂正参照）ため、
-今はバッキングストアに採用したetcd自身のリーダー選出プリミティブ
-（`go.etcd.io/etcd/client/v3/concurrency`の`Session`+`Election`）を使う——新規依存が
-増えるわけではなく、既に採用したetcdの標準機能を使うだけ。
+当初案はk8sのcontroller-managerと同じ**etcdベースのリーダー選出**
+（`go.etcd.io/etcd/client/v3/concurrency`の`Session`+`Election`、複数レプリカ中1つだけが
+アクティブで他はホットスタンバイ）だったが、2026-09-13、compute について実装前に再検討し、
+**reconcileループをgRPC API本体から別プロセスに切り出し、そちらは常に単一インスタンスで
+デプロイする**という、より単純な代替案を採用した:
 
-- 各サービスは複数レプリカを起動するが、reconcileループは1レプリカだけがアクティブ
-  （リーダー）、他はホットスタンバイ
-- リーダーのセッションはetcdのLease（TTL付き）に紐づく——プロセスが落ちる/
-  ネットワーク分断されるとLeaseが切れ、他のレプリカが自動的に新リーダーに昇格する
-- GCスイープ（孤児リソース掃除）も同じリーダー選出済みプロセス内で実行する
-- リーダー切り替え時、NATS JetStreamのコマンドは永続化・work-queue化されているため、
-  新リーダーはキューの続きから処理を再開できる。特別なハンドオフ処理は不要
+- `compute`(gRPC API: VirtualMachineService/HypervisorService。`Get`/`List`/`Create`/`Update`/
+  `Delete`/`Watch`はすべて素直な同期etcd読み書きで、状態を一切持たない。唯一の例外
+  `StreamConsole`もライブなNATSリクエスト/リプライを中継するだけでリクエスト間で共有する
+  状態を持たないため、複数レプリカでも安全)と、`compute-reconciler`
+  (`compute.Reconciler.Run`——スケジューリング、compute-agentへのNATSコマンド発行、
+  Pending/stuck-phase再送スイープ、Hypervisor死活監視スイープ——を実行するだけの、
+  gRPCを一切話さないプロセス)に分離した(`cmd/compute`/`cmd/compute-reconciler`)
+- `compute-reconciler`は**常に1インスタンスのみ**デプロイする、というデプロイ側の規約に
+  依存する。リーダー選出のような自動フェイルオーバーは無く、クラッシュ時はオーケストレータが
+  再起動するまでreconcileが止まる空白ができる——ホットスタンバイによる即座の昇格より単純さを
+  優先した判断（kyuushaの想定規模なら再起動までの空白は許容範囲、という判断）
+- リーダー選出方式でも触れていた「NATS JetStreamのコマンドは永続化・work-queue化されている
+  ため、複数プロセス間で処理が引き継げる」という性質はここでも同じ形で効いている——
+  `compute-reconciler`が再起動しても、etcdに書いた`Pending`/stuck-phaseなVMの状態と、
+  JetStreamに溜まったコマンドの両方から素直に再開できる
+- **`network`/`block-storage`はこの分離をまだ適用していない**: どちらも`CreateSubnet`/
+  `CreateNetworkInterface`(VLAN/IPプール)や`CreateVolumeAttachment`(排他制御用ミューテックス)
+  の実際の割り当て判断がgRPCハンドラ内で同期的に行われており、computeの`Create`が
+  「Pendingで書くだけ、実割り当てはReconciler側」という形に既になっていたのとは違う。
+  同じ分離を安全に適用するには、先にこれら2サービスの割り当てロジックをcomputeと同じ
+  「Create時は同期割り当てを試みず常にPendingで返し、単一プロセスが後から割り当てる」
+  という形に作り直す必要があり、これは単なるプロセストポロジーの変更を超えた挙動変更
+  ——ユーザーとの合意の上で、まずcomputeだけを対象に先行実装し、判断を先送りにしている
 
 ### 正直な残課題: etcdクラスタ自体の冗長化はデプロイ環境側の前提
 
@@ -2058,7 +2073,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Image設計（`ImageFormat`: `KERNEL_ROOTFS`(直接カーネルブート系VMM用)/`QCOW2`(QEMU/libvirt/cloud-hypervisor用)、`driver_hint`との対応バリデーション、コンテンツアドレス型blobストア）
 - Flavor/machine_classという固定カタログの廃止（`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
 - UserData/cloud-init注入（NoCloud seed disk方式、HTTPメタデータサービスは不採用）
-- コントロールプレーンサービス自体の可用性（API面はステートレス複製、reconcile面はetcdの`concurrency.Election`によるリーダー選出）
+- コントロールプレーンサービス自体の可用性（API面はステートレス複製。reconcile面は当初案のetcdリーダー選出から2026-09-13に変更し、computeについてはgRPC API(`cmd/compute`)とreconcileループ(`cmd/compute-reconciler`、常に単一インスタンス)への分離を実装済み。network/block-storageは同じ分離の前提条件（Create時同期割り当てのPending化）が未整備のため未着手）
 - バッキングストアにetcdを採用、実装済み（2026-09-11訂正: `internal/resource.Store`がそれまで完全にオンメモリで、状態が一切永続化されていなかったことが判明したため。PostgreSQL/MySQL、NATS JetStream KVも比較検討し、`resource_version`のグローバル単調増加という意味論がetcdと最も自然に一致すること、リーダー選出も同じ依存で賄えることが決め手。同日中に`internal/resource/store.go`をetcd-backedへ書き換え、5サービス全て・`playground/docker-compose.yml`まで含めて実装・ライブ確認済み——リーダー選出自体はまだ未着手、単一レプリカのままでの永続化のみ）
 - Imageのストレージ方針（`ImageArtifact{url, digest}`による外部URL参照のみ。kyuushaはblobを一切保管しない。オブジェクトストレージは任意の外部依存に格下げ）
 - ハイパーバイザー間の軽量ピアフェッチ（heartbeatでのキャッシュ済みdigest報告＋同一zone優先の直接HTTP転送。外部依存ではなくkyuusha自身の組み込み機能）

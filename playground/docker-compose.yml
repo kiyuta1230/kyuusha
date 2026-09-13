@@ -157,6 +157,41 @@ services:
     # (compute-agent also reaches it directly here, for Hypervisor
     # self-registration -- that's east-west traffic, not through api-gateway).
 
+  # compute's actual reconcile loop (scheduling, NATS commands, retry/health
+  # sweeps), split into its own process from the gRPC API above -- see
+  # cmd/compute-reconciler's package doc comment. Exactly one replica: no
+  # ports exposed, nothing dials this container directly (compute-agent and
+  # every gRPC client talk to `compute` above instead).
+  compute-reconciler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: compute-reconciler
+    command:
+      - "-nats-url=nats://nats:4222"
+      - "-etcd-endpoints=etcd:2379"
+      - "-identity-addr=identity:8082"
+      - "-image-addr=image:8083"
+      - "-network-addr=network:8084"
+      - "-block-storage-addr=block-storage:8085"
+      - "-metrics-addr=:9098"
+      - "-otlp-endpoint=jaeger:4317"
+    depends_on:
+      nats:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+      identity:
+        condition: service_started
+      image:
+        condition: service_started
+      network:
+        condition: service_started
+      block-storage:
+        condition: service_started
+      jaeger:
+        condition: service_started
+
   identity:
     build:
       context: ..
