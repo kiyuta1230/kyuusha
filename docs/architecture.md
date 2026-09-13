@@ -2041,12 +2041,25 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 
 ## 未決事項（次に詰めるべきポイント）
 
-設計レベルの論点はほぼ出し切ったが、network周りで1点新たに浮上した論点がある
-（2.）。残りは実行タスクと、明示的に先送りした非ゴールのみ。
+設計レベルの論点はほぼ出し切ったが、network周りで2点新たに浮上した論点がある
+（2.・3.）。残りは実行タスクと、明示的に先送りした非ゴールのみ。
 
 1. **I/Oベンチマークの実施**（設計は完了、実行がTODO）: Firecracker/cloud-hypervisorのfio比較を
    実装着手前に行い、`driver_hint`の使い分けガイドを確定する
-2. **VMのネットワーク接続をCNIのようにプラガブルにすべきか**（判断保留中）:
+2. **`vm create -subnets=`がtap配線されないまま起動することがある（バグ、未修正）**:
+   2026-09-13、NetworkInterfaceメトリクスのライブ検証中に発見。compute-agentのログに
+   `"skipping network interface with no allocated IP yet"`が出て、その後NetworkInterface
+   自体は正常にIP割り当て済み（`phase=Ready`）になる——つまりcomputeのReconcilerが
+   Scheduled後にNetworkInterfaceを作り、その場でboot用のCreateCommandを組み立てる
+   タイミングが、networkサービス側の非同期IP割り当て（別プロセス、
+   「Reconcile面: プロセス分割による単一化」節参照）より早く走ってしまう、
+   サービス間の順序レース**の疑い**（コード確認はまだ、症状からの推測）。
+   NetworkInterfaceにホットプラグ経路が無いため（Volumeと同様、Boot時のみ配線）、
+   一度このレースを踏んだVMはその生涯ずっと実ネットワークを持てない。
+   `playground/scenario.sh`の`vm-netif`テストが元々コンソール確認で
+   ハッジしていた不確実性（「real network wiring」）は、これと同じ問題だった
+   可能性が高い。まだ未修正——原因調査・修正は別セッションで着手する
+3. **VMのネットワーク接続をCNIのようにプラガブルにすべきか**（判断保留中）:
 
    きっかけ: OVSが事実上の標準として使われる傾向があり、vhost-user（OVS-DPDKとゲストを
    共有メモリで直結し、tapデバイス+カーネルネットワークスタックを経由しない高速パス）への
