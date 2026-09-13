@@ -84,8 +84,9 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 // wants new VMs kept off a Hypervisor that's otherwise perfectly healthy
 // (unlike NotReady, which only ever means "missed its last heartbeat").
 func (s *Service) SetSchedulable(ctx context.Context, hypervisor string, schedulable bool) (*Hypervisor, error) {
-	if err := s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) {
+	if err := s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) error {
 		h.Spec.Schedulable = schedulable
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -102,11 +103,12 @@ func (s *Service) SetSchedulable(ctx context.Context, hypervisor string, schedul
 // identity, there's nothing at that layer to revoke -- see
 // docs/specs/hypervisor-bootstrap.md for the deliberate scope boundary.
 func (s *Service) SetRevoked(ctx context.Context, hypervisor string, revoked bool) (*Hypervisor, error) {
-	if err := s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) {
+	if err := s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) error {
 		h.Spec.Revoked = revoked
 		if revoked {
 			h.Spec.Schedulable = false
 		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -132,9 +134,10 @@ func (s *Service) WatchHypervisors(ctx context.Context, sinceRV int64) (<-chan H
 // Heartbeat records a compute-agent liveness signal, reviving the
 // Hypervisor to Ready if the health sweep had marked it NotReady.
 func (s *Service) Heartbeat(ctx context.Context, hypervisor string, at time.Time) error {
-	return s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) {
+	return s.updateHypervisor(ctx, hypervisor, func(h *Hypervisor) error {
 		h.Status.LastHeartbeatAt = at
 		h.Status.Phase = HypervisorPhaseReady
+		return nil
 	})
 }
 
@@ -149,8 +152,9 @@ func (s *Service) sweepHypervisorHealth(ctx context.Context) {
 	cutoff := time.Now().Add(-heartbeatTimeout)
 	for _, h := range all {
 		if h.Status.Phase == HypervisorPhaseReady && h.Status.LastHeartbeatAt.Before(cutoff) {
-			_ = s.updateHypervisor(ctx, h.Meta.ID, func(h *Hypervisor) {
+			_ = s.updateHypervisor(ctx, h.Meta.ID, func(h *Hypervisor) error {
 				h.Status.Phase = HypervisorPhaseNotReady
+				return nil
 			})
 		}
 	}
@@ -272,17 +276,42 @@ func (MostAvailableFirst) Pick(candidates []Hypervisor) (*Hypervisor, error) {
 // "予約とレース対策": allocated_vcpu/memory_mb is adjusted via the generic
 // Store's optimistic-concurrency Update, retrying on a concurrent
 // modification rather than failing the whole schedule attempt.
+//
+// reserveHypervisorCapacity re-checks fit against the freshly-fetched h on
+// every retry attempt, not just once against scheduleVM's earlier
+// filterSchedulable snapshot -- without this, two concurrent scheduleVM
+// calls that both pass filterSchedulable against the same slightly-stale
+// List() (before either reservation has landed) could both proceed to
+// reserve against the same Hypervisor: updateHypervisor's retry-on-conflict
+// loop already guarantees the *arithmetic* is correct (no lost update --
+// both deltas really do get added), but arithmetic correctness alone
+// doesn't stop the sum from exceeding actual capacity. This is the same
+// class of race OpenStack's nova-scheduler historically had before
+// resource claims moved to the compute node's own ResourceTracker; here
+// the fix is simpler since reservation already goes through a retry loop
+// anyway -- it just needs to fail instead of blindly proceeding once it
+// no longer fits. A caller that loses this race gets ErrUnschedulable,
+// exactly as if no candidate had ever fit -- reconcile()'s PhasePending
+// case already reports that as an Unschedulable condition and leaves the
+// VM for runRetrySweep to retry (see [[kyuusha_stuck_phase_retry_sweep]]),
+// which will re-List/re-filter/re-pick fresh next tick.
 func (s *Service) reserveHypervisorCapacity(ctx context.Context, id string, vcpu int32, memoryMB int64) error {
-	return s.updateHypervisor(ctx, id, func(h *Hypervisor) {
+	return s.updateHypervisor(ctx, id, func(h *Hypervisor) error {
+		if h.Status.AllocatableVCPU-h.Status.AllocatedVCPU < vcpu ||
+			h.Status.AllocatableMemoryMB-h.Status.AllocatedMemoryMB < memoryMB {
+			return ErrUnschedulable
+		}
 		h.Status.AllocatedVCPU += vcpu
 		h.Status.AllocatedMemoryMB += memoryMB
+		return nil
 	})
 }
 
 func (s *Service) releaseHypervisorCapacity(ctx context.Context, id string, vcpu int32, memoryMB int64) {
-	err := s.updateHypervisor(ctx, id, func(h *Hypervisor) {
+	err := s.updateHypervisor(ctx, id, func(h *Hypervisor) error {
 		h.Status.AllocatedVCPU -= vcpu
 		h.Status.AllocatedMemoryMB -= memoryMB
+		return nil
 	})
 	if err != nil && !errors.Is(err, ErrHypervisorNotFound) {
 		// Best-effort: the Hypervisor is gone or unreachable via retries: no
@@ -297,13 +326,20 @@ func (s *Service) releaseHypervisorCapacity(ctx context.Context, id string, vcpu
 // updateHypervisor is Get-mutate-Update with a bounded retry on
 // resource_version conflicts, the shape every small Hypervisor status
 // mutation here needs (Heartbeat, health sweep, capacity reserve/release).
-func (s *Service) updateHypervisor(ctx context.Context, id string, mutate func(*Hypervisor)) error {
+// mutate sees a freshly-fetched h on every attempt (not just the first),
+// so it can validate against current state -- not just prior state -- each
+// time it's retried; an error from mutate itself aborts immediately
+// (returned as-is, not retried), distinct from an ErrHypervisorConflict
+// from Update, which retries with a fresh Get as usual.
+func (s *Service) updateHypervisor(ctx context.Context, id string, mutate func(*Hypervisor) error) error {
 	for range 20 {
 		h, err := s.hypervisors.Get(ctx, "", id)
 		if err != nil {
 			return err
 		}
-		mutate(&h)
+		if err := mutate(&h); err != nil {
+			return err
+		}
 		if _, err := s.hypervisors.Update(ctx, h); err != nil {
 			if errors.Is(err, ErrHypervisorConflict) {
 				continue

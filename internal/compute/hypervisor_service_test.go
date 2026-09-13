@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -137,8 +138,9 @@ func TestService_ScheduleVMFiltersAndReserves(t *testing.T) {
 	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-notready", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if err := svc.updateHypervisor(ctx, "hypervisor-notready", func(h *Hypervisor) {
+	if err := svc.updateHypervisor(ctx, "hypervisor-notready", func(h *Hypervisor) error {
 		h.Status.Phase = HypervisorPhaseNotReady
+		return nil
 	}); err != nil {
 		t.Fatalf("force NotReady: %v", err)
 	}
@@ -221,6 +223,66 @@ func TestService_ScheduleVMUnschedulableWhenNoCandidateFits(t *testing.T) {
 	}
 }
 
+// TestService_ReserveHypervisorCapacityRaceNeverOversubscribes fires more
+// concurrent reservations at one Hypervisor than its capacity allows,
+// against a real embedded etcd (resourcetest.Client) so updateHypervisor's
+// optimistic-concurrency retries are exercising genuine CAS conflicts, not
+// a fake store that might not reproduce them. Before reserveHypervisorCapacity
+// re-checked fit against the freshly-fetched Hypervisor on every retry (see
+// its doc comment), every one of these could have raced past
+// filterSchedulable's earlier, now-stale check and all succeeded, pushing
+// AllocatedVCPU past AllocatableVCPU.
+func TestService_ReserveHypervisorCapacityRaceNeverOversubscribes(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	const allocatableVCPU = 6
+	const perReservation = 2
+	const attempts = 6 // demands 12 vCPU total against 6 available: at most 3 can win
+
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", allocatableVCPU, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, attempts)
+	for i := range attempts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = svc.reserveHypervisorCapacity(ctx, "hypervisor-1", perReservation, 1024)
+		}(i)
+	}
+	wg.Wait()
+
+	var succeeded int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrUnschedulable):
+			// Correctly lost the race: fit no longer available by the time
+			// this attempt's write actually landed.
+		default:
+			t.Fatalf("reserveHypervisorCapacity: unexpected error: %v", err)
+		}
+	}
+
+	h, err := svc.GetHypervisor(ctx, "hypervisor-1")
+	if err != nil {
+		t.Fatalf("GetHypervisor: %v", err)
+	}
+	if h.Status.AllocatedVCPU > allocatableVCPU {
+		t.Fatalf("AllocatedVCPU = %d, want <= %d (capacity was oversubscribed)", h.Status.AllocatedVCPU, allocatableVCPU)
+	}
+	if want := int32(succeeded) * perReservation; h.Status.AllocatedVCPU != want {
+		t.Fatalf("AllocatedVCPU = %d, want %d (%d reservations succeeded)", h.Status.AllocatedVCPU, want, succeeded)
+	}
+	if succeeded == 0 || succeeded == attempts {
+		t.Fatalf("succeeded = %d/%d, want somewhere strictly in between to actually exercise the race (adjust attempts/capacity if this is flaky)", succeeded, attempts)
+	}
+}
+
 func TestService_HeartbeatAndHealthSweep(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
@@ -230,8 +292,9 @@ func TestService_HeartbeatAndHealthSweep(t *testing.T) {
 	}
 
 	// Force a stale heartbeat, then sweep: should flip to NotReady.
-	if err := svc.updateHypervisor(ctx, "hypervisor-1", func(h *Hypervisor) {
+	if err := svc.updateHypervisor(ctx, "hypervisor-1", func(h *Hypervisor) error {
 		h.Status.LastHeartbeatAt = time.Now().Add(-1 * time.Hour)
+		return nil
 	}); err != nil {
 		t.Fatalf("force stale heartbeat: %v", err)
 	}
