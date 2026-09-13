@@ -2041,25 +2041,12 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 
 ## 未決事項（次に詰めるべきポイント）
 
-設計レベルの論点はほぼ出し切ったが、network周りで2点新たに浮上した論点がある
-（2.・3.）。残りは実行タスクと、明示的に先送りした非ゴールのみ。
+設計レベルの論点はほぼ出し切ったが、network周りで1点新たに浮上した論点がある
+（2.）。残りは実行タスクと、明示的に先送りした非ゴールのみ。
 
 1. **I/Oベンチマークの実施**（設計は完了、実行がTODO）: Firecracker/cloud-hypervisorのfio比較を
    実装着手前に行い、`driver_hint`の使い分けガイドを確定する
-2. **`vm create -subnets=`がtap配線されないまま起動することがある（バグ、未修正）**:
-   2026-09-13、NetworkInterfaceメトリクスのライブ検証中に発見。compute-agentのログに
-   `"skipping network interface with no allocated IP yet"`が出て、その後NetworkInterface
-   自体は正常にIP割り当て済み（`phase=Ready`）になる——つまりcomputeのReconcilerが
-   Scheduled後にNetworkInterfaceを作り、その場でboot用のCreateCommandを組み立てる
-   タイミングが、networkサービス側の非同期IP割り当て（別プロセス、
-   「Reconcile面: プロセス分割による単一化」節参照）より早く走ってしまう、
-   サービス間の順序レース**の疑い**（コード確認はまだ、症状からの推測）。
-   NetworkInterfaceにホットプラグ経路が無いため（Volumeと同様、Boot時のみ配線）、
-   一度このレースを踏んだVMはその生涯ずっと実ネットワークを持てない。
-   `playground/scenario.sh`の`vm-netif`テストが元々コンソール確認で
-   ハッジしていた不確実性（「real network wiring」）は、これと同じ問題だった
-   可能性が高い。まだ未修正——原因調査・修正は別セッションで着手する
-3. **VMのネットワーク接続をCNIのようにプラガブルにすべきか**（判断保留中）:
+2. **VMのネットワーク接続をCNIのようにプラガブルにすべきか**（判断保留中）:
 
    きっかけ: OVSが事実上の標準として使われる傾向があり、vhost-user（OVS-DPDKとゲストを
    共有メモリで直結し、tapデバイス+カーネルネットワークスタックを経由しない高速パス）への
@@ -2100,6 +2087,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 
 ### 解決済み（参考: 決定の経緯は各セクション本文を参照）
 
+- `vm create -subnets=`がtap配線されないまま起動するバグ（2026-09-13発見・同日修正）: 原因はcomputeの`createNetworkInterfaces`（`internal/compute/network.go`）が、NetworkInterfaceの`Create`直後の応答（常にPending、IP未割り当て——`internal/network/service.go`のCreateNetworkInterfaceが2026-09-13の非同期化でこの挙動になった）をそのままboot用CreateCommandに使っていたこと。networkサービス側の実IP割り当ては別プロセス（network-reconciler）の非同期処理で、compute側のReconcile単一直列Watchループ（`reconciler.go`）はそれを待たずに次へ進んでいた。修正は`waitForAllocation`という短時間（既定100ms間隔・上限3秒）のポーリングを`createNetworkInterfaces`に追加し、Watch駆動で通常サブ秒で終わる実際の割り当てに追いつけるようにした——待っても間に合わない場合（プール枯渇等）は従来通りIP未割り当てのまま返す（compute-agent側は元々そのケースをスキップする実装だったので後方互換）。実VMで再現・修正後の解消をライブ確認済み
 - 各サービスのspec/statusフィールド詳細（Tenant/Subnet/NetworkInterface/Volume/VolumeAttachment）
 - Quota設計（`Tenant.spec.quota`が上限を持ち、各リソース所有サービスが`tenant_usage`をHypervisor容量予約と同じ原子的トランザクションで強制。Create時の同期バリデーションとして拒否、Error化しない）
 - Observability方針（Prometheus/OpenTelemetry/構造化ログという業界標準に乗る。NATSメッセージヘッダへのtrace_id伝播、観測トラフィックをNATSコマンド/イベントバスと分離、集約基盤は任意の外部依存）

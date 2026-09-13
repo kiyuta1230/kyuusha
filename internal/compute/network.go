@@ -3,11 +3,33 @@ package compute
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
+)
+
+// netifAllocationPollInterval/netifAllocationPollTimeout bound how long
+// createNetworkInterfaces waits for a freshly-created NetworkInterface's IP
+// (network-reconciler's own async allocation, see internal/network/
+// service.go's CreateNetworkInterface: "Always created Pending, with no
+// mac_address/ip_address set yet") before giving up and booting without
+// it. This runs inside compute.Reconciler.Run's single serialized Watch
+// loop (see reconciler.go), so the bound must stay short: network's own
+// watchPendingNetworkInterfaces reacts to the Create as an EventAdded
+// near-instantly in the common case (this is normally sub-second), and a
+// genuinely exhausted IP pool will still be Pending when the timeout hits,
+// which resolves to the pre-existing "boot without this interface,
+// compute-agent skips wiring it" behavior -- not a new failure mode, just
+// reached slightly later than before this poll existed.
+// Package vars, not consts, so tests can shrink them (see network_test.go)
+// instead of a real test taking netifAllocationPollTimeout to exercise the
+// still-Pending-at-timeout path.
+var (
+	netifAllocationPollInterval = 100 * time.Millisecond
+	netifAllocationPollTimeout  = 3 * time.Second
 )
 
 // validateNetworkInterfaces implements docs/architecture.md's Create-time
@@ -57,10 +79,17 @@ func validateNetworkInterfaces(ctx context.Context, client networkv1.SubnetServi
 // reasoning as the zone re-derivation in reconciler.go), so compute-agent
 // has everything it needs to wire a real tap device (see
 // internal/compute-agent/netsetup) without a network service client of its
-// own -- same shape as Image resolution for boot inputs. A NetworkInterface
-// whose own IP allocation hasn't succeeded yet (its Subnet's pool was
-// exhausted) is still returned (for VirtualMachineStatus.InterfaceRefs),
-// just with IPAddress/CIDR left empty; compute-agent skips wiring it.
+// own -- same shape as Image resolution for boot inputs.
+//
+// Create itself always returns a brand new NetworkInterface Pending, with
+// no IP yet -- allocation happens asynchronously in network-reconciler
+// (see internal/network/service.go's CreateNetworkInterface doc comment).
+// waitForAllocation below gives it a short, bounded chance to finish before
+// this VM's boot command is built; a NetworkInterface whose IP allocation
+// still hasn't succeeded once that bound is hit (a genuinely exhausted
+// Subnet pool, or just unlucky timing) is still returned (for
+// VirtualMachineStatus.InterfaceRefs), just with IPAddress/CIDR left empty;
+// compute-agent skips wiring it.
 func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetServiceClient, netifClient networkv1.NetworkInterfaceServiceClient, tenantID, vmID string, attachments []NetworkAttachment) ([]NetworkInterfaceInfo, error) {
 	infos := make([]NetworkInterfaceInfo, 0, len(attachments))
 	for i, a := range attachments {
@@ -72,6 +101,10 @@ func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetS
 				SubnetId: a.SubnetID,
 			},
 		})
+		if err != nil {
+			return infos, err
+		}
+		n, err = waitForAllocation(ctx, netifClient, tenantID, n.GetMeta().GetId())
 		if err != nil {
 			return infos, err
 		}
@@ -93,4 +126,29 @@ func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetS
 		infos = append(infos, info)
 	}
 	return infos, nil
+}
+
+// waitForAllocation polls ifaceID until its IP allocation completes
+// (phase leaves Pending, i.e. either Ready with an IP or -- not currently
+// modeled as a distinct phase, but handled the same way -- still Pending
+// past netifAllocationPollTimeout) or netifAllocationPollTimeout elapses,
+// whichever first; returns n's latest known state either way, never an
+// error just for still being Pending (see createNetworkInterfaces' doc
+// comment on what an empty IPAddress means downstream).
+func waitForAllocation(ctx context.Context, netifClient networkv1.NetworkInterfaceServiceClient, tenantID, ifaceID string) (*networkv1.NetworkInterface, error) {
+	deadline := time.Now().Add(netifAllocationPollTimeout)
+	for {
+		n, err := netifClient.Get(ctx, &networkv1.GetNetworkInterfaceRequest{TenantId: tenantID, Id: ifaceID})
+		if err != nil {
+			return nil, err
+		}
+		if n.GetStatus().GetPhase() != "Pending" || time.Now().After(deadline) {
+			return n, nil
+		}
+		select {
+		case <-ctx.Done():
+			return n, nil
+		case <-time.After(netifAllocationPollInterval):
+		}
+	}
 }

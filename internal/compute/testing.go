@@ -191,41 +191,51 @@ func (f *FakeSubnetClient) Watch(context.Context, *networkv1.WatchSubnetsRequest
 }
 
 // FakeNetworkInterfaceClient is a minimal
-// networkv1.NetworkInterfaceServiceClient for tests: Create always
-// succeeds, deriving the id from the request's name (deterministic and
-// traceable in test assertions, unlike network's own random IDs) and
-// allocating a plausible IP/MAC (so createNetworkInterfaces' full
-// NetworkInterfaceInfo path is exercised, not just the Pending/no-IP
-// short-circuit); every other method panics since compute.Service never
-// calls them.
+// networkv1.NetworkInterfaceServiceClient for tests: Create always returns
+// a brand new NetworkInterface Pending with no IP/MAC yet -- matching
+// internal/network/service.go's real CreateNetworkInterface, which always
+// defers allocation to network-reconciler's async loop -- deriving the id
+// from the request's name (deterministic and traceable in test assertions,
+// unlike network's own random IDs). Get simulates that async allocation:
+// see ReadyAfterGets/Pending below. Every other method panics since
+// compute.Service never calls them.
 type FakeNetworkInterfaceClient struct {
-	// Pending, if true, simulates a Subnet whose IP pool is exhausted (see
-	// docs/specs/network.md): Create still succeeds, but the returned
-	// NetworkInterface has no IP/MAC allocated yet.
+	// Pending, if true, Get never advances past Pending -- simulates a
+	// permanently exhausted Subnet IP pool (see docs/specs/network.md).
 	Pending bool
+	// ReadyAfterGets is how many Get calls return Pending before the next
+	// one flips to Ready with an IP/MAC allocated -- 0 (default) means
+	// Ready from the very first Get, the common fast-allocation case.
+	// Ignored when Pending is true.
+	ReadyAfterGets int
+
+	gets int
 }
 
 func (f *FakeNetworkInterfaceClient) Create(ctx context.Context, req *networkv1.CreateNetworkInterfaceRequest, opts ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
-	if f.Pending {
+	return &networkv1.NetworkInterface{
+		Meta:   &resourcev1.ObjectMeta{Id: "netif-" + req.GetName(), TenantId: req.GetTenantId()},
+		Spec:   req.GetSpec(),
+		Status: &networkv1.NetworkInterfaceStatus{Phase: "Pending"},
+	}, nil
+}
+
+func (f *FakeNetworkInterfaceClient) Get(ctx context.Context, req *networkv1.GetNetworkInterfaceRequest, opts ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
+	f.gets++
+	if f.Pending || f.gets <= f.ReadyAfterGets {
 		return &networkv1.NetworkInterface{
-			Meta:   &resourcev1.ObjectMeta{Id: "netif-" + req.GetName(), TenantId: req.GetTenantId()},
-			Spec:   req.GetSpec(),
+			Meta:   &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
 			Status: &networkv1.NetworkInterfaceStatus{Phase: "Pending"},
 		}, nil
 	}
 	return &networkv1.NetworkInterface{
-		Meta: &resourcev1.ObjectMeta{Id: "netif-" + req.GetName(), TenantId: req.GetTenantId()},
-		Spec: req.GetSpec(),
+		Meta: &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
 		Status: &networkv1.NetworkInterfaceStatus{
 			Phase:      "Ready",
 			IpAddress:  "10.0.0.5",
 			MacAddress: "02:00:00:00:00:01",
 		},
 	}, nil
-}
-
-func (f *FakeNetworkInterfaceClient) Get(context.Context, *networkv1.GetNetworkInterfaceRequest, ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
-	panic("FakeNetworkInterfaceClient: Get not implemented; compute.Service never calls it")
 }
 
 func (f *FakeNetworkInterfaceClient) List(context.Context, *networkv1.ListNetworkInterfacesRequest, ...grpc.CallOption) (*networkv1.ListNetworkInterfacesResponse, error) {
