@@ -1796,8 +1796,9 @@ Prometheus本体・Grafana・Jaeger/Tempo・Lokiのような**集約基盤は動
 | リソース | メトリクス源 | 取得元 | 状態 |
 |---|---|---|---|
 | VirtualMachine(CPU/メモリ) | jailerが使うcgroup統計 | compute-agent | 実装済み（2026-09-13） |
-| VirtualMachine/NetworkInterface(ネットワークI/O) | tapデバイスのホスト側統計 | network-agent | 未着手 |
-| Volume/VolumeAttachment(IOPS/スループット) | ストレージノード側(ZFS/nvmet)の統計 | block-storage | 未着手 |
+| VirtualMachine(ディスクI/O、Volumeバックエンド非依存) | VMMプロセスの`/proc/<pid>/io` | compute-agent | 実装済み（2026-09-13） |
+| NetworkInterface(ネットワークI/O) | tapデバイスのホスト側統計 | compute-agent | 実装済み（2026-09-13） |
+| VolumeAttachment(IOPS/スループット、ブロックデバイスのみ) | バックエンドのブロックデバイスのsysfs統計 | compute-agent | 実装済み（2026-09-13。NFSは対象外、下記参照） |
 
 VirtualMachineのCPU/メモリは`internal/compute-agent/resourcemetrics.Collector`として実装済み
 （`kyuusha_vm_cpu_usage_seconds_total`/`kyuusha_vm_memory_usage_bytes`/
@@ -1807,8 +1808,34 @@ VirtualMachineのCPU/メモリは`internal/compute-agent/resourcemetrics.Collect
 （このドライバが現在起動しているVMの一覧、freshにBootしたものと`Reconcile`で前プロセスから
 adoptしたものの両方を含む）を追加し、`vmm.BootSpec`/`vmm.BootRecord`に`TenantID`を足すことで
 実現した（`BootRecord`側への永続化により、compute-agent再起動後に`Reconcile`がadoptしたVMも
-tenant_idラベル付きで即座にメトリクスへ現れる）。NetworkInterface/Volumeの2種は今回のスコープ外
-のまま。
+tenant_idラベル付きで即座にメトリクスへ現れる）。
+
+**NetworkInterface/Volumeも同日中に実装**（「未決事項」節で残っていた最後の実行タスク）。
+どちらも別サービス（network-agent/block-storage）を新設する話ではなく、tap配線・Volume解決が
+実際に行われる場所であるcompute-agent自身がそのまま観測する——「network-agentはfoldして
+compute-agentに統合済み」「block-storageはVolumeを提供せず参照するだけ」という既存方針
+（[network仕様](specs/network.md)、「訂正: 責務の境界を...」節）と一致する:
+
+- **NetworkInterface(ネットワークI/O)**: `internal/compute-agent/netsetup.Stats`が
+  tap デバイスの`/sys/class/net/<tap>/statistics/{rx,tx}_bytes`を読む。tap名は
+  `netsetup.TapName(ifaceID)`で決定的に導出できるので、`vmm.RunningVM`が持つのは
+  NetworkInterface id自体（`NetworkInterfaces []string`、Boot時にwireした順）だけでよく、
+  tap名を二重に持ち回る必要がない
+- **VolumeAttachment(IOPS/スループット)**: `internal/compute-agent/blockstat.Stats`が
+  `AttachedVolume.DevicePath`（jail配置前の実ホストパス）をstatし、ブロックスペシャル
+  ファイルであれば`major:minor`から`/sys/dev/block/<maj>:<min>/stat`を読む。**NFSバックエンド
+  （identifier=通常ファイル）はここに乗らない**——NFS I/OはLinuxのブロック層を経由しないため、
+  ISCSI/NVME_OFのような`/sys/block/<dev>/stat`相当の場所が存在しない、という素の事実。
+  `blockstat.Stats`はエラーではなく`ok=false`を返し、収集側は単に該当Volumeをスキップする
+- **VM単位のディスクI/O（`kyuusha_vm_disk_{read,write}_bytes_total`）を別途追加**したのは
+  上記の穴を埋めるため: `internal/compute-agent/procio.Read`が`/proc/<pid>/io`の
+  `read_bytes`/`write_bytes`を読む。これはブロック層ではなくVFS層のタスク会計なので、
+  NFS越しの読み書きも（root disk・Volume問わず全て合算した形でだが）カウントされる——
+  Volume単位の内訳は失うが、バックエンドを問わず必ず何かの数字が取れる、という
+  トレードオフ。この方式が使えるなら最初からVolume単位もこれで統一すればよいのでは、
+  という疑問は妥当だが、VM内の複数Volumeの内訳を知りたいという要求（実運用で「どの
+  Volumeが重いか」を切り分けたい）には応えられないため、ブロックデバイスの場合は
+  引き続きVolumeごとの内訳を優先する
 
 **`resource_version`/Watchには混ぜない**: メトリクスは高頻度（例: 30秒毎）に更新されるため、
 `VirtualMachineStatus`に含めると`resource_version`が増え続けて`Watch`に`MODIFIED`が大量発生し、
@@ -2015,16 +2042,11 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 ## 未決事項（次に詰めるべきポイント）
 
 設計レベルの論点はほぼ出し切ったが、network周りで1点新たに浮上した論点がある
-（3.）。残りは実行タスクと、明示的に先送りした非ゴールのみ。
+（2.）。残りは実行タスクと、明示的に先送りした非ゴールのみ。
 
 1. **I/Oベンチマークの実施**（設計は完了、実行がTODO）: Firecracker/cloud-hypervisorのfio比較を
    実装着手前に行い、`driver_hint`の使い分けガイドを確定する
-2. **リソースメトリクスの収集実装**（VirtualMachineのCPU/メモリは解決済み、残り2種が未着手）:
-   VirtualMachineのCPU/メモリはcompute-agentの`/metrics/resources`として2026-09-13に実装済み
-   （「払い出したリソース自身のメトリクス」参照）。NetworkInterface(ネットワークI/O)は
-   network-agent側、Volume/VolumeAttachment(IOPS/スループット)はblock-storage側の実装が
-   それぞれ別途必要で、まだ手が付いていない
-3. **VMのネットワーク接続をCNIのようにプラガブルにすべきか**（判断保留中）:
+2. **VMのネットワーク接続をCNIのようにプラガブルにすべきか**（判断保留中）:
 
    きっかけ: OVSが事実上の標準として使われる傾向があり、vhost-user（OVS-DPDKとゲストを
    共有メモリで直結し、tapデバイス+カーネルネットワークスタックを経由しない高速パス）への
@@ -2068,7 +2090,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - 各サービスのspec/statusフィールド詳細（Tenant/Subnet/NetworkInterface/Volume/VolumeAttachment）
 - Quota設計（`Tenant.spec.quota`が上限を持ち、各リソース所有サービスが`tenant_usage`をHypervisor容量予約と同じ原子的トランザクションで強制。Create時の同期バリデーションとして拒否、Error化しない）
 - Observability方針（Prometheus/OpenTelemetry/構造化ログという業界標準に乗る。NATSメッセージヘッダへのtrace_id伝播、観測トラフィックをNATSコマンド/イベントバスと分離、集約基盤は任意の外部依存）
-- 払い出したリソース自身のメトリクス（VirtualMachine/NetworkInterface/Volume。ゲスト内エージェント不要でホスト側(cgroup/tap/ストレージノード)から取得。厳密なテナント分離は前提としない（単一組織の社内プライベートクラウドという想定利用者像のため）。`/metrics`(system)と`/metrics/resources`(リソース、tenant_idはラベルのみ)をPrometheus形式で分けて公開し、専用gRPC APIは作らない。利用者は自分の時系列DBへ自由にscrape/remote_write可能）
+- 払い出したリソース自身のメトリクス（VirtualMachine/NetworkInterface/Volume、2026-09-13に全種実装済み。ゲスト内エージェント不要でホスト側(cgroup/tap/procfs/sysfs)から取得。厳密なテナント分離は前提としない（単一組織の社内プライベートクラウドという想定利用者像のため）。`/metrics`(system)と`/metrics/resources`(リソース、tenant_idはラベルのみ)をPrometheus形式で分けて公開し、専用gRPC APIは作らない。利用者は自分の時系列DBへ自由にscrape/remote_write可能。VolumeのIOPS/スループットはブロックデバイスバックエンド限定（NFSはブロック層を経由しないため非対応）で、その穴はVM単位（Volume内訳なし）の`/proc/<pid>/io`ベースのディスクI/Oメトリクスで補う。詳細は「払い出したリソース自身のメトリクス」節参照）
 - IP設定（DHCPは使わず、既存のNoCloud seed diskに`network-config`として相乗り）
 - Subnet内のDNS/名前解決（networkサービスがNetworkInterfaceのデータから権威DNSを兼ねる。軽量DNSレスポンダを自作、リゾルバの到達性は共有NATゲートウェイと同じルートリークに相乗り）
 - API消費者の多様化への備え（Createのべき等キー、dry_run、Condition形式での構造化エラー、gRPC Server Reflection。Terraformプロバイダ/MCPサーバー自体は今書かず、基盤の改善のみ先行）

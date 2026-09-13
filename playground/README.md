@@ -64,7 +64,7 @@ Grafanaのダッシュボードは`playground/grafana/provisioning/dashboards/js
 | `kyuusha: block-storage` | block-storage + block-storage-reconciler |
 | `kyuusha: compute-agent` | compute-agentのgRPCクライアント呼び出し（compute-agent自身はgRPCサーバーを持たない）に加え、`/metrics/resources`のVM CPU/メモリ使用量（[メトリクス仕様](../docs/specs/observability-metrics.md)「/metrics/resources」参照） |
 | `kyuusha: fleet` | リソース件数（Tenant/Image/VM/Volume/VolumeAttachment/Subnet/NetworkInterface、tenant_id×phase別）とQuota使用率（[メトリクス仕様](../docs/specs/observability-metrics.md)「リソース件数・Quota使用状況」参照） |
-| `kyuusha: virtual machines` | VM単体に絞った集約ビュー（件数・tenant別内訳・`$tenant`/`$vm_id`で絞り込めるVM CPU/メモリ） |
+| `kyuusha: virtual machines` | VM単体に絞った集約ビュー（件数・tenant別内訳・`$tenant`/`$vm_id`で絞り込めるVM CPU/メモリ/ディスクI/O、NetworkInterfaceスループット、Volume IOPS/スループット（ブロックデバイスのみ）） |
 | `kyuusha: logs` | Lokiのログ量・エラー率・ライブログ（`compose_service`フィルタ付き） |
 | `kyuusha: audit` | 監査ログ専用（「誰が・何をしたか」、[監査ログ仕様](../docs/specs/audit-logging.md)参照） |
 

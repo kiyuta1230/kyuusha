@@ -151,6 +151,9 @@ type runningVM struct {
 	tenantID     string
 	taps         []string
 	volumeMounts []string
+	// ifaceIDs are the NetworkInterface ids taps was wired from, in the
+	// same order -- see vmm.RunningVM.NetworkInterfaces.
+	ifaceIDs []string
 	// attached is what Boot resolved and returned for this VM -- kept so an
 	// idempotent re-Boot (see Boot's top-of-function check) can return the
 	// exact same result without re-resolving anything.
@@ -228,7 +231,10 @@ func (m *Manager) Running() []vmm.RunningVM {
 	defer m.mu.Unlock()
 	out := make([]vmm.RunningVM, 0, len(m.running))
 	for vmID, rv := range m.running {
-		out = append(out, vmm.RunningVM{VMID: vmID, TenantID: rv.tenantID})
+		out = append(out, vmm.RunningVM{
+			VMID: vmID, TenantID: rv.tenantID, PID: rv.pid,
+			NetworkInterfaces: rv.ifaceIDs, Volumes: rv.attached,
+		})
 	}
 	return out
 }
@@ -264,7 +270,7 @@ func (m *Manager) Reconcile() {
 		}
 		rv := &runningVM{
 			pid: rec.PID, exeBasename: rec.ExeBasename, tenantID: rec.TenantID,
-			taps: rec.Taps, volumeMounts: rec.VolumeMounts, attached: rec.Attached,
+			taps: rec.Taps, volumeMounts: rec.VolumeMounts, ifaceIDs: rec.NetworkInterfaces, attached: rec.Attached,
 			done: make(chan struct{}),
 		}
 		m.mu.Lock()
@@ -428,6 +434,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	var fcNetIfaces []fcNetworkInterface
 	var netArgs []string
 	var taps []string
+	var ifaceIDs []string
 	var volumeMounts []string
 	var attached []vmm.AttachedVolume
 	cleanup := func() {
@@ -451,6 +458,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 			return nil, fmt.Errorf("fcvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)
 		}
 		taps = append(taps, wired.TapName)
+		ifaceIDs = append(ifaceIDs, ni.IfaceID)
 		fcNetIfaces = append(fcNetIfaces, fcNetworkInterface{
 			IfaceID:     fmt.Sprintf("eth%d", i),
 			GuestMAC:    wired.MACAddress,
@@ -617,7 +625,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 
 	exeBasename := filepath.Base(fcExecPath)
-	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, taps: taps, volumeMounts: volumeMounts, attached: attached, done: make(chan struct{})}
+	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, taps: taps, volumeMounts: volumeMounts, ifaceIDs: ifaceIDs, attached: attached, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
@@ -628,7 +636,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// Best-effort: losing this only costs this VM's restart-safety (see
 	// Reconcile), not the correctness of the process actually running now.
 	if err := vmm.WriteBootRecord(vmDir, vmm.BootRecord{
-		PID: cmd.Process.Pid, ExeBasename: exeBasename, TenantID: spec.TenantID, Taps: taps, VolumeMounts: volumeMounts, Attached: attached,
+		PID: cmd.Process.Pid, ExeBasename: exeBasename, TenantID: spec.TenantID, Taps: taps, VolumeMounts: volumeMounts, NetworkInterfaces: ifaceIDs, Attached: attached,
 	}); err != nil {
 		slog.Warn("fcvmm: write boot record, this VM won't be adopted if compute-agent restarts", "vm_id", spec.VMID, "err", err)
 	}

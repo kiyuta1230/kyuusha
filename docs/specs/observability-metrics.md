@@ -52,28 +52,35 @@ exposition形式の`/metrics`をpull型で公開する。バックエンド非�
 ## `/metrics/resources`（compute-agent、VMリソースメトリクス）
 
 上記の`/metrics`（system、このプロセス自身の健全性）とは別に、compute-agentは
-`/metrics/resources`として**払い出したVirtualMachineの利用状況**（cgroup由来のCPU/
-メモリ）を公開する（2026-09-13実装、`docs/architecture.md`「払い出したリソース自身の
-メトリクス」参照）。実装は`internal/compute-agent/resourcemetrics.Collector`という
-独立の`prometheus.Collector`で、`/metrics`とは別の`prometheus.Registry`から配信する
-（`resource_version`/Watchに一切混ぜないという設計上の理由——同セクション参照）。
+`/metrics/resources`として**払い出したVirtualMachine/NetworkInterface/Volumeの
+利用状況**を公開する（VM CPU/メモリは2026-09-13実装、残り3メトリクスも同日中に
+追加、`docs/architecture.md`「払い出したリソース自身のメトリクス」参照）。実装は
+`internal/compute-agent/resourcemetrics.Collector`という独立の`prometheus.Collector`で、
+`/metrics`とは別の`prometheus.Registry`から配信する（`resource_version`/Watchに
+一切混ぜないという設計上の理由——同セクション参照）。
 
 | メトリクス | 種別 | 主なラベル | 取得元 |
 |---|---|---|---|
 | `kyuusha_vm_cpu_usage_seconds_total` | Counter | `hypervisor`, `tenant_id`, `vm_id` | cgroup v2 `cpu.stat`の`usage_usec` |
 | `kyuusha_vm_memory_usage_bytes` | Gauge | 同上 | cgroup v2 `memory.current` |
 | `kyuusha_vm_memory_limit_bytes` | Gauge | 同上 | cgroup v2 `memory.max`（`spec.memory_mb`と一致。cgroupが無制限（`"max"`）を報告する場合は出力されない） |
+| `kyuusha_vm_disk_read_bytes_total` / `..._write_bytes_total` | Counter | `hypervisor`, `tenant_id`, `vm_id` | VMMプロセスの`/proc/<pid>/io`（`read_bytes`/`write_bytes`）。root disk+全Volume合算、Volume単位の内訳は無いが、ブロック層を経由しないバックエンド（NFS）でも唯一取れる数字 |
+| `kyuusha_networkinterface_receive_bytes_total` / `..._transmit_bytes_total` | Counter | `hypervisor`, `tenant_id`, `interface_id` | tapデバイスの`/sys/class/net/<tap>/statistics/{rx,tx}_bytes`（tap名は`netsetup.TapName(interface_id)`で決定的に導出） |
+| `kyuusha_volume_read_bytes_total` / `..._write_bytes_total` / `..._read_ops_total` / `..._write_ops_total` | Counter | `hypervisor`, `tenant_id`, `attachment_id` | バックエンドのブロックデバイスの`/sys/dev/block/<major>:<minor>/stat`。**ブロックデバイス限定**——NFSバックエンドのVolume（identifier=通常ファイル）は対象外（下記参照） |
 
-収集はスクレイプの都度、その場でcgroup統計ファイルを読むだけ（バックグラウンドの
+収集はスクレイプの都度、その場でホスト側の統計ファイルを読むだけ（バックグラウンドの
 ポーリングループやキャッシュ状態は持たない）。`internal/compute-agent/cgroup.Apply`が
 best-effortである（cgroup v2委譲の無いホストではVMは無制限のまま起動を続ける）のと
-同じ理由で、cgroupが適用されなかったVMはこのエンドポイントに単に現れない
-（エラーにもならない）。
+同じ理由で、統計が読めなかったVM/NetworkInterface/Volumeはこのエンドポイントに単に
+現れない（エラーにもならない）。
 
-**未実装（今回のスコープ外）**: NetworkInterface（tapデバイスのネットワークI/O）と
-Volume/VolumeAttachment（ストレージノード側のIOPS/スループット）は、
-`docs/architecture.md`の同セクションが元々挙げていた3種のうちまだ手が付いていない
-——それぞれ`network-agent`側・block-storage側の実装が別途必要。
+**Volumeメトリクスのバックエンド差**: `internal/compute-agent/blockstat.Stats`は
+`AttachedVolume.DevicePath`をstatし、ブロックスペシャルファイル（ISCSI/NVME_OF）で
+なければ`ok=false`を返して収集側は静かにスキップする——NFS I/OはLinuxのブロック層を
+一切経由しないため、`/sys/block/<dev>/stat`相当の場所がそもそも存在しないという
+素の事実であり、バグではない。この playground が使っているのは NFS のみなので、
+`kyuusha_volume_*`系はここでは常に空、`kyuusha_vm_disk_*`系（VM単位・内訳無し）が
+唯一観測できるディスクI/Oの数字になる。
 
 ## リソース件数・Quota使用状況（`/metrics`、2026-09-13追加）
 
@@ -140,4 +147,4 @@ playgroundでは`playground/grafana/provisioning/dashboards/json/`配下の各JS
 - `kyuusha: logs`: Lokiバックエンドのログ量・エラー率・ライブログ（`compose_service`フィルタ付き）
 - `kyuusha: audit`: 監査ログ専用（上記参照）
 - `kyuusha: fleet`: 上記「リソース件数・Quota使用状況」のダッシュボード。Tenant→Image→VM→Volume/VolumeAttachment→Subnet/NetworkInterface→Quotaの順で並べている
-- `kyuusha: virtual machines`: VM単体に絞った集約ビュー（件数・tenant別内訳・`kyuusha: compute-agent`と同じVM CPU/メモリのパネルを`$tenant`/`$vm_id`で絞り込み可能な形でまとめ直したもの）
+- `kyuusha: virtual machines`: VM単体に絞った集約ビュー（件数・tenant別内訳・`kyuusha: compute-agent`と同じVM CPU/メモリのパネルを`$tenant`/`$vm_id`で絞り込み可能な形でまとめ直したもの、2026-09-13にVMディスクI/O・NetworkInterfaceスループット・Volume IOPS/スループット（ブロックデバイスのみ）のパネルを追加）

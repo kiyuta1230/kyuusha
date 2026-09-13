@@ -42,6 +42,10 @@ type BootRecord struct {
 	Taps         []string         `json:"taps,omitempty"`
 	VolumeMounts []string         `json:"volume_mounts,omitempty"`
 	Attached     []AttachedVolume `json:"attached,omitempty"`
+	// NetworkInterfaces are the NetworkInterface ids wired for this VM (see
+	// vmm.RunningVM.NetworkInterfaces), persisted so Reconcile can still
+	// expose them for /metrics/resources after a compute-agent restart.
+	NetworkInterfaces []string `json:"network_interfaces,omitempty"`
 }
 
 func bootRecordPath(vmDir string) string {

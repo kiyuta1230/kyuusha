@@ -1,7 +1,7 @@
 {
   "title": "kyuusha: virtual machines",
   "uid": "kyuusha-virtual-machines",
-  "description": "VMに関するメトリクスを1画面に集約: 件数(phase別)、テナント別内訳、実cgroup由来のCPU/メモリ使用量(compute-agentの/metrics/resources、docs/specs/observability-metrics.md参照)。kyuusha: fleetのVMパネルとkyuusha: compute-agentのVMパネルを、VM単体で見たい時のためにここへまとめている。",
+  "description": "VMに関するメトリクスを1画面に集約: 件数(phase別)、テナント別内訳、実cgroup由来のCPU/メモリ使用量、/proc/<pid>/io由来のディスクI/O、tapデバイス由来のNetworkInterfaceスループット、ブロックデバイスバックエンドのVolume IOPS/スループット(いずれもcompute-agentの/metrics/resources、docs/specs/observability-metrics.md参照)。kyuusha: fleetのVMパネルとkyuusha: compute-agentのVMパネルを、VM単体で見たい時のためにここへまとめている。",
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
@@ -109,6 +109,86 @@
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "kyuusha_vm_memory_usage_bytes{tenant_id=~\"$tenant\", vm_id=~\"$vm_id\"} / on (hypervisor, tenant_id, vm_id) kyuusha_vm_memory_limit_bytes",
           "legendFormat": "{{hypervisor}} {{tenant_id}} {{vm_id}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "VM disk I/O (rate, by vm_id) -- /proc/<pid>/io, root+all Volumes combined, any backend",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 35 },
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_vm_disk_read_bytes_total{tenant_id=~\"$tenant\", vm_id=~\"$vm_id\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{vm_id}} read"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_vm_disk_write_bytes_total{tenant_id=~\"$tenant\", vm_id=~\"$vm_id\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{vm_id}} write"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "NetworkInterface throughput (rate, by interface_id) -- host tap device counters",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 44 },
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_networkinterface_receive_bytes_total{tenant_id=~\"$tenant\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{interface_id}} rx"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_networkinterface_transmit_bytes_total{tenant_id=~\"$tenant\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{interface_id}} tx"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Volume throughput (rate, by attachment_id) -- block-device backend only, NFS not shown (see docs/specs/observability-metrics.md)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 53 },
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_volume_read_bytes_total{tenant_id=~\"$tenant\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{attachment_id}} read"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_volume_write_bytes_total{tenant_id=~\"$tenant\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{attachment_id}} write"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Volume IOPS (rate, by attachment_id) -- block-device backend only, NFS not shown",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 53 },
+      "fieldConfig": { "defaults": { "unit": "iops" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_volume_read_ops_total{tenant_id=~\"$tenant\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{attachment_id}} read"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_volume_write_ops_total{tenant_id=~\"$tenant\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{attachment_id}} write"
         }
       ]
     }

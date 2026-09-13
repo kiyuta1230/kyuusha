@@ -68,6 +68,23 @@ type VMM interface {
 type RunningVM struct {
 	VMID     string
 	TenantID string
+	// PID is this VM's real VMM process id, for /metrics/resources' VM-disk
+	// collector (internal/compute-agent/procio) -- unlike cgroup-based
+	// CPU/memory stats, per-process I/O accounting works identically
+	// regardless of a Volume's backend (NFS included), so it's the only
+	// disk metric that's universal across driver_hint/protocol.
+	PID int
+	// NetworkInterfaces are the NetworkInterface ids (not tap names) wired
+	// for this VM, in the same order Boot wired them -- the collector
+	// derives each one's tap name itself via netsetup.TapName, since that
+	// mapping is a pure function and doesn't need storing twice.
+	NetworkInterfaces []string
+	// Volumes are this VM's resolved attachments (see AttachedVolume) --
+	// the collector reads per-device block stats for whichever of these
+	// resolve to a real block device (ISCSI/NVME_OF); an NFS-backed
+	// DevicePath (a regular file) has no per-file host-side I/O counter and
+	// is silently skipped, same spirit as cgroup stats being best-effort.
+	Volumes []AttachedVolume
 }
 
 // BootSpec is what a VMM driver needs to boot one VM. Callers (agent.go)
