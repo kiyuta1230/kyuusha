@@ -78,9 +78,20 @@ allow if {
 }
 
 allow if {
+    input.claims.role == "network-admin"
+    input.rpc.service == "network"
+}
+
+allow if {
+    input.claims.role == "viewer"
+    input.rpc.action == "read"
+}
+
+allow if {
     input.claims.tenant_id != ""
     input.claims.tenant_id == input.request.tenant_id
     input.claims.tenant_role != "viewer"
+    input.claims.role != "viewer"
 }
 
 allow if {
