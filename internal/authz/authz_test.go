@@ -28,6 +28,8 @@ const (
 	vmCreateMethod          = "/kyuusha.compute.v1.VirtualMachineService/Create"
 	storageconnCreateMethod = "/kyuusha.blockstorage.v1.StorageConnectionService/Create"
 	volumeGetMethod         = "/kyuusha.blockstorage.v1.VolumeService/Get"
+	subnetCreateMethod      = "/kyuusha.network.v1.SubnetService/Create"
+	subnetGetMethod         = "/kyuusha.network.v1.SubnetService/Get"
 )
 
 func TestAuthorize(t *testing.T) {
@@ -132,5 +134,71 @@ func TestAuthorize_Viewer(t *testing.T) {
 	}
 	if _, _, err := a.authorize(viewer, fakeReq{tenantID: "tenant-b"}, vmGetMethod); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("viewer Get on another tenant: got %v, want PermissionDenied", err)
+	}
+}
+
+// TestAuthorize_NetworkAdmin mirrors TestAuthorize_StorageAdmin exactly,
+// swapping in network's own RPCs -- see docs/specs/authn-authz.md
+// "将来の拡張".
+func TestAuthorize_NetworkAdmin(t *testing.T) {
+	ctx := context.Background()
+	a, err := New(ctx)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	networkAdmin := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "tenant-a", Role: "network-admin"})
+
+	// An unscoped request for a network RPC must be allowed.
+	if _, _, err := a.authorize(networkAdmin, fakeUnscopedReq{}, subnetCreateMethod); err != nil {
+		t.Fatalf("network-admin on unscoped network request: got %v, want allowed", err)
+	}
+	// A tenant-scoped network request for a DIFFERENT tenant must also be
+	// allowed -- network-admin is cross-tenant, like admin.
+	if _, _, err := a.authorize(networkAdmin, fakeReq{tenantID: "tenant-b"}, subnetGetMethod); err != nil {
+		t.Fatalf("network-admin on another tenant's network request: got %v, want allowed", err)
+	}
+	// A non-network RPC (compute) must be denied even for another tenant --
+	// network-admin has no general cross-tenant power.
+	if _, _, err := a.authorize(networkAdmin, fakeReq{tenantID: "tenant-b"}, vmCreateMethod); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("network-admin on a compute request for another tenant: got %v, want PermissionDenied", err)
+	}
+	// A non-network RPC within network-admin's own tenant is allowed too --
+	// but via the ordinary ("member") tenant-scoped rule, not the
+	// network-admin role itself.
+	if _, _, err := a.authorize(networkAdmin, fakeReq{tenantID: "tenant-a"}, vmGetMethod); err != nil {
+		t.Fatalf("network-admin's own tenant, compute request: got %v, want allowed (via the ordinary tenant rule)", err)
+	}
+}
+
+// TestAuthorize_GlobalViewer exercises the cross-tenant, cross-service
+// viewer role (docs/specs/authn-authz.md "将来の拡張") -- distinct from
+// TestAuthorize_Viewer's tenant_role=="viewer", which is read-only within
+// one tenant only.
+func TestAuthorize_GlobalViewer(t *testing.T) {
+	ctx := context.Background()
+	a, err := New(ctx)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	viewer := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "tenant-a", Role: "viewer"})
+
+	// Read RPCs are allowed across every tenant, including ones the caller
+	// doesn't belong to -- this is the whole point of the role.
+	if _, _, err := a.authorize(viewer, fakeReq{tenantID: "tenant-b"}, vmGetMethod); err != nil {
+		t.Fatalf("global viewer Get on another tenant: got %v, want allowed", err)
+	}
+	// Unscoped read requests (e.g. HypervisorService.List, TenantService.List
+	// -- normally admin-only) are allowed too, since role=="viewer" doesn't
+	// depend on request.tenant_id at all.
+	if _, _, err := a.authorize(viewer, fakeUnscopedReq{}, vmGetMethod); err != nil {
+		t.Fatalf("global viewer on unscoped read request: got %v, want allowed", err)
+	}
+	// Write RPCs are denied everywhere, including the caller's own tenant --
+	// role=="viewer" grants no write power at all.
+	if _, _, err := a.authorize(viewer, fakeReq{tenantID: "tenant-a"}, vmCreateMethod); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("global viewer Create in own tenant: got %v, want PermissionDenied", err)
+	}
+	if _, _, err := a.authorize(viewer, fakeUnscopedReq{}, vmCreateMethod); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("global viewer on unscoped write request: got %v, want PermissionDenied", err)
 	}
 }

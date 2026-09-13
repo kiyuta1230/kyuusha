@@ -12,8 +12,11 @@ import "github.com/golang-jwt/jwt/v5"
 type Claims struct {
 	TenantID string `json:"tenant_id"`
 	// Role is the cross-tenant axis: "" (no cross-tenant power) | "admin"
-	// (every tenant, every operation) | "storage-admin" (every tenant, but
-	// only block-storage RPCs -- see docs/specs/authn-authz.md "将来の拡張").
+	// (every tenant, every operation) | "storage-admin"/"network-admin"
+	// (every tenant, but only block-storage/network RPCs respectively) |
+	// "viewer" (every tenant, every service, but read-only -- the
+	// "auditor" role, admin's reach without its write power) -- see
+	// docs/specs/authn-authz.md "将来の拡張".
 	Role string `json:"role,omitempty"`
 	// TenantRole is the orthogonal within-tenant axis: "" (a.k.a. "member",
 	// full read/write of the caller's own tenant) | "viewer" (read-only).
@@ -35,4 +38,20 @@ func (c *Claims) IsAdmin() bool {
 // see docs/specs/authn-authz.md "将来の拡張").
 func (c *Claims) IsStorageAdmin() bool {
 	return c.Role == "storage-admin"
+}
+
+// IsNetworkAdmin reports whether the token carries the cross-tenant
+// network-admin role (every tenant's network RPCs, nothing else -- see
+// docs/specs/authn-authz.md "将来の拡張").
+func (c *Claims) IsNetworkAdmin() bool {
+	return c.Role == "network-admin"
+}
+
+// IsViewer reports whether the token carries the cross-tenant, cross-service
+// read-only "viewer" role (every tenant, every service, but only Get/List/
+// Watch -- see docs/specs/authn-authz.md "将来の拡張"). Not to be confused
+// with TenantRole == "viewer", which is read-only within a single tenant
+// only.
+func (c *Claims) IsViewer() bool {
+	return c.Role == "viewer"
 }

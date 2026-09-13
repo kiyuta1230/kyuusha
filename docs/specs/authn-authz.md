@@ -99,7 +99,7 @@ allow if {
     `action`はメソッド名が`Get`/`List`/`Watch`で始まれば`read`、それ以外は`write`——どちらも
     手書きの対応表を持たず構造的に導出するので、新しいサービス/RPCを足しても
     このファイル自体は変更不要
-- **リクエストメッセージが`tenant_id`フィールドを持たない場合**（例: `CreateTenantRequest`, Hypervisor系の各Request, `CreateStorageConnectionRequest`）、`input.request.tenant_id`は空文字列として扱われる。`claims.tenant_id`は空になり得ないため、この場合は事実上 **admin roleのみ許可**になる（ポリシー自体の変更は不要）——ただし対象がblock-storageサービスのRPCなら、`role=="storage-admin"`も同様に許可される
+- **リクエストメッセージが`tenant_id`フィールドを持たない場合**（例: `CreateTenantRequest`, Hypervisor系の各Request, `CreateStorageConnectionRequest`）、`input.request.tenant_id`は空文字列として扱われる。`claims.tenant_id`は空になり得ないため、この場合は事実上 **admin roleのみ許可**になる（ポリシー自体の変更は不要）——ただし対象がblock-storageサービスのRPCなら`role=="storage-admin"`、networkサービスのRPCなら`role=="network-admin"`、read系RPC（Get/List/Watch）なら`role=="viewer"`も同様に許可される
 - gRPC unary/stream interceptorとして実装。streamはauthnと同様、RecvMsgラップで最初のメッセージ受信時に評価する
 - interceptorの適用順序: authn → authz（authzはauthnが設定したClaimsに依存する）
 
@@ -121,7 +121,7 @@ allow if {
   （[Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)「個体識別と失効」参照）
 - `UpdateVirtualMachineRequest`/`UpdateTenantRequest`は`vm.meta.tenant_id`/`tenant.meta.tenant_id`と別に、認可用の`tenant_id`をトップレベルに持つ。gRPCサーバー側でこの2つの一致を検証し、不一致は`InvalidArgument`で拒否する
 
-## 将来の拡張: テナント内ロール/細粒度認可の設計方針（軸1・軸3は実装済み、軸2は未実装）
+## 将来の拡張: テナント内ロール/細粒度認可の設計方針（軸1・軸3・軸4は実装済み、軸2は未実装）
 
 Finalizer所有権チェック（`compute.Service.Update`の`checkFinalizerMutation`。
 `docs/architecture.md`「Finalizerの所有権」節参照）で、初めて「同じ呼び出し元の`sub`だけが
@@ -187,12 +187,44 @@ CRUD面・権限昇格リスクのレビューが継続的に乗る）、「運�
 で発行できる。scopeはblock-storageサービス全体（StorageConnection/Volume/
 VolumeAttachment、テナント横断）——StorageConnectionだけに絞る案もあったが、
 `rpc.service`単位の分類の上ではこちらの方が追加コストが無く自然に出てくる形だった。
-今後network-admin/compute-adminのような領域が欲しくなれば、同じ形でルールを
-1つ足すだけで拡張できる。
+
+2026-09-13、当時から予告していた通り`network-admin`を同じ形（`role=="network-admin"`
+かつ`rpc.service=="network"`）で追加した——新しいルールを1つ足しただけで、
+`internal/authz/rpcclass.go`・ポリシーの他の部分とも一切変更不要だった。
+`kyuusha token mint -role=network-admin`で発行できる。同じ拡張がcompute-adminにも
+そのまま使えるが、需要が出るまで見送る。
+
+### 軸4: グローバルなread-only — "viewer"（実装済み、2026-09-13）
+
+軸1の`tenant_role=="viewer"`は「テナント内のread-only」だったが、今度は「全テナント・
+全サービス横断のread-only」——`admin`と同じ到達範囲を持ちながら書き込み権限だけを
+持たない、"監査役"的なロールが欲しくなった。テナント内admin（`tenant_role`に3値目を
+足す案）も検討したが、既定のテナントメンバー(`tenant_role=""`)が既にテナント内フルR/W
+であり、それと区別する具体的な追加権限が思いつかなかったため見送り、
+グローバルread-onlyだけを実装した。
+
+軸3と同じ`role`クレームに`"viewer"`という4つ目の値を足し、`rpc.action`（軸1で既に
+導出済み）と組み合わせて「`role=="viewer"`かつ`rpc.action=="read"`なら許可」という
+1ルールで表現できた——`tenant_id`を一切見ないルールなので、`CreateTenantRequest`や
+`ListHypervisorsRequest`のような本来admin限定のunscopedリクエストも、read系であれば
+この役割だけで見られる。
+
+**実装時に見つかった落とし穴**: JWTの`tenant_id`は必須クレームなので、グローバル
+viewerのトークンにも何らかの`tenant_id`が乗っている。既存の「テナント内フルR/W」
+ルール（軸1、`claims.tenant_id == request.tenant_id`かつ`tenant_role != "viewer"`
+なら許可）は`role`を一切見ていなかったため、viewerトークンの`tenant_id`がたまたま
+リクエストの`tenant_id`と一致する場面（=自分のトークンに乗った`tenant_id`と同じ
+テナントへのリクエスト）で、このルールが横から成立してしまい、「読み取り専用のはずが
+自分のトークンのtenant_id分だけ書き込みできてしまう」という抜け穴になっていた。
+テストを書いて初めて発覚し、当該ルールに`claims.role != "viewer"`を追加して塞いだ
+（storage-admin/network-adminは自テナント内でこのルールにフォールバックする挙動を
+意図的に維持しているので、除外するのは`viewer`だけ）。
+
+`kyuusha token mint -role=viewer`で発行できる。
 
 ### 着手のタイミング
 
-- 軸1・軸3は上記のとおり2026-09-11に実装済み
+- 軸1・軸3は2026-09-11、軸4は2026-09-13に実装済み
 - 軸2（リソース単位の所有権）は、Finalizer以外の場面（例: 誰かが作ったVolumeを他人が
   誤って消せてしまう、等）で実際に問題が顕在化した時点で、`CreatedBy`をそのリソース型に
   個別に足す形で対応する。全リソースへの一律導入は今のところ動機がない

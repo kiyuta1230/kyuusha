@@ -26,7 +26,7 @@ func tokenMint(args []string) {
 	fs := flag.NewFlagSet("token mint", flag.ExitOnError)
 	keyPath := fs.String("key", "hack/devkeys/jwt-dev.key", "PEM private key to sign with (dev only)")
 	tenant := fs.String("tenant", "", "tenant_id claim (required)")
-	role := fs.String("role", "", "role claim: \"\" (no cross-tenant power) | admin (every tenant) | storage-admin (every tenant, block-storage RPCs only) -- see docs/specs/authn-authz.md")
+	role := fs.String("role", "", "role claim: \"\" (no cross-tenant power) | admin (every tenant) | storage-admin (every tenant, block-storage RPCs only) | network-admin (every tenant, network RPCs only) | viewer (every tenant, every service, read-only) -- see docs/specs/authn-authz.md")
 	tenantRole := fs.String("tenant-role", "", "tenant_role claim, within the caller's own tenant: \"\" (a.k.a. member, full read/write) | viewer (read-only) -- see docs/specs/authn-authz.md")
 	sub := fs.String("sub", "", "sub claim: who is asking (human operator or service account), for audit logging (optional; self-asserted here, see docs/specs/audit-logging.md)")
 	ttl := fs.Duration("ttl", time.Hour, "token lifetime")
