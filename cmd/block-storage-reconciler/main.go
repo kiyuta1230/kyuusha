@@ -32,6 +32,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -145,6 +146,7 @@ func main() {
 		slog.Error("new block-storage service", "err", err)
 		os.Exit(1)
 	}
+	prometheus.MustRegister(blockstorage.NewMetricsCollector(svc))
 
 	slog.Info("block-storage-reconciler: starting")
 	if err := svc.Run(ctx, nc, js); err != nil && ctx.Err() == nil {

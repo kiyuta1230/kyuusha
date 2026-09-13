@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -79,6 +80,7 @@ func main() {
 	defer etcdClient.Close()
 
 	svc := identity.NewService(etcdClient)
+	prometheus.MustRegister(identity.NewMetricsCollector(svc))
 
 	serverCreds, err := mtls.ServerCredentials(*tlsCert, *tlsKey, *tlsCA)
 	if err != nil {

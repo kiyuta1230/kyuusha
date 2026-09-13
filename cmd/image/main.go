@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -80,6 +81,7 @@ func main() {
 	defer etcdClient.Close()
 
 	svc := image.NewService(etcdClient)
+	prometheus.MustRegister(image.NewMetricsCollector(svc))
 	go func() {
 		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("reachability checker stopped", "err", err)

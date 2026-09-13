@@ -33,6 +33,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -177,6 +178,7 @@ func main() {
 		slog.Error("new compute service", "err", err)
 		os.Exit(1)
 	}
+	prometheus.MustRegister(compute.NewMetricsCollector(svc))
 
 	slog.Info("compute-reconciler: starting")
 	recon := compute.NewReconciler(svc, nc, js)
