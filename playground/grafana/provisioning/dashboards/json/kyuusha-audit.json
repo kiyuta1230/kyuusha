@@ -1,0 +1,95 @@
+{
+  "title": "kyuusha: audit",
+  "uid": "kyuusha-audit",
+  "description": "\"誰が・何を・どうなったか\" -- api-gateway経由の全リクエストの監査ログ（internal/audit、docs/specs/audit-logging.md参照）。authn/authzはapi-gatewayにのみ組み込まれているため、記録対象もapi-gateway経由のリクエストのみ。",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Audit event rate (by event)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "sum by (event) (count_over_time({compose_service=\"api-gateway\"} | json | audit=\"true\" [1m]))",
+          "legendFormat": "{{event}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Denied rate -- authn_failed / authz_denied (by sub)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "sum by (sub, event) (count_over_time({compose_service=\"api-gateway\"} | json | audit=\"true\" | event=~\"authn_failed|authz_denied\" [1m]))",
+          "legendFormat": "{{sub}} ({{event}})"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "rpc_completed error rate (by rpc_method)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "sum by (rpc_method) (count_over_time({compose_service=\"api-gateway\"} | json | audit=\"true\" | event=\"rpc_completed\" | error!=\"\" [1m]))",
+          "legendFormat": "{{rpc_method}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Denied requests (authn_failed / authz_denied) -- who, what, why",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 16 },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{compose_service=\"api-gateway\"} | json | audit=\"true\" | event=~\"authn_failed|authz_denied\" | line_format \"{{.event}} sub={{.sub}} tenant_id={{.tenant_id}} rpc_method={{.rpc_method}} error={{.error}}\""
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "All audit events -- who did what",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 26 },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{compose_service=\"api-gateway\"} | json | audit=\"true\" | line_format \"{{.event}} sub={{.sub}} tenant_id={{.tenant_id}} rpc_method={{.rpc_method}} trace_id={{.trace_id}} error={{.error}}\""
+        }
+      ]
+    }
+  ]
+}

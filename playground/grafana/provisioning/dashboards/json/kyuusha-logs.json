@@ -1,0 +1,94 @@
+{
+  "title": "kyuusha: logs",
+  "uid": "kyuusha-logs",
+  "description": "Loki-backed log dashboard. Promtail (playground/promtail-config.yml) labels every container by compose_service; log bodies are JSON (Go's slog.NewJSONHandler), parsed here with `| json`. See docs/specs/audit-logging.md for the audit-specific fields (event/tenant_id/sub/trace_id).",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "loki" },
+        "query": "label_values(compose_service)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Log volume (by service)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "sum by (compose_service) (count_over_time({compose_service=~\"$service\"}[1m]))",
+          "legendFormat": "{{compose_service}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Error/Warn log rate (by service)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "sum by (compose_service, level) (count_over_time({compose_service=~\"$service\"} | json | level=~\"ERROR|WARN\" [1m]))",
+          "legendFormat": "{{compose_service}} {{level}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Audit log events",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{compose_service=~\"$service\"} | json | audit=\"true\""
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Live logs (all levels)",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 18 },
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{compose_service=~\"$service\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "title": "kyuusha: fleet",
+  "uid": "kyuusha-fleet",
+  "description": "リソース件数（Tenant/Image/VM/Volume/VolumeAttachment/Subnet/NetworkInterface、tenant_id×phase別）とQuota使用率。上から「組織レベル→ワークロード→ストレージ/ネットワーク→Quota」の順で並べている。2026-09-13追加、docs/specs/observability-metrics.md「リソース件数・Quota使用状況」参照。kyuushaはUser（ローカルのユーザーディレクトリ）を持たない設計（認証は外部OIDC、JWT claimsのみ）なので、ユーザー数に相当するメトリクスは無い。",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(kyuusha_tenant_quota_limit, tenant_id)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Tenants (by phase)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (phase) (kyuusha_tenants_total)",
+          "legendFormat": "{{phase}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Images (by phase)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (phase) (kyuusha_images_total{tenant_id=~\"$tenant\"})",
+          "legendFormat": "{{phase}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "VirtualMachines (by phase)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (phase) (kyuusha_virtualmachines_total{tenant_id=~\"$tenant\"})",
+          "legendFormat": "{{phase}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "VirtualMachines by tenant (all phases combined)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (tenant_id) (kyuusha_virtualmachines_total{tenant_id=~\"$tenant\"})",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Volumes / VolumeAttachments (by phase)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (phase) (kyuusha_volumes_total{tenant_id=~\"$tenant\"})",
+          "legendFormat": "Volume {{phase}}"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (phase) (kyuusha_volumeattachments_total{tenant_id=~\"$tenant\"})",
+          "legendFormat": "VolumeAttachment {{phase}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Subnets / NetworkInterfaces (by phase)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (phase) (kyuusha_subnets_total{tenant_id=~\"$tenant\"})",
+          "legendFormat": "Subnet {{phase}}"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (phase) (kyuusha_networkinterfaces_total{tenant_id=~\"$tenant\"})",
+          "legendFormat": "NetworkInterface {{phase}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Quota utilization (used / limit, by tenant and resource)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "kyuusha_tenant_quota_used{tenant_id=~\"$tenant\"} / on (tenant_id, resource) kyuusha_tenant_quota_limit",
+          "legendFormat": "{{tenant_id}} {{resource}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Quota used vs limit, raw values (by tenant and resource)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 34 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "kyuusha_tenant_quota_used{tenant_id=~\"$tenant\"}",
+          "legendFormat": "{{tenant_id}} {{resource}} used"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "kyuusha_tenant_quota_limit{tenant_id=~\"$tenant\"}",
+          "legendFormat": "{{tenant_id}} {{resource}} limit"
+        }
+      ]
+    }
+  ]
+}
