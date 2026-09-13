@@ -1,0 +1,86 @@
+{
+  "title": "kyuusha: api-gateway",
+  "uid": "kyuusha-api-gateway",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "gRPC request rate (by method)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (rpc_method) (rate(rpc_server_call_duration_seconds_count{job=\"api-gateway\"}[1m]))",
+          "legendFormat": "{{rpc_method}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "gRPC error rate (status != OK, by method/code)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (rpc_method, rpc_response_status_code) (rate(rpc_server_call_duration_seconds_count{job=\"api-gateway\", rpc_response_status_code!=\"OK\"}[1m]))",
+          "legendFormat": "{{rpc_method}} {{rpc_response_status_code}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "p95 latency (by method)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (rpc_method, le) (rate(rpc_server_call_duration_seconds_bucket{job=\"api-gateway\"}[5m])))",
+          "legendFormat": "{{rpc_method}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Goroutines",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_goroutine_count{job=\"api-gateway\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Resident memory",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "process_resident_memory_bytes{job=\"api-gateway\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    }
+  ]
+}

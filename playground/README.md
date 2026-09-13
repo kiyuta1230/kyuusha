@@ -47,7 +47,22 @@ compute-agent/NATS）は[システム構成仕様](../docs/specs/system-overview
 |---|---|---|
 | Jaeger | http://localhost:16686 | トレース検索。`service`を`compute`/`compute-agent`/`identity`/`api-gateway`で絞り込む |
 | Prometheus | http://localhost:9090 | メトリクス生クエリ（`rpc_server_call_duration_seconds_count`等） |
-| Grafana | http://localhost:3000 | ダッシュボード（`kyuusha overview`が自動プロビジョニング済み、ログイン不要）。Prometheus/Jaeger/Lokiがデータソースとして登録済み |
+| Grafana | http://localhost:3000 | ダッシュボード（下記、全て自動プロビジョニング済み、ログイン不要）。Prometheus/Jaeger/Lokiがデータソースとして登録済み |
+
+Grafanaのダッシュボードは`playground/grafana/provisioning/dashboards/json/*.json`として
+リポジトリにコミット済みで、`docker compose up`のたびに毎回自動プロビジョニングされる
+（Grafana自身のDBには何も持たせていない——コンテナを作り直しても消えない）。
+
+| ダッシュボード | 内容 |
+|---|---|
+| `kyuusha overview` | 全サービス横断のサマリ（gRPCリクエストレート/エラーレート/p95レイテンシ、goroutine数、常駐メモリ） |
+| `kyuusha: api-gateway` | api-gateway単体 |
+| `kyuusha: identity` | identity単体 |
+| `kyuusha: image` | image単体 |
+| `kyuusha: compute` | compute + compute-reconciler（reconcileループ分離後の2プロセスをまとめて表示） |
+| `kyuusha: network` | network + network-reconciler |
+| `kyuusha: block-storage` | block-storage + block-storage-reconciler |
+| `kyuusha: compute-agent` | compute-agentのgRPCクライアント呼び出し（compute-agent自身はgRPCサーバーを持たない）に加え、`/metrics/resources`のVM CPU/メモリ使用量（[メトリクス仕様](../docs/specs/observability-metrics.md)「/metrics/resources」参照） |
 
 ログ（監査ログ含む）はPromtailがDockerソケット経由で全コンテナから収集しLokiへpushする。
 GrafanaのExplore（データソース: Loki）で以下のようなLogQLクエリが使える。

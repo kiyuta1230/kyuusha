@@ -1,0 +1,107 @@
+{
+  "title": "kyuusha: compute-agent",
+  "uid": "kyuusha-compute-agent",
+  "description": "compute-agent has no gRPC server of its own (it's a NATS command consumer + a direct gRPC client to compute for self-registration/console proxying), so this dashboard tracks client-side gRPC calls plus the payload VM metrics it publishes separately at /metrics/resources -- see docs/specs/observability-metrics.md \"/metrics/resources\".",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "gRPC client call rate (compute-agent -> compute)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (rpc_method) (rate(rpc_client_call_duration_seconds_count{job=\"compute-agent\"}[1m]))",
+          "legendFormat": "{{rpc_method}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "gRPC client error rate (status != OK)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (rpc_method, rpc_response_status_code) (rate(rpc_client_call_duration_seconds_count{job=\"compute-agent\", rpc_response_status_code!=\"OK\"}[1m]))",
+          "legendFormat": "{{rpc_method}} {{rpc_response_status_code}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Goroutines (by hypervisor)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_goroutine_count{job=\"compute-agent\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Resident memory (by hypervisor)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "process_resident_memory_bytes{job=\"compute-agent\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "VM CPU usage (rate, by vm_id)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(kyuusha_vm_cpu_usage_seconds_total{job=\"compute-agent-resources\"}[1m])",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{vm_id}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "VM memory usage vs limit (by vm_id)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "kyuusha_vm_memory_usage_bytes{job=\"compute-agent-resources\"}",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{vm_id}} usage"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "kyuusha_vm_memory_limit_bytes{job=\"compute-agent-resources\"}",
+          "legendFormat": "{{hypervisor}} {{tenant_id}} {{vm_id}} limit"
+        }
+      ]
+    }
+  ]
+}

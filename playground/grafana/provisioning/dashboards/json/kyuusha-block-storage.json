@@ -1,0 +1,87 @@
+{
+  "title": "kyuusha: block-storage",
+  "uid": "kyuusha-block-storage",
+  "description": "block-storage (gRPC API, stateless replicas) + block-storage-reconciler (exclusive-attach, Volume verification flow, single instance) -- see docs/architecture.md \"コントロールプレーンサービス自体の可用性\".",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "gRPC request rate (by job/method)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (job, rpc_method) (rate(rpc_server_call_duration_seconds_count{job=~\"block-storage|block-storage-reconciler\"}[1m]))",
+          "legendFormat": "{{job}} {{rpc_method}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "gRPC error rate (status != OK, by job/method/code)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (job, rpc_method, rpc_response_status_code) (rate(rpc_server_call_duration_seconds_count{job=~\"block-storage|block-storage-reconciler\", rpc_response_status_code!=\"OK\"}[1m]))",
+          "legendFormat": "{{job}} {{rpc_method}} {{rpc_response_status_code}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "p95 latency (by job)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (job, le) (rate(rpc_server_call_duration_seconds_bucket{job=~\"block-storage|block-storage-reconciler\"}[5m])))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Goroutines (by job)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_goroutine_count{job=~\"block-storage|block-storage-reconciler\"}",
+          "legendFormat": "{{job}} ({{instance}})"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Resident memory (by job)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "process_resident_memory_bytes{job=~\"block-storage|block-storage-reconciler\"}",
+          "legendFormat": "{{job}} ({{instance}})"
+        }
+      ]
+    }
+  ]
+}
