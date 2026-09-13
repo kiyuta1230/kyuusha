@@ -31,7 +31,21 @@ name: kyuusha-playground
 services:
   nats:
     image: nats:2-alpine
-    command: ["-js", "-m", "8222"]
+    # -sd + the volume below: without an explicit store dir, JetStream
+    # (streams, durable consumers' read position, any queued/unacked
+    # message) lives only in this container's own writable layer -- a plain
+    # process restart preserves that, but a container recreation (e.g. `up
+    # --build` after an image change, or a host reboot) would silently wipe
+    # it, unlike etcd's own data (see the etcd-data volume below, which
+    # exists for exactly this reason). Not load-bearing for correctness --
+    # every consumer here treats etcd, not NATS, as the source of truth and
+    # rebuilds/resends whatever it needs from etcd on a sweep interval (see
+    # docs/architecture.md and this session's crash-safety work) -- but
+    # losing it still means waiting out that sweep interval instead of
+    # resuming instantly, so there's no reason not to persist it too.
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - nats-data:/data
     ports:
       - "4222:4222"
     healthcheck:
@@ -394,3 +408,4 @@ volumes:
   # change) would silently wipe -- exactly the persistence gap this whole
   # migration exists to close.
   etcd-data:
+  nats-data:
