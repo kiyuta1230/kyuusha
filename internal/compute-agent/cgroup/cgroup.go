@@ -18,6 +18,25 @@ import (
 	"time"
 )
 
+// VMStats is one VM's cgroup v2 CPU/memory readout, as of the moment
+// ReadStats was called -- see that function.
+type VMStats struct {
+	// CPUUsageSeconds is cumulative CPU time (cpu.stat's usage_usec,
+	// converted to seconds) consumed since this VM's cgroup was created --
+	// a monotonically increasing counter, matching the convention every
+	// other cumulative CPU metric in the Prometheus ecosystem uses (e.g.
+	// cAdvisor's container_cpu_usage_seconds_total), so a rate() over it
+	// in PromQL is the natural way to read it.
+	CPUUsageSeconds float64
+	// MemoryUsageBytes is memory.current: this cgroup's current memory
+	// usage right now, not a cumulative counter.
+	MemoryUsageBytes int64
+	// MemoryLimitBytes is memory.max, i.e. exactly the memoryMB Apply was
+	// given, in bytes -- or -1 if the cgroup reports no limit ("max",
+	// meaning Apply was never called or its memory.max write failed).
+	MemoryLimitBytes int64
+}
+
 // root is the cgroupfs mount point. A package var (not a const) so tests can
 // point it at a scratch directory instead of the real /sys/fs/cgroup.
 var root = "/sys/fs/cgroup"
@@ -100,6 +119,65 @@ func Remove(vmID string) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("cgroup: removing %s: %w", dir, lastErr)
+}
+
+// ReadStats reads vmID's current CPU/memory cgroup v2 stats -- see
+// docs/architecture.md「払い出したリソース自身のメトリクス」, the source
+// internal/compute-agent/resourcemetrics' Collector reads from at every
+// /metrics/resources scrape. Returns an error if vmID's cgroup doesn't
+// exist (Apply was never called for it, or cgroup v2 delegation wasn't
+// available -- see Apply's own best-effort doc comment): callers should
+// treat that as "no stats for this VM", not a failure worth logging on
+// every scrape.
+func ReadStats(vmID string) (VMStats, error) {
+	dir := vmDir(vmID)
+
+	cpuStat, err := os.ReadFile(filepath.Join(dir, "cpu.stat"))
+	if err != nil {
+		return VMStats{}, fmt.Errorf("cgroup: read cpu.stat: %w", err)
+	}
+	usageUsec, err := parseCPUStatUsageUsec(cpuStat)
+	if err != nil {
+		return VMStats{}, fmt.Errorf("cgroup: parse cpu.stat: %w", err)
+	}
+
+	memCurrent, err := os.ReadFile(filepath.Join(dir, "memory.current"))
+	if err != nil {
+		return VMStats{}, fmt.Errorf("cgroup: read memory.current: %w", err)
+	}
+	memUsageBytes, err := strconv.ParseInt(strings.TrimSpace(string(memCurrent)), 10, 64)
+	if err != nil {
+		return VMStats{}, fmt.Errorf("cgroup: parse memory.current: %w", err)
+	}
+
+	memLimitBytes := int64(-1)
+	if memMax, err := os.ReadFile(filepath.Join(dir, "memory.max")); err == nil {
+		if s := strings.TrimSpace(string(memMax)); s != "max" {
+			if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+				memLimitBytes = v
+			}
+		}
+	}
+
+	return VMStats{
+		CPUUsageSeconds:  float64(usageUsec) / 1e6,
+		MemoryUsageBytes: memUsageBytes,
+		MemoryLimitBytes: memLimitBytes,
+	}, nil
+}
+
+// parseCPUStatUsageUsec extracts cpu.stat's "usage_usec <n>" line -- the
+// file's format is one "<key> <value>" pair per line (also carrying
+// user_usec/system_usec, neither of which ReadStats needs).
+func parseCPUStatUsageUsec(cpuStat []byte) (int64, error) {
+	for line := range strings.SplitSeq(string(cpuStat), "\n") {
+		key, value, ok := strings.Cut(line, " ")
+		if !ok || key != "usage_usec" {
+			continue
+		}
+		return strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	}
+	return 0, fmt.Errorf("no usage_usec line found")
 }
 
 // Init moves this process out of root's own cgroup.procs and into a leaf

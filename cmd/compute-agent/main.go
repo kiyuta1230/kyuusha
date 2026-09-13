@@ -22,11 +22,15 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/kiyuta1230/kyuusha/internal/compute"
 	computeagent "github.com/kiyuta1230/kyuusha/internal/compute-agent"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/chvmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/fcvmm"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/resourcemetrics"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
 	"github.com/kiyuta1230/kyuusha/internal/mtls"
@@ -81,6 +85,29 @@ func main() {
 
 	connections, connectionProtos := parseStorageConnections(*storageConnections)
 
+	// Built once, before Agent and before /metrics/resources' collector,
+	// since both need the exact same map[string]vmm.VMM: the collector
+	// reads Running() from each driver, and Agent dispatches Boot/Stop/
+	// Destroy against the same instances.
+	vmmDrivers := map[string]vmm.VMM{
+		string(compute.VmmDriverFirecracker): &fcvmm.Manager{
+			BinPath:            *fcBin,
+			CacheDir:           *fcCacheDir,
+			RunDir:             *fcRunDir,
+			JailerBinPath:      *fcJailerBin,
+			JailChrootBaseDir:  *fcJailChrootBaseDir,
+			JailUID:            uint32(*fcJailUID),
+			JailGID:            uint32(*fcJailGID),
+			StorageConnections: connections,
+		},
+		string(compute.VmmDriverCloudHypervisor): &chvmm.Manager{
+			BinPath:            *chBin,
+			CacheDir:           *chCacheDir,
+			RunDir:             *chRunDir,
+			StorageConnections: connections,
+		},
+	}
+
 	// Must happen before any Firecracker process is ever forked (Boot's
 	// exec.Command): a child forked while this process still resides
 	// directly in the (cgroupns-scoped) root cgroup inherits that placement
@@ -116,9 +143,18 @@ func main() {
 		defer cancel()
 		_ = shutdownMetrics(shutdownCtx)
 	}()
+	// /metrics/resources is a separate registry/handler from /metrics
+	// (telemetry.SetupMetrics' own otel-backed one): these are payload
+	// (VM) metrics, not this process' own system metrics, and deliberately
+	// kept out of the resource_version/Watch-visible object model -- see
+	// docs/architecture.md「払い出したリソース自身のメトリクス」.
+	resourceRegistry := prometheus.NewRegistry()
+	resourceRegistry.MustRegister(resourcemetrics.New(*hypervisor, vmmDrivers))
+
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", metricsHandler)
+		mux.Handle("/metrics/resources", promhttp.HandlerFor(resourceRegistry, promhttp.HandlerOpts{}))
 		if err := http.ListenAndServe(*metricsAddr, mux); err != nil {
 			slog.Error("metrics server stopped", "err", err)
 		}
@@ -170,24 +206,7 @@ func main() {
 		SupportedDrivers:        strings.Split(*drivers, ","),
 		StorageConnections:      connectionProtos,
 		LocalStorageConnections: connections,
-		Drivers: map[string]vmm.VMM{
-			string(compute.VmmDriverFirecracker): &fcvmm.Manager{
-				BinPath:            *fcBin,
-				CacheDir:           *fcCacheDir,
-				RunDir:             *fcRunDir,
-				JailerBinPath:      *fcJailerBin,
-				JailChrootBaseDir:  *fcJailChrootBaseDir,
-				JailUID:            uint32(*fcJailUID),
-				JailGID:            uint32(*fcJailGID),
-				StorageConnections: connections,
-			},
-			string(compute.VmmDriverCloudHypervisor): &chvmm.Manager{
-				BinPath:            *chBin,
-				CacheDir:           *chCacheDir,
-				RunDir:             *chRunDir,
-				StorageConnections: connections,
-			},
-		},
+		Drivers:                 vmmDrivers,
 	}
 	slog.Info("compute-agent: starting", "hypervisor", *hypervisor)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {

@@ -110,3 +110,86 @@ func TestRemove_NoopIfNeverCreated(t *testing.T) {
 		t.Fatalf("Remove of a cgroup that was never created: %v", err)
 	}
 }
+
+// withScratchRoot points root at a fresh temp directory for the duration of
+// the test, restoring it afterward -- unlike TestApplyAndRemove et al.
+// (which exercise the real cgroup v2 filesystem and skip if it's
+// unavailable), ReadStats only ever reads plain files, so its tests don't
+// need real cgroup v2 delegation at all.
+func withScratchRoot(t *testing.T) {
+	t.Helper()
+	old := root
+	root = t.TempDir()
+	t.Cleanup(func() { root = old })
+}
+
+func TestReadStats(t *testing.T) {
+	withScratchRoot(t)
+
+	const vmID = "test-vm-stats-1"
+	dir := vmDir(vmID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	writeFile(t, filepath.Join(dir, "cpu.stat"), "usage_usec 2500000\nuser_usec 2000000\nsystem_usec 500000\n")
+	writeFile(t, filepath.Join(dir, "memory.current"), "104857600\n")
+	writeFile(t, filepath.Join(dir, "memory.max"), "536870912\n")
+
+	stats, err := ReadStats(vmID)
+	if err != nil {
+		t.Fatalf("ReadStats: %v", err)
+	}
+	if got, want := stats.CPUUsageSeconds, 2.5; got != want {
+		t.Fatalf("CPUUsageSeconds = %v, want %v", got, want)
+	}
+	if got, want := stats.MemoryUsageBytes, int64(104857600); got != want {
+		t.Fatalf("MemoryUsageBytes = %v, want %v", got, want)
+	}
+	if got, want := stats.MemoryLimitBytes, int64(536870912); got != want {
+		t.Fatalf("MemoryLimitBytes = %v, want %v", got, want)
+	}
+}
+
+// TestReadStats_UnboundedMemory covers memory.max reporting the literal
+// string "max" (no limit ever applied, or Apply's write failed) --
+// MemoryLimitBytes must come back as the -1 sentinel, not a parse error or
+// a bogus large number.
+func TestReadStats_UnboundedMemory(t *testing.T) {
+	withScratchRoot(t)
+
+	const vmID = "test-vm-stats-2"
+	dir := vmDir(vmID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	writeFile(t, filepath.Join(dir, "cpu.stat"), "usage_usec 0\n")
+	writeFile(t, filepath.Join(dir, "memory.current"), "0\n")
+	writeFile(t, filepath.Join(dir, "memory.max"), "max\n")
+
+	stats, err := ReadStats(vmID)
+	if err != nil {
+		t.Fatalf("ReadStats: %v", err)
+	}
+	if stats.MemoryLimitBytes != -1 {
+		t.Fatalf("MemoryLimitBytes = %v, want -1 (unbounded)", stats.MemoryLimitBytes)
+	}
+}
+
+// TestReadStats_NoCgroupReturnsError covers a vm_id whose cgroup was never
+// created (Apply never called, or cgroup v2 unavailable) -- callers (see
+// internal/compute-agent/resourcemetrics.Collector) rely on this to mean
+// "skip this VM", not "zero usage".
+func TestReadStats_NoCgroupReturnsError(t *testing.T) {
+	withScratchRoot(t)
+
+	if _, err := ReadStats("never-existed"); err == nil {
+		t.Fatalf("expected an error for a vm_id with no cgroup, got nil")
+	}
+}
+
+func writeFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}

@@ -267,6 +267,7 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 		slog.Info("compute-agent: booting VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "driver_hint", cmd.DriverHint, "interfaces", len(cmd.Interfaces))
 		attached, err := driver.Boot(ctx, vmm.BootSpec{
 			VMID:              cmd.VMID,
+			TenantID:          cmd.TenantID,
 			VCPU:              cmd.VCPU,
 			MemoryMB:          cmd.MemoryMB,
 			KernelURL:         cmd.KernelURL,

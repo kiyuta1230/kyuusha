@@ -31,8 +31,14 @@ const BootRecordFileName = "kyuusha-boot.json"
 // idempotent re-Boot can return the exact same result agent.go already
 // reported to block-storage).
 type BootRecord struct {
-	PID          int              `json:"pid"`
-	ExeBasename  string           `json:"exe_basename"`
+	PID         int    `json:"pid"`
+	ExeBasename string `json:"exe_basename"`
+	// TenantID is this VM's owning tenant (BootSpec.TenantID at Boot time),
+	// persisted so Reconcile can still label an adopted VM correctly for
+	// /metrics/resources (internal/compute-agent/resourcemetrics) even
+	// though the compute-agent process reading it back otherwise has no
+	// memory of this VM at all.
+	TenantID     string           `json:"tenant_id,omitempty"`
 	Taps         []string         `json:"taps,omitempty"`
 	VolumeMounts []string         `json:"volume_mounts,omitempty"`
 	Attached     []AttachedVolume `json:"attached,omitempty"`

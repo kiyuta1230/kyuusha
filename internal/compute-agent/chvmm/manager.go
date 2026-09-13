@@ -118,7 +118,11 @@ type runningVM struct {
 	// still be this VM's cloud-hypervisor process, not an unrelated
 	// process that has since reused the same pid -- see vmm.ProcessAlive.
 	exeBasename string
-	taps        []string
+	// tenantID is this VM's owning tenant (BootSpec.TenantID at Boot time,
+	// or vmm.BootRecord.TenantID for one Reconcile adopted) -- carried only
+	// for Running's RunningVM.TenantID label.
+	tenantID string
+	taps     []string
 	// attached is what Boot resolved and returned for this VM -- kept so an
 	// idempotent re-Boot (see Boot's top-of-function check) can return the
 	// exact same result without re-resolving anything.
@@ -160,6 +164,17 @@ func (m *Manager) ConsoleLogPath(vmID string) string {
 	return filepath.Join(m.runDir(), vmID, "console.log")
 }
 
+// Running implements vmm.VMM.
+func (m *Manager) Running() []vmm.RunningVM {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]vmm.RunningVM, 0, len(m.running))
+	for vmID, rv := range m.running {
+		out = append(out, vmm.RunningVM{VMID: vmID, TenantID: rv.tenantID})
+	}
+	return out
+}
+
 // Reconcile adopts every VM under RunDir that has a boot record (see
 // vmm.BootRecord) whose pid is still alive -- see fcvmm's identical
 // Reconcile for the full reasoning (must run once, before this Manager
@@ -184,7 +199,7 @@ func (m *Manager) Reconcile() {
 			continue
 		}
 		rv := &runningVM{
-			pid: rec.PID, exeBasename: rec.ExeBasename,
+			pid: rec.PID, exeBasename: rec.ExeBasename, tenantID: rec.TenantID,
 			taps: rec.Taps, attached: rec.Attached,
 			done: make(chan struct{}),
 		}
@@ -408,7 +423,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 
 	exeBasename := filepath.Base(m.binPath())
-	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, taps: taps, attached: attached, done: make(chan struct{})}
+	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, taps: taps, attached: attached, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
@@ -419,7 +434,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// Best-effort: losing this only costs this VM's restart-safety (see
 	// Reconcile), not the correctness of the process actually running now.
 	if err := vmm.WriteBootRecord(vmDir, vmm.BootRecord{
-		PID: cmd.Process.Pid, ExeBasename: exeBasename, Taps: taps, Attached: attached,
+		PID: cmd.Process.Pid, ExeBasename: exeBasename, TenantID: spec.TenantID, Taps: taps, Attached: attached,
 	}); err != nil {
 		slog.Warn("chvmm: write boot record, this VM won't be adopted if compute-agent restarts", "vm_id", spec.VMID, "err", err)
 	}

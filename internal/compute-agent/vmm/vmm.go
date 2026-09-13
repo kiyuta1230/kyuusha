@@ -54,12 +54,32 @@ type VMM interface {
 	// stdout/stderr (== the guest's serial console, ttyS0). Exists only
 	// once Boot has actually run for this vmID.
 	ConsoleLogPath(vmID string) string
+	// Running lists every VM this driver currently has booted -- freshly,
+	// or adopted via Reconcile from a previous compute-agent process (see
+	// vmm.BootRecord). The only consumer is /metrics/resources' collector
+	// (internal/compute-agent/resourcemetrics, see docs/architecture.md
+	// 「払い出したリソース自身のメトリクス」): it needs to know which vm_ids
+	// have a live cgroup to read stats from, and which tenant_id to label
+	// them with, without duplicating either driver's own bookkeeping.
+	Running() []RunningVM
+}
+
+// RunningVM is one VM a VMM driver reports via Running.
+type RunningVM struct {
+	VMID     string
+	TenantID string
 }
 
 // BootSpec is what a VMM driver needs to boot one VM. Callers (agent.go)
 // build this from a compute.CreateCommand.
 type BootSpec struct {
-	VMID              string
+	VMID string
+	// TenantID is the VM's own owning tenant (not to be confused with
+	// VolumeAttachInfo.TenantID below, which happens to always be the same
+	// value here since a VolumeAttachment lives in its VM's tenant, but
+	// exists for that struct's own, narrower reason). Carried only for
+	// Running's RunningVM.TenantID label; no driver otherwise interprets it.
+	TenantID          string
 	VCPU              int32
 	MemoryMB          int64
 	KernelURL         string

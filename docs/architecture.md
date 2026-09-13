@@ -1789,11 +1789,22 @@ Prometheus本体・Grafana・Jaeger/Tempo・Lokiのような**集約基盤は動
 （cgroup・tapデバイス・ストレージノード）から観測できる。「Imageの中身をkyuushaが強制しない」
 という既存方針とも矛盾しない。
 
-| リソース | メトリクス源 | 取得元 |
-|---|---|---|
-| VirtualMachine(CPU/メモリ) | jailerが使うcgroup統計 | compute-agent |
-| VirtualMachine/NetworkInterface(ネットワークI/O) | tapデバイスのホスト側統計 | network-agent |
-| Volume/VolumeAttachment(IOPS/スループット) | ストレージノード側(ZFS/nvmet)の統計 | block-storage |
+| リソース | メトリクス源 | 取得元 | 状態 |
+|---|---|---|---|
+| VirtualMachine(CPU/メモリ) | jailerが使うcgroup統計 | compute-agent | 実装済み（2026-09-13） |
+| VirtualMachine/NetworkInterface(ネットワークI/O) | tapデバイスのホスト側統計 | network-agent | 未着手 |
+| Volume/VolumeAttachment(IOPS/スループット) | ストレージノード側(ZFS/nvmet)の統計 | block-storage | 未着手 |
+
+VirtualMachineのCPU/メモリは`internal/compute-agent/resourcemetrics.Collector`として実装済み
+（`kyuusha_vm_cpu_usage_seconds_total`/`kyuusha_vm_memory_usage_bytes`/
+`kyuusha_vm_memory_limit_bytes`、詳細は[メトリクス仕様](specs/observability-metrics.md)
+「/metrics/resources」参照）。スクレイプの都度cgroup統計ファイルをその場で読むだけで、
+バックグラウンドのポーリングループやキャッシュ状態は持たない——`vmm.VMM`に`Running()`
+（このドライバが現在起動しているVMの一覧、freshにBootしたものと`Reconcile`で前プロセスから
+adoptしたものの両方を含む）を追加し、`vmm.BootSpec`/`vmm.BootRecord`に`TenantID`を足すことで
+実現した（`BootRecord`側への永続化により、compute-agent再起動後に`Reconcile`がadoptしたVMも
+tenant_idラベル付きで即座にメトリクスへ現れる）。NetworkInterface/Volumeの2種は今回のスコープ外
+のまま。
 
 **`resource_version`/Watchには混ぜない**: メトリクスは高頻度（例: 30秒毎）に更新されるため、
 `VirtualMachineStatus`に含めると`resource_version`が増え続けて`Watch`に`MODIFIED`が大量発生し、
@@ -2004,9 +2015,11 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 
 1. **I/Oベンチマークの実施**（設計は完了、実行がTODO）: Firecracker/cloud-hypervisorのfio比較を
    実装着手前に行い、`driver_hint`の使い分けガイドを確定する
-2. **リソースメトリクスの収集実装の詳細**: `/metrics`/`/metrics/resources`という公開方式・
-   データ源（cgroup/tap/ストレージノード）は確定したが、cgroup統計の具体的な読み方、
-   Prometheusクライアントライブラリの選定、スクレイプ/収集間隔のチューニングは実装直前に詰める
+2. **リソースメトリクスの収集実装**（VirtualMachineのCPU/メモリは解決済み、残り2種が未着手）:
+   VirtualMachineのCPU/メモリはcompute-agentの`/metrics/resources`として2026-09-13に実装済み
+   （「払い出したリソース自身のメトリクス」参照）。NetworkInterface(ネットワークI/O)は
+   network-agent側、Volume/VolumeAttachment(IOPS/スループット)はblock-storage側の実装が
+   それぞれ別途必要で、まだ手が付いていない
 3. **VMのネットワーク接続をCNIのようにプラガブルにすべきか**（判断保留中）:
 
    きっかけ: OVSが事実上の標準として使われる傾向があり、vhost-user（OVS-DPDKとゲストを
