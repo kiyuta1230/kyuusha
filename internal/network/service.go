@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 	clientv3 "go.etcd.io/etcd/client/v3"
+
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 )
 
 var (
@@ -42,6 +48,20 @@ const (
 // own. This periodic sweep is that retry.
 const pendingSweepInterval = 10 * time.Second
 
+// orphanSweepInterval implements docs/architecture.md's "孤児リソースGC"
+// design decision (10-minute periodic sweep; a child checks its parent's
+// existence via Get, deletes itself if NotFound) for NetworkInterface --
+// see docs/specs/network.md's "NetworkInterfaceのオーファンGC": VM Delete
+// (compute.Reconciler.releaseIfReserved) never touches the NetworkInterfaces
+// a VM held, so without this they stay Bound forever after their VM is
+// gone (a real resource leak, not just a design gap). Ten minutes, not
+// pendingSweepInterval's ten seconds: this is a backstop for VM deletion
+// never having reached this NetworkInterface at all (a dropped/failed
+// fire-and-forget call, or a VM removed by some other means), not a
+// latency-sensitive retry -- see releaseIfReserved's own doc comment for
+// the active-deletion path this backstops.
+const orphanSweepInterval = 10 * time.Minute
+
 // Service implements the SubnetService/NetworkInterfaceService CRUD+Watch
 // surface against in-memory resource.Stores, with real (if simple) IPAM:
 // Subnet Create allocates a VLAN ID from a per-zone pool (docs/architecture.md
@@ -60,9 +80,14 @@ type Service struct {
 	ips   *ipPool
 
 	nextMACOct uint32
+
+	// computeClient is used only by sweepOrphanedNetworkInterfaces, to ask
+	// "does this NetworkInterface's vm_id still exist" -- the one place
+	// this service needs to know anything about a VM at all.
+	computeClient computev1.VirtualMachineServiceClient
 }
 
-func NewService(etcdClient *clientv3.Client) *Service {
+func NewService(etcdClient *clientv3.Client, computeClient computev1.VirtualMachineServiceClient) *Service {
 	return &Service{
 		subnets: resource.NewStore[Subnet, *Subnet](etcdClient, "subnet", resource.StoreErrors{
 			NotFound:      ErrSubnetNotFound,
@@ -74,17 +99,22 @@ func NewService(etcdClient *clientv3.Client) *Service {
 			Conflict:      ErrNetworkInterfaceConflict,
 			HistoryPruned: ErrNetworkInterfaceHistoryPruned,
 		}),
-		vlans: newVLANPool(),
-		ips:   newIPPool(),
+		computeClient: computeClient,
+		vlans:         newVLANPool(),
+		ips:           newIPPool(),
 	}
 }
 
 // Run retries Pending Subnets/NetworkInterfaces (pool exhaustion at Create
-// time) every pendingSweepInterval until ctx is done. Safe to call from
-// only one goroutine; cmd/network/main.go starts it once at startup.
+// time) every pendingSweepInterval, and sweeps orphaned NetworkInterfaces
+// every orphanSweepInterval (see that constant's doc comment), until ctx is
+// done. Safe to call from only one goroutine; cmd/network/main.go starts it
+// once at startup.
 func (s *Service) Run(ctx context.Context) error {
 	ticker := time.NewTicker(pendingSweepInterval)
 	defer ticker.Stop()
+	orphanTicker := time.NewTicker(orphanSweepInterval)
+	defer orphanTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -92,7 +122,41 @@ func (s *Service) Run(ctx context.Context) error {
 		case <-ticker.C:
 			s.retryPendingSubnets(ctx)
 			s.retryPendingNetworkInterfaces(ctx)
+		case <-orphanTicker.C:
+			s.sweepOrphanedNetworkInterfaces(ctx)
 		}
+	}
+}
+
+// sweepOrphanedNetworkInterfaces implements docs/architecture.md's
+// orphan-GC detection logic (a child checks its own parent's existence via
+// Get, deletes itself if NotFound) for NetworkInterface -- see
+// orphanSweepInterval's doc comment for why this exists at all. Any error
+// other than NotFound (compute unreachable, a transient RPC failure) is
+// treated as "don't know, so don't delete" and just retried next tick --
+// only a definitive NotFound is evidence of real orphaning.
+func (s *Service) sweepOrphanedNetworkInterfaces(ctx context.Context) {
+	if s.computeClient == nil {
+		return // e.g. in tests that never set one
+	}
+	ifaces, err := s.interfaces.List(ctx, "")
+	if err != nil {
+		return
+	}
+	for _, iface := range ifaces {
+		_, err := s.computeClient.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: iface.Meta.TenantID, Id: iface.Spec.VMID})
+		if err == nil {
+			continue
+		}
+		if status.Code(err) != codes.NotFound {
+			slog.Warn("orphan sweep: could not confirm NetworkInterface's VM status, skipping this tick", "netif_id", iface.Meta.ID, "vm_id", iface.Spec.VMID, "err", err)
+			continue
+		}
+		if derr := s.DeleteNetworkInterface(ctx, iface.Meta.TenantID, iface.Meta.ID); derr != nil {
+			slog.Error("orphan sweep: delete orphaned NetworkInterface failed", "netif_id", iface.Meta.ID, "vm_id", iface.Spec.VMID, "err", derr)
+			continue
+		}
+		slog.Info("orphan sweep: deleted NetworkInterface whose VM no longer exists", "netif_id", iface.Meta.ID, "vm_id", iface.Spec.VMID)
 	}
 }
 

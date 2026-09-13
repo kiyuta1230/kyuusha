@@ -306,10 +306,14 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
   弱点自体、kyuusha自身の責務ではなくなった（`docs/architecture.md`「正直な弱点」の
   訂正注記参照）
 - **VolumeAttachmentのオーファンGC**: `docs/architecture.md`が決めている「子リソースが
-  親の存在を10分毎にGetで確認し、NotFoundなら自分を消す」パターン自体は未実装。
-  ただしVM削除時の能動的な削除（上記「VM削除時のVolumeAttachment後始末」）で
-  実運用上のオーファン化はほぼカバーされている——NetworkInterfaceが一切触られず
-  そのまま残り続ける（[network仕様](network.md)参照）のとは異なる状況
+  親の存在を10分毎にGetで確認し、NotFoundなら自分を消す」パターンは2026-09-13に
+  実装済み（`blockstorage.Service.sweepOrphanedVolumeAttachments`、`Service.Run`から
+  10分間隔で起動、network側の同等実装と同じ形でcomputeのVirtualMachineServiceへ
+  直接gRPCで問い合わせる`computeClient`を新設）。主経路は引き続きVM削除時の能動的
+  削除（上記「VM削除時のVolumeAttachment後始末」）——このGCはその取りこぼし
+  （fire-and-forget呼び出しの失敗）と、VMが既にRunning中に直接作られた
+  （`VirtualMachineStatus.VolumeAttachmentRefs`に載らない）VolumeAttachmentの
+  両方をカバーするバックストップという位置付け
 - **Volumeのリサイズ**: `size_gb`はユーザー向けには作成後不変。Update RPC自体を
   用意していない（Imageと同じ判断——不変にすべきフィールドしかない段階でUpdateを
   開けない）。唯一の例外は検証フローによる自動補正（上記）——ユーザー操作ではなく、

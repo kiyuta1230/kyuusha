@@ -11,7 +11,7 @@ import (
 
 func newTestService(t *testing.T, ctx context.Context) *Service {
 	t.Helper()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

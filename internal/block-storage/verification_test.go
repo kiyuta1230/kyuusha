@@ -16,7 +16,7 @@ import (
 // just any one.
 func TestStorageConnection_ReadyRequiresAllDeclaredZones(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestVolume_SizeMismatchIsAutoCorrected(t *testing.T) {
 // QuotaExceededAfterCorrection for an admin to notice.
 func TestVolume_SizeCorrectionExceedingQuotaIsFlaggedNotBlocked(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxVolumeGb: 5}})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxVolumeGb: 5}}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestVolume_SizeCorrectionExceedingQuotaIsFlaggedNotBlocked(t *testing.T) {
 // creation/verification timing themselves.
 func newTestServiceNoConnection(t *testing.T, ctx context.Context) *Service {
 	t.Helper()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

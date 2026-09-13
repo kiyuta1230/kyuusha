@@ -98,9 +98,12 @@ Subnetの組み合わせを自動許可する、という形で参照される�
   削除コマンド送出のみ行い、そのVMが持っていたNetworkInterfaceには一切触れない
   （`compute.Reconciler.releaseIfReserved`参照）。`docs/architecture.md`が決めている
   「子リソースが親の存在を10分毎にGetで確認し、NotFoundなら自分を消す」という
-  オーファンGCパターンはNetworkInterfaceにはまだ実装されておらず、VMを削除しても
-  そのNetworkInterfaceは`Bound`のまま残り続ける（実質的なリソースリーク）。次に
-  着手すべきギャップとして明示的に残している
+  オーファンGCパターンは2026-09-13に実装済み（`network.Service.sweepOrphanedNetworkInterfaces`、
+  `Service.Run`から10分間隔で起動）。networkはこのためだけにcomputeの
+  VirtualMachineServiceへ直接gRPCで問い合わせる`computeClient`を新たに持つ
+  （`cmd/network/main.go`の`-compute-addr`）。VMが存在する限り触らず、`Get`が
+  `NotFound`を返した場合のみ削除する（一時的な疎通不可などその他のエラーは
+  「わからないので消さない」で次回ティックに委ねる）
 
 ## compute側の統合
 

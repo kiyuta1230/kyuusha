@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
@@ -53,6 +57,20 @@ const (
 // sweep is that retry.
 const pendingSweepInterval = 10 * time.Second
 
+// orphanSweepInterval implements docs/architecture.md's "孤児リソースGC"
+// design decision (10-minute periodic sweep; a child checks its parent's
+// existence via Get, deletes itself if NotFound) for VolumeAttachment --
+// see docs/specs/volume.md's "VolumeAttachmentのオーファンGC". VM Delete
+// (compute.Reconciler.releaseIfReserved) does actively delete every
+// VolumeAttachment listed in VirtualMachineStatus.VolumeAttachmentRefs, so
+// this is mostly a backstop for that fire-and-forget call failing -- except
+// for a VolumeAttachment created directly against this service *after* its
+// VM already booted (VolumeAttachmentRefs only ever holds the ones
+// attach-before-boot resolved): that one was never tracked by
+// releaseIfReserved at all, and would otherwise never be cleaned up by
+// anything.
+const orphanSweepInterval = 10 * time.Minute
+
 // Service implements the VolumeService/VolumeAttachmentService CRUD+Watch
 // surface against in-memory resource.Stores, plus Create-time Quota
 // enforcement (max_volume_gb, see "Quota設計") and the exclusive-attach
@@ -78,6 +96,10 @@ type Service struct {
 
 	identityClient identityv1.TenantServiceClient
 	quota          *quotaChecker
+	// computeClient is used only by sweepOrphanedVolumeAttachments, to ask
+	// "does this VolumeAttachment's vm_id still exist" -- the one place
+	// this service needs to know anything about a VM at all.
+	computeClient computev1.VirtualMachineServiceClient
 
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
@@ -108,7 +130,7 @@ type Service struct {
 	hypervisorConnections map[string]hypervisorConnInfo
 }
 
-func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient) (*Service, error) {
+func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, computeClient computev1.VirtualMachineServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
@@ -130,6 +152,7 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 			HistoryPruned: ErrStorageConnectionHistoryPruned,
 		}),
 		identityClient: identityClient,
+		computeClient:  computeClient,
 		quota:          quota,
 		usage:          make(map[string]tenantUsage),
 	}, nil
@@ -175,6 +198,8 @@ func (s *Service) Run(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 
 	ticker := time.NewTicker(pendingSweepInterval)
 	defer ticker.Stop()
+	orphanTicker := time.NewTicker(orphanSweepInterval)
+	defer orphanTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -183,7 +208,41 @@ func (s *Service) Run(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 			s.retryPendingAttachments(ctx)
 			s.sweepStorageConnections(ctx)
 			s.sweepPendingVolumes(ctx)
+		case <-orphanTicker.C:
+			s.sweepOrphanedVolumeAttachments(ctx)
 		}
+	}
+}
+
+// sweepOrphanedVolumeAttachments implements docs/architecture.md's
+// orphan-GC detection logic (a child checks its own parent's existence via
+// Get, deletes itself if NotFound) for VolumeAttachment -- see
+// orphanSweepInterval's doc comment for why this exists at all. Any error
+// other than NotFound (compute unreachable, a transient RPC failure) is
+// treated as "don't know, so don't delete" and just retried next tick --
+// only a definitive NotFound is evidence of real orphaning.
+func (s *Service) sweepOrphanedVolumeAttachments(ctx context.Context) {
+	if s.computeClient == nil {
+		return // e.g. in tests that never set one
+	}
+	attachments, err := s.attachments.List(ctx, "")
+	if err != nil {
+		return
+	}
+	for _, att := range attachments {
+		_, err := s.computeClient.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: att.Meta.TenantID, Id: att.Spec.VMID})
+		if err == nil {
+			continue
+		}
+		if status.Code(err) != codes.NotFound {
+			slog.Warn("orphan sweep: could not confirm VolumeAttachment's VM status, skipping this tick", "attachment_id", att.Meta.ID, "vm_id", att.Spec.VMID, "err", err)
+			continue
+		}
+		if derr := s.DeleteVolumeAttachment(ctx, att.Meta.TenantID, att.Meta.ID); derr != nil {
+			slog.Error("orphan sweep: delete orphaned VolumeAttachment failed", "attachment_id", att.Meta.ID, "vm_id", att.Spec.VMID, "err", derr)
+			continue
+		}
+		slog.Info("orphan sweep: deleted VolumeAttachment whose VM no longer exists", "attachment_id", att.Meta.ID, "vm_id", att.Spec.VMID)
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 
 func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	if _, err := svc.CreateSubnet(ctx, "tenant-a", "x", SubnetSpec{CIDR: "10.0.1.0/24"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected ErrValidation for missing zone, got %v", err)
@@ -32,7 +32,7 @@ func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{
 		Zone: "zone-a", CIDR: "10.0.1.0/24", AllocatableIPRanges: []string{"10.0.1.10-10.0.1.10"},
@@ -59,7 +59,7 @@ func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T)
 
 func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -91,7 +91,7 @@ func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 
 func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	first, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 
 func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	// Drain zone-a's pool directly (allocating one Subnet per VLAN ID would
 	// be needlessly slow); Create should then leave a Subnet Pending rather
@@ -159,7 +159,7 @@ func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRejectsUnknownSubnet(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	_, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: "subnet-does-not-exist"})
 	if !errors.Is(err, ErrValidation) {
@@ -169,7 +169,7 @@ func TestService_CreateNetworkInterfaceRejectsUnknownSubnet(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if err != nil {
@@ -184,7 +184,7 @@ func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
 	if err != nil {
@@ -222,9 +222,42 @@ func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T)
 	}
 }
 
+// TestService_SweepOrphanedNetworkInterfacesDeletesOnlyMissingVMs proves
+// docs/architecture.md's orphan-GC detection logic (parent Get -> NotFound
+// means delete self) against a real embedded etcd, using a
+// FakeVirtualMachineClient that knows about vm-exists but not vm-gone --
+// see docs/specs/network.md "NetworkInterfaceのオーファンGC" for the leak
+// this closes (VM Delete never touches its NetworkInterfaces today).
+func TestService_SweepOrphanedNetworkInterfacesDeletesOnlyMissingVMs(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(resourcetest.Client(t), &FakeVirtualMachineClient{Existing: map[string]bool{"vm-exists": true}})
+
+	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
+	if err != nil {
+		t.Fatalf("CreateSubnet: %v", err)
+	}
+	live, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic-live", NetworkInterfaceSpec{VMID: "vm-exists", SubnetID: sn.Meta.ID})
+	if err != nil {
+		t.Fatalf("CreateNetworkInterface(live): %v", err)
+	}
+	orphan, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic-orphan", NetworkInterfaceSpec{VMID: "vm-gone", SubnetID: sn.Meta.ID})
+	if err != nil {
+		t.Fatalf("CreateNetworkInterface(orphan): %v", err)
+	}
+
+	svc.sweepOrphanedNetworkInterfaces(ctx)
+
+	if _, err := svc.GetNetworkInterface(ctx, "tenant-a", live.Meta.ID); err != nil {
+		t.Fatalf("live NetworkInterface (vm-exists) was deleted: %v", err)
+	}
+	if _, err := svc.GetNetworkInterface(ctx, "tenant-a", orphan.Meta.ID); !errors.Is(err, ErrNetworkInterfaceNotFound) {
+		t.Fatalf("orphaned NetworkInterface (vm-gone) still exists: err=%v, want ErrNetworkInterfaceNotFound", err)
+	}
+}
+
 func TestService_CreateNetworkInterfaceReportsIPPoolExhausted(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc := NewService(resourcetest.Client(t), nil)
 
 	// /30 has exactly 2 usable host addresses.
 	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/30"})

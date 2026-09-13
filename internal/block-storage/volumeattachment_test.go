@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
 func TestService_CreateVolumeAttachmentValidatesVolume(t *testing.T) {
@@ -146,5 +148,56 @@ func TestService_ExclusiveAttachBlocksSecondAttachmentThenRetrySucceeds(t *testi
 			t.Fatalf("timed out waiting for the second attachment to attach after the first was deleted, last phase = %s", got.Status.Phase)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestService_SweepOrphanedVolumeAttachmentsDeletesOnlyMissingVMs proves
+// docs/architecture.md's orphan-GC detection logic (parent Get -> NotFound
+// means delete self) against a real embedded etcd, using a
+// FakeVirtualMachineClient that knows about vm-exists but not vm-gone --
+// see docs/specs/volume.md "VolumeAttachmentのオーファンGC" for the leak
+// this backstops (a VolumeAttachment created directly against this service
+// after its VM already booted is never tracked in
+// VirtualMachineStatus.VolumeAttachmentRefs, so VM Delete's active cleanup
+// never reaches it).
+func TestService_SweepOrphanedVolumeAttachmentsDeletesOnlyMissingVMs(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, &FakeVirtualMachineClient{Existing: map[string]bool{"vm-exists": true}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	mustCreateTestStorageConnection(t, ctx, svc, "test-connection", "test-zone")
+
+	liveVol, err := svc.CreateVolume(ctx, "tenant-a", "data-live", testVolumeSpec(10))
+	if err != nil {
+		t.Fatalf("CreateVolume(liveVol): %v", err)
+	}
+	liveVol = forceVolumeVerified(t, ctx, svc, liveVol)
+	orphanVol, err := svc.CreateVolume(ctx, "tenant-a", "data-orphan", testVolumeSpec(10))
+	if err != nil {
+		t.Fatalf("CreateVolume(orphanVol): %v", err)
+	}
+	orphanVol = forceVolumeVerified(t, ctx, svc, orphanVol)
+
+	live, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-live", VolumeAttachmentSpec{
+		VMID: "vm-exists", VolumeID: liveVol.Meta.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateVolumeAttachment(live): %v", err)
+	}
+	orphan, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-orphan", VolumeAttachmentSpec{
+		VMID: "vm-gone", VolumeID: orphanVol.Meta.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateVolumeAttachment(orphan): %v", err)
+	}
+
+	svc.sweepOrphanedVolumeAttachments(ctx)
+
+	if _, err := svc.GetVolumeAttachment(ctx, "tenant-a", live.Meta.ID); err != nil {
+		t.Fatalf("live VolumeAttachment (vm-exists) was deleted: %v", err)
+	}
+	if _, err := svc.GetVolumeAttachment(ctx, "tenant-a", orphan.Meta.ID); !errors.Is(err, ErrVolumeAttachmentNotFound) {
+		t.Fatalf("orphaned VolumeAttachment (vm-gone) still exists: err=%v, want ErrVolumeAttachmentNotFound", err)
 	}
 }

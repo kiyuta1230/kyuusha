@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
@@ -67,6 +68,54 @@ func (f *FakeTenantClient) Update(context.Context, *identityv1.UpdateTenantReque
 
 func (f *FakeTenantClient) Delete(context.Context, *identityv1.DeleteTenantRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
 	panic("FakeTenantClient: Delete not implemented; blockstorage.Service never calls it")
+}
+
+// FakeVirtualMachineClient is a minimal computev1.VirtualMachineServiceClient
+// for tests exercising sweepOrphanedVolumeAttachments without a real compute
+// service: Get returns a VirtualMachine for any id in Existing, NotFound for
+// anything else; every other method panics since blockstorage.Service never
+// calls them.
+type FakeVirtualMachineClient struct {
+	Existing map[string]bool
+}
+
+func (f *FakeVirtualMachineClient) Get(ctx context.Context, req *computev1.GetVirtualMachineRequest, opts ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	if f.Existing[req.GetId()] {
+		return &computev1.VirtualMachine{}, nil
+	}
+	return nil, status.Error(codes.NotFound, "vm: not found")
+}
+
+func (f *FakeVirtualMachineClient) Create(context.Context, *computev1.CreateVirtualMachineRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	panic("FakeVirtualMachineClient: Create not implemented; blockstorage.Service never calls it")
+}
+
+func (f *FakeVirtualMachineClient) List(context.Context, *computev1.ListVirtualMachinesRequest, ...grpc.CallOption) (*computev1.ListVirtualMachinesResponse, error) {
+	panic("FakeVirtualMachineClient: List not implemented; blockstorage.Service never calls it")
+}
+
+func (f *FakeVirtualMachineClient) Update(context.Context, *computev1.UpdateVirtualMachineRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	panic("FakeVirtualMachineClient: Update not implemented; blockstorage.Service never calls it")
+}
+
+func (f *FakeVirtualMachineClient) Delete(context.Context, *computev1.DeleteVirtualMachineRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
+	panic("FakeVirtualMachineClient: Delete not implemented; blockstorage.Service never calls it")
+}
+
+func (f *FakeVirtualMachineClient) Stop(context.Context, *computev1.StopVirtualMachineRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	panic("FakeVirtualMachineClient: Stop not implemented; blockstorage.Service never calls it")
+}
+
+func (f *FakeVirtualMachineClient) Start(context.Context, *computev1.StartVirtualMachineRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	panic("FakeVirtualMachineClient: Start not implemented; blockstorage.Service never calls it")
+}
+
+func (f *FakeVirtualMachineClient) Watch(context.Context, *computev1.WatchVirtualMachinesRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[computev1.VirtualMachineEvent], error) {
+	panic("FakeVirtualMachineClient: Watch not implemented; blockstorage.Service never calls it")
+}
+
+func (f *FakeVirtualMachineClient) StreamConsole(context.Context, *computev1.StreamConsoleRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[computev1.ConsoleChunk], error) {
+	panic("FakeVirtualMachineClient: StreamConsole not implemented; blockstorage.Service never calls it")
 }
 
 func (f *FakeTenantClient) Watch(context.Context, *identityv1.WatchTenantsRequest, ...grpc.CallOption) (identityv1.TenantService_WatchClient, error) {

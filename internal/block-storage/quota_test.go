@@ -11,7 +11,7 @@ import (
 
 func TestService_CreateVolumeEnforcesQuota(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxVolumeGb: 100}})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxVolumeGb: 100}}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -26,16 +26,18 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/network/grpcserver"
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
 
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":8084", "address to serve SubnetService/NetworkInterfaceService on")
+	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for the orphaned-NetworkInterface sweep (does this NetworkInterface's vm_id still exist?)")
 	metricsAddr := flag.String("metrics-addr", ":9096", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
-	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers (see internal/mtls)")
+	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers and used when dialing compute (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
-	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA callers' certificates must chain to")
+	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA both callers' and compute's certificates must chain to")
 	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
 	flag.Parse()
 
@@ -80,7 +82,22 @@ func main() {
 	}
 	defer etcdClient.Close()
 
-	svc := network.NewService(etcdClient)
+	clientCreds, err := mtls.ClientCredentials(*tlsCert, *tlsKey, *tlsCA)
+	if err != nil {
+		slog.Error("load mTLS client credentials", "err", err)
+		os.Exit(1)
+	}
+	computeConn, err := grpc.NewClient(*computeAddr,
+		grpc.WithTransportCredentials(clientCreds),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial compute", "addr", *computeAddr, "err", err)
+		os.Exit(1)
+	}
+	defer computeConn.Close()
+
+	svc := network.NewService(etcdClient, computev1.NewVirtualMachineServiceClient(computeConn))
 	go func() {
 		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("pending sweep stopped", "err", err)

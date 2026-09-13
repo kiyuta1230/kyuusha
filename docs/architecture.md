@@ -2031,7 +2031,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - 技術選定の一貫した基準（難しい分散システムの問題は既製品(CNCF濃度の高いOSS)に乗り、kyuusha固有のドメインロジックのみ自作する）
 - マルチハイパーバイザー前提（単一ホストは特別扱いしない、N=1の場合として同じコードパス）
 - 子リソースIDの決定的生成ルール（`iface-<vm-id>-<index>`, `volattach-<vm-id>-<index>`。`volattach-<vm-id>-root`/`rootvol-<vm-id>`は`persistent_root_disk`専用に検討していた命名で、同フィールド削除（「pet/cattleの区別を廃止」節）に伴い実装されないまま消えた）
-- 孤児リソースGCの実行頻度（10分間隔の定期スイープ）・検出ロジック（親への`Get`が`NotFound`か）は**設計のみ決定**——実装（GCコントローラそのもの）はどのリソース種別についてもまだ無い（[network仕様](specs/network.md)のNetworkInterfaceオーファン、[Volume仕様](specs/volume.md)のVolumeAttachmentオーファン、いずれも各仕様書側で未実装と明記——ここでの「解決済み」は設計方針の決定のみを指す）
+- 孤児リソースGC（実行頻度10分間隔の定期スイープ・検出ロジックは親への`Get`が`NotFound`か）は2026-09-13、NetworkInterface/VolumeAttachmentの両方について実装済み（`network.Service.sweepOrphanedNetworkInterfaces`/`blockstorage.Service.sweepOrphanedVolumeAttachments`。それぞれcomputeのVirtualMachineServiceへ直接gRPCで問い合わせる専用クライアントを新設）。VolumeAttachmentについては`compute.Reconciler.releaseIfReserved`の能動的削除（`VirtualMachineStatus.VolumeAttachmentRefs`経由）が主経路で、このGCはその取りこぼし（fire-and-forget失敗、および起動後に直接作られVolumeAttachmentRefsに載らないアタッチメント）へのバックストップという位置付け。他のリソース種別（Volume自体、StorageConnection等）へは未展開
 - NetworkInterface/Volume/VolumeAttachmentのライフサイクルphase
 - Volume/NetworkInterfaceの排他制御・フェンシング問題への対処方針
 - VLAN IDの割り当て方式（networkサービスが設定済みプールから同期・排他で払い出し）

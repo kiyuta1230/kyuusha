@@ -199,6 +199,7 @@ services:
     command:
       - "-grpc-addr=:8084"
       - "-etcd-endpoints=etcd:2379"
+      - "-compute-addr=compute:8081"
       - "-metrics-addr=:9096"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
@@ -206,7 +207,12 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-    # No ports exposed to the host: same reasoning as compute above.
+    # No ports exposed to the host: same reasoning as compute above. No
+    # depends_on: compute despite -compute-addr above -- compute itself
+    # depends on network (Subnet/NetworkInterface clients), so the reverse
+    # would be a real dependency cycle. Not needed anyway: grpc.NewClient
+    # dials lazily, and sweepOrphanedNetworkInterfaces already treats a
+    # dial failure as "don't know, don't delete" (see its doc comment).
 
   block-storage:
     build:
@@ -218,6 +224,7 @@ services:
       - "-nats-url=nats://nats:4222"
       - "-etcd-endpoints=etcd:2379"
       - "-identity-addr=identity:8082"
+      - "-compute-addr=compute:8081"
       - "-metrics-addr=:9097"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
@@ -229,7 +236,10 @@ services:
         condition: service_started
       jaeger:
         condition: service_started
-    # No ports exposed to the host: same reasoning as compute above.
+    # No ports exposed to the host: same reasoning as compute above. No
+    # depends_on: compute despite -compute-addr above -- see network's
+    # identical note just above (same reasoning, same real cycle: compute
+    # depends on block-storage's VolumeClient/VolumeAttachmentClient).
 
   api-gateway:
     build:
