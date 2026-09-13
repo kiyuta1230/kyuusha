@@ -10,6 +10,36 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
+// mustCreateAndAllocateSubnet creates a Subnet and immediately drives it
+// through the same vlan_id allocation attempt cmd/network-reconciler's
+// watchPendingSubnets would make on its Added event -- CreateSubnet itself
+// never attempts this anymore (see its doc comment: vlanPool is
+// process-local state, unsafe to touch from a possibly multi-replica API
+// handler), so a test that needs a Subnet actually Ready must trigger the
+// attempt explicitly, standing in for the real reconciler process.
+func mustCreateAndAllocateSubnet(t *testing.T, ctx context.Context, svc *Service, tenantID, name string, spec SubnetSpec) *Subnet {
+	t.Helper()
+	sn, err := svc.CreateSubnet(ctx, tenantID, name, spec)
+	if err != nil {
+		t.Fatalf("CreateSubnet: %v", err)
+	}
+	svc.tryAllocateVLAN(ctx, sn)
+	return sn
+}
+
+// mustCreateAndAllocateNetworkInterface mirrors
+// mustCreateAndAllocateSubnet, for ip_address/mac_address allocation via
+// tryAllocateIP.
+func mustCreateAndAllocateNetworkInterface(t *testing.T, ctx context.Context, svc *Service, tenantID, name string, spec NetworkInterfaceSpec, subnet *Subnet) *NetworkInterface {
+	t.Helper()
+	n, err := svc.CreateNetworkInterface(ctx, tenantID, name, spec)
+	if err != nil {
+		t.Fatalf("CreateNetworkInterface: %v", err)
+	}
+	svc.tryAllocateIP(ctx, n, subnet.Spec.CIDR, subnet.Spec.GatewayIP, subnet.Spec.AllocatableIPRanges)
+	return n
+}
+
 func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 	ctx := context.Background()
 	svc, err := NewService(ctx, resourcetest.Client(t), nil)
@@ -40,24 +70,18 @@ func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T)
 		t.Fatalf("NewService: %v", err)
 	}
 
-	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn1", SubnetSpec{
 		Zone: "zone-a", CIDR: "10.0.1.0/24", AllocatableIPRanges: []string{"10.0.1.10-10.0.1.10"},
 	})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
-	}
 
-	n1, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID})
-	if err != nil || n1.Status.Phase != NetworkInterfacePhaseReady || n1.Status.IPAddress != "10.0.1.10" {
-		t.Fatalf("expected phase=Ready ip=10.0.1.10, got phase=%s ip=%q err=%v", n1.Status.Phase, n1.Status.IPAddress, err)
+	n1 := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, sn)
+	if n1.Status.Phase != NetworkInterfacePhaseReady || n1.Status.IPAddress != "10.0.1.10" {
+		t.Fatalf("expected phase=Ready ip=10.0.1.10, got phase=%s ip=%q", n1.Status.Phase, n1.Status.IPAddress)
 	}
 
 	// The range only has one address, so a second NetworkInterface must be
 	// Pending (exhausted), even though the rest of the /24 is untouched.
-	n2, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID})
-	if err != nil {
-		t.Fatalf("CreateNetworkInterface: %v", err)
-	}
+	n2 := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID}, sn)
 	if n2.Status.Phase != NetworkInterfacePhasePending {
 		t.Fatalf("expected phase Pending (allocatable_ip_ranges exhausted), got %s", n2.Status.Phase)
 	}
@@ -70,10 +94,7 @@ func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
-	}
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if sn.Status.Phase != SubnetPhaseReady {
 		t.Fatalf("expected phase Ready, got %s", sn.Status.Phase)
 	}
@@ -81,18 +102,12 @@ func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 		t.Fatal("expected a non-zero vlan_id")
 	}
 
-	sn2, err := svc.CreateSubnet(ctx, "tenant-a", "sn2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
-	}
+	sn2 := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"})
 	if sn2.Status.VLANID == sn.Status.VLANID {
 		t.Fatal("expected distinct vlan_ids across Subnets in the same zone")
 	}
 
-	sn3, err := svc.CreateSubnet(ctx, "tenant-a", "sn3", SubnetSpec{Zone: "zone-b", CIDR: "10.0.3.0/24"})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
-	}
+	sn3 := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn3", SubnetSpec{Zone: "zone-b", CIDR: "10.0.3.0/24"})
 	if sn3.Status.VLANID != sn.Status.VLANID {
 		t.Fatalf("expected zone-b's pool to be independent of zone-a's (reuse the same first id), got %d vs %d", sn3.Status.VLANID, sn.Status.VLANID)
 	}
@@ -118,6 +133,46 @@ func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 	}
 }
 
+// TestService_CreateNeverAllocatesSynchronously proves the 2026-09-13
+// behavior change this session's compute-reconciler split led to: unlike
+// before, CreateSubnet/CreateNetworkInterface must never touch
+// vlanPool/ipPool/nextMACOct themselves (see their doc comments) --
+// vlan_id/ip_address/mac_address allocation only ever happens in
+// cmd/network-reconciler (watchPendingSubnets/watchPendingNetworkInterfaces
+// or the periodic retry sweep), so a Create() call by itself, with no
+// reconciler running at all, must always return Pending with nothing
+// allocated -- proving this API handler is now safe to run as any number
+// of replicas without touching shared process-local pool state.
+func TestService_CreateNeverAllocatesSynchronously(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	if err != nil {
+		t.Fatalf("CreateSubnet: %v", err)
+	}
+	if sn.Status.Phase != SubnetPhasePending || sn.Status.VLANID != 0 {
+		t.Fatalf("CreateSubnet allocated synchronously: phase=%s vlan_id=%d, want Pending/0", sn.Status.Phase, sn.Status.VLANID)
+	}
+
+	// tryAllocateVLAN directly (standing in for the reconciler, bypassing
+	// Run/Watch entirely) so a NetworkInterface below has a Ready Subnet to
+	// reference -- CreateNetworkInterface's own synchronous-allocation
+	// check is the thing under test, not this setup step.
+	svc.tryAllocateVLAN(ctx, sn)
+
+	n, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID})
+	if err != nil {
+		t.Fatalf("CreateNetworkInterface: %v", err)
+	}
+	if n.Status.Phase != NetworkInterfacePhasePending || n.Status.IPAddress != "" || n.Status.MACAddress != "" {
+		t.Fatalf("CreateNetworkInterface allocated synchronously: phase=%s ip=%q mac=%q, want Pending/empty/empty", n.Status.Phase, n.Status.IPAddress, n.Status.MACAddress)
+	}
+}
+
 // TestService_NewServiceRebuildsPoolsFromExistingResources proves the real
 // bug found 2026-09-13: vlanPool/ipPool/nextMACOct are all purely
 // in-memory, so without rebuildPools, every restart of this process -- not
@@ -139,32 +194,20 @@ func TestService_NewServiceRebuildsPoolsFromExistingResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService (first): %v", err)
 	}
-	sn, err := svc1.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
-	}
-	iface, err := svc1.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID})
-	if err != nil {
-		t.Fatalf("CreateNetworkInterface: %v", err)
-	}
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc1, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	iface := mustCreateAndAllocateNetworkInterface(t, ctx, svc1, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, sn)
 
 	svc2, err := NewService(ctx, etcdClient, nil)
 	if err != nil {
 		t.Fatalf("NewService (second, simulating a restart): %v", err)
 	}
 
-	sn2, err := svc2.CreateSubnet(ctx, "tenant-a", "sn2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"})
-	if err != nil {
-		t.Fatalf("CreateSubnet (after restart): %v", err)
-	}
+	sn2 := mustCreateAndAllocateSubnet(t, ctx, svc2, "tenant-a", "sn2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"})
 	if sn2.Status.VLANID == sn.Status.VLANID {
 		t.Fatalf("got the same vlan_id (%d) as the pre-restart Subnet -- rebuildPools did not restore vlanPool's state", sn2.Status.VLANID)
 	}
 
-	iface2, err := svc2.CreateNetworkInterface(ctx, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID})
-	if err != nil {
-		t.Fatalf("CreateNetworkInterface (after restart): %v", err)
-	}
+	iface2 := mustCreateAndAllocateNetworkInterface(t, ctx, svc2, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID}, sn)
 	if iface2.Status.IPAddress == iface.Status.IPAddress {
 		t.Fatalf("got the same ip_address (%s) as the pre-restart NetworkInterface -- rebuildPools did not restore ipPool's state", iface2.Status.IPAddress)
 	}
@@ -189,10 +232,7 @@ func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 		}
 	}
 
-	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
-	}
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	if sn.Status.Phase != SubnetPhasePending {
 		t.Fatalf("expected phase Pending on pool exhaustion, got %s", sn.Status.Phase)
 	}
@@ -207,10 +247,7 @@ func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 	}
 
 	// A different zone's pool is untouched.
-	sn2, err := svc.CreateSubnet(ctx, "tenant-a", "sn2", SubnetSpec{Zone: "zone-b", CIDR: "10.0.2.0/24"})
-	if err != nil {
-		t.Fatalf("CreateSubnet (zone-b): %v", err)
-	}
+	sn2 := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn2", SubnetSpec{Zone: "zone-b", CIDR: "10.0.2.0/24"})
 	if sn2.Status.Phase != SubnetPhaseReady {
 		t.Fatalf("expected zone-b's Subnet to go Ready, got %s", sn2.Status.Phase)
 	}
@@ -265,15 +302,9 @@ func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T)
 		t.Fatalf("NewService: %v", err)
 	}
 
-	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
-	}
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
 
-	n1, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID})
-	if err != nil {
-		t.Fatalf("CreateNetworkInterface: %v", err)
-	}
+	n1 := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, sn)
 	if n1.Status.Phase != NetworkInterfacePhaseReady {
 		t.Fatalf("expected phase Ready, got %s", n1.Status.Phase)
 	}
@@ -289,10 +320,7 @@ func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T)
 		t.Fatalf("expected the gateway_ip to never be handed out, got it as ip_address")
 	}
 
-	n2, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID})
-	if err != nil {
-		t.Fatalf("CreateNetworkInterface: %v", err)
-	}
+	n2 := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID}, sn)
 	if n2.Status.MACAddress == n1.Status.MACAddress {
 		t.Fatal("expected distinct mac_addresses across NetworkInterfaces")
 	}
@@ -314,10 +342,7 @@ func TestService_SweepOrphanedNetworkInterfacesDeletesOnlyMissingVMs(t *testing.
 		t.Fatalf("NewService: %v", err)
 	}
 
-	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
-	}
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
 	live, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic-live", NetworkInterfaceSpec{VMID: "vm-exists", SubnetID: sn.Meta.ID})
 	if err != nil {
 		t.Fatalf("CreateNetworkInterface(live): %v", err)
@@ -345,24 +370,18 @@ func TestService_CreateNetworkInterfaceReportsIPPoolExhausted(t *testing.T) {
 	}
 
 	// /30 has exactly 2 usable host addresses.
-	sn, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/30"})
-	if err != nil {
-		t.Fatalf("CreateSubnet: %v", err)
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/30"})
+
+	n1 := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, sn)
+	if n1.Status.Phase != NetworkInterfacePhaseReady {
+		t.Fatalf("CreateNetworkInterface (1st): phase=%v", n1.Status.Phase)
+	}
+	n2 := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID}, sn)
+	if n2.Status.Phase != NetworkInterfacePhaseReady {
+		t.Fatalf("CreateNetworkInterface (2nd): phase=%v", n2.Status.Phase)
 	}
 
-	n1, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID})
-	if err != nil || n1.Status.Phase != NetworkInterfacePhaseReady {
-		t.Fatalf("CreateNetworkInterface (1st): err=%v phase=%v", err, n1.Status.Phase)
-	}
-	n2, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID})
-	if err != nil || n2.Status.Phase != NetworkInterfacePhaseReady {
-		t.Fatalf("CreateNetworkInterface (2nd): err=%v phase=%v", err, n2.Status.Phase)
-	}
-
-	n3, err := svc.CreateNetworkInterface(ctx, "tenant-a", "nic3", NetworkInterfaceSpec{VMID: "vm-3", SubnetID: sn.Meta.ID})
-	if err != nil {
-		t.Fatalf("CreateNetworkInterface (3rd): %v", err)
-	}
+	n3 := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic3", NetworkInterfaceSpec{VMID: "vm-3", SubnetID: sn.Meta.ID}, sn)
 	if n3.Status.Phase != NetworkInterfacePhasePending {
 		t.Fatalf("expected phase Pending on IP pool exhaustion, got %s", n3.Status.Phase)
 	}

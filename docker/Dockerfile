@@ -22,7 +22,9 @@ RUN CGO_ENABLED=0 go build -o /out/api-gateway ./cmd/api-gateway
 RUN CGO_ENABLED=0 go build -o /out/identity ./cmd/identity
 RUN CGO_ENABLED=0 go build -o /out/image ./cmd/image
 RUN CGO_ENABLED=0 go build -o /out/network ./cmd/network
+RUN CGO_ENABLED=0 go build -o /out/network-reconciler ./cmd/network-reconciler
 RUN CGO_ENABLED=0 go build -o /out/block-storage ./cmd/block-storage
+RUN CGO_ENABLED=0 go build -o /out/block-storage-reconciler ./cmd/block-storage-reconciler
 
 FROM alpine:3 AS compute
 COPY --from=builder /out/compute /usr/local/bin/compute
@@ -124,10 +126,31 @@ COPY --from=builder /out/network /usr/local/bin/network
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
 ENTRYPOINT ["/usr/local/bin/network", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
 
+# Runs network's actual reconcile loop (vlan_id/ip_address/mac_address
+# allocation, orphan-GC), split out of the network (gRPC API) binary above
+# the same way cmd/compute-reconciler was -- see cmd/network-reconciler's
+# own package doc comment for the single-replica deployment invariant this
+# depends on.
+FROM alpine:3 AS network-reconciler
+COPY --from=builder /out/network-reconciler /usr/local/bin/network-reconciler
+COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
+ENTRYPOINT ["/usr/local/bin/network-reconciler", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
+
 FROM alpine:3 AS block-storage
 COPY --from=builder /out/block-storage /usr/local/bin/block-storage
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
 ENTRYPOINT ["/usr/local/bin/block-storage", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
+
+# Runs block-storage's actual reconcile loop (exclusive-attach attempts,
+# StorageConnection/Volume verification, retry/orphan sweeps), split out of
+# the block-storage (gRPC API) binary above the same way
+# cmd/compute-reconciler was -- see cmd/block-storage-reconciler's own
+# package doc comment for the single-replica deployment invariant this
+# depends on.
+FROM alpine:3 AS block-storage-reconciler
+COPY --from=builder /out/block-storage-reconciler /usr/local/bin/block-storage-reconciler
+COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
+ENTRYPOINT ["/usr/local/bin/block-storage-reconciler", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
 
 # ---- image-assets: prebuilt kernel + minimal rootfs for the playground's ----
 # Firecracker milestone (see docs/specs/firecracker-boot.md). A real Firecracker

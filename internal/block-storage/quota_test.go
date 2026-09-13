@@ -53,3 +53,43 @@ func TestService_CreateVolumeEnforcesQuota(t *testing.T) {
 		t.Fatalf("CreateVolume after Delete freed quota: %v", err)
 	}
 }
+
+// TestService_NewServiceRebuildsUsageFromExistingVolumes proves the real
+// bug found 2026-09-13 (same class as
+// network.Service.rebuildPools/compute.Service.rebuildUsage): usage is
+// purely in-memory, so without rebuildUsage, a restart forgets every
+// tenant's real quota usage and could let CreateVolume approve a request a
+// live tenant_usage would have rejected. Constructs two Services against
+// the SAME etcd client/namespace (not resourcetest.Client(t) called
+// twice, which would give each its own isolated namespace) to simulate a
+// real restart.
+func TestService_NewServiceRebuildsUsageFromExistingVolumes(t *testing.T) {
+	ctx := context.Background()
+	etcdClient := resourcetest.Client(t)
+	quota := &identityv1.QuotaSpec{MaxVolumeGb: 100}
+	const tenant = "tenant-a"
+
+	svc1, err := NewService(ctx, etcdClient, &FakeTenantClient{Quota: quota}, nil)
+	if err != nil {
+		t.Fatalf("NewService (first): %v", err)
+	}
+	mustCreateTestStorageConnection(t, ctx, svc1, "test-connection", "test-zone")
+	if _, err := svc1.CreateVolume(ctx, tenant, "vol-1", testVolumeSpec(60)); err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+
+	svc2, err := NewService(ctx, etcdClient, &FakeTenantClient{Quota: quota}, nil)
+	if err != nil {
+		t.Fatalf("NewService (second, simulating a restart): %v", err)
+	}
+
+	// max_volume_gb=100, vol-1 already used 60 -- only 40 more should fit.
+	// Without rebuildUsage, svc2 would start from an empty usage map and
+	// wrongly allow this.
+	if _, err := svc2.CreateVolume(ctx, tenant, "vol-2", testVolumeSpec(50)); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("CreateVolume (after restart, over remaining quota): got %v, want ErrQuotaExceeded -- rebuildUsage did not restore usage's state", err)
+	}
+	if _, err := svc2.CreateVolume(ctx, tenant, "vol-3", testVolumeSpec(30)); err != nil {
+		t.Fatalf("CreateVolume (after restart, within remaining quota): %v", err)
+	}
+}

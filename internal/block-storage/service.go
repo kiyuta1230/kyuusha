@@ -130,12 +130,17 @@ type Service struct {
 	hypervisorConnections map[string]hypervisorConnInfo
 }
 
+// NewService constructs a Service and synchronously rebuilds its tenant
+// quota usage (see rebuildUsage) from etcd before returning -- callers
+// must not start serving Create requests until this returns, for the same
+// "don't let a real request race a state rebuild still in progress"
+// reason as network.NewService's identical rebuildPools call.
 func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, computeClient computev1.VirtualMachineServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &Service{
+	svc := &Service{
 		volumes: resource.NewStore[Volume, *Volume](etcdClient, "volume", resource.StoreErrors{
 			NotFound:      ErrVolumeNotFound,
 			Conflict:      ErrVolumeConflict,
@@ -155,7 +160,37 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 		computeClient:  computeClient,
 		quota:          quota,
 		usage:          make(map[string]tenantUsage),
-	}, nil
+	}
+	if err := svc.rebuildUsage(ctx); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// rebuildUsage restores usage's in-memory per-tenant quota accounting from
+// every existing Volume in etcd. Found 2026-09-13, the same bug class as
+// network's vlanPool/ipPool/nextMACOct (see network.Service.rebuildPools):
+// usage is purely in-memory, populated only by CreateVolume/DeleteVolume
+// calls made within this process's own lifetime, so without this, EVERY
+// restart forgets every tenant's real usage and lets CreateVolume approve
+// requests a live tenant_usage would have rejected -- not just a
+// hypothetical multi-replica problem, though it's that too (each replica's
+// own usage map would drift the moment either one creates/deletes a
+// Volume, letting a tenant split requests across replicas to bypass
+// max_volume_gb entirely).
+func (s *Service) rebuildUsage(ctx context.Context) error {
+	volumes, err := s.volumes.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("block-storage: rebuild usage: list volumes: %w", err)
+	}
+	usage := make(map[string]tenantUsage)
+	for _, vol := range volumes {
+		u := usage[vol.Meta.TenantID]
+		u.VolumeGB += vol.Spec.SizeGB
+		usage[vol.Meta.TenantID] = u
+	}
+	s.usage = usage
+	return nil
 }
 
 // Run retries Pending VolumeAttachments (blocked by another active
@@ -196,6 +231,11 @@ func (s *Service) Run(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 		go s.runHypervisorStorageConnectionsSubscription(ctx)
 	}
 
+	go s.watchPendingVolumeAttachments(ctx)
+	if js != nil {
+		go s.watchPendingVolumes(ctx)
+	}
+
 	ticker := time.NewTicker(pendingSweepInterval)
 	defer ticker.Stop()
 	orphanTicker := time.NewTicker(orphanSweepInterval)
@@ -211,6 +251,54 @@ func (s *Service) Run(ctx context.Context, nc *nats.Conn, js jetstream.JetStream
 		case <-orphanTicker.C:
 			s.sweepOrphanedVolumeAttachments(ctx)
 		}
+	}
+}
+
+// watchPendingVolumeAttachments attempts the exclusive-attach check
+// (tryAttach) immediately when a VolumeAttachment is created while still
+// Pending, instead of waiting up to pendingSweepInterval for the periodic
+// sweep to notice it -- mirrors network.Service.watchPendingSubnets'
+// identical "the common, successful case shouldn't have to wait for a
+// sweep tick" reasoning. Deliberately reacts to EventAdded only, not
+// EventModified: tryAttach's own Update call on a blocked attempt is
+// itself a Modified event, and reacting to that too would retry as fast as
+// etcd round-trips complete instead of waiting for the old attachment to
+// actually clear -- retryPendingAttachments' periodic sweep is the right
+// (and sufficient) backstop for that case.
+func (s *Service) watchPendingVolumeAttachments(ctx context.Context) {
+	events, err := s.WatchVolumeAttachments(ctx, "", 0)
+	if err != nil {
+		slog.Error("watch volume attachments for pending attach failed", "err", err)
+		return
+	}
+	for e := range events {
+		if e.Type != EventAdded || e.Object.Status.Phase != VolumeAttachmentPhasePending {
+			continue
+		}
+		a := e.Object
+		s.tryAttach(ctx, &a)
+	}
+}
+
+// watchPendingVolumes mirrors watchPendingVolumeAttachments, for verifying
+// a newly-created Volume immediately instead of waiting for
+// sweepPendingVolumes' next tick -- see CreateVolume's doc comment for why
+// this moved here rather than being called directly from Create. Only
+// started when js is non-nil (i.e. only in cmd/block-storage-reconciler);
+// verifyVolume itself would just no-op without it anyway (see its own
+// nil-check), but there's nothing to gain from running this loop in a
+// process that can never act on what it finds.
+func (s *Service) watchPendingVolumes(ctx context.Context) {
+	events, err := s.WatchVolumes(ctx, "", 0)
+	if err != nil {
+		slog.Error("watch volumes for pending verification failed", "err", err)
+		return
+	}
+	for e := range events {
+		if e.Type != EventAdded || e.Object.Status.Phase != VolumePhasePending {
+			continue
+		}
+		s.verifyVolume(ctx, e.Object)
 	}
 }
 
@@ -326,11 +414,14 @@ func (s *Service) CreateVolume(ctx context.Context, tenantID, name string, spec 
 	usage.VolumeGB += spec.SizeGB
 	s.usage[tenantID] = usage
 
-	// Best-effort immediate attempt (the periodic sweep, verification.go,
-	// retries indefinitely regardless) -- lets a Volume reach Ready quickly
-	// in the common case instead of always waiting a full sweep interval.
-	s.verifyVolume(ctx, out)
-
+	// verifyVolume itself is never called here -- it needs s.js, which is
+	// only ever non-nil in cmd/block-storage-reconciler (the API binary
+	// never sets it, so this handler must not touch it directly, the same
+	// "don't run process-local/replica-unsafe side effects from the API
+	// path" reasoning as network.Service.CreateSubnet). The immediate
+	// attempt watchPendingVolumes makes on this Volume's own Added event
+	// is this same "don't make the common case wait a full sweep interval"
+	// optimization, just relocated to the reconciler.
 	return &out, nil
 }
 
@@ -482,6 +573,15 @@ func (s *Service) CreateVolumeAttachment(ctx context.Context, tenantID, name str
 		return nil, fmt.Errorf("%w: volume %q is not Ready (phase=%s)", ErrValidation, spec.VolumeID, vol.Status.Phase)
 	}
 
+	// Always created Pending -- the actual exclusive-attach attempt
+	// (tryAttach, guarded by attachMu) happens only in
+	// cmd/block-storage-reconciler (see watchPendingVolumeAttachments/
+	// retryPendingAttachments), never here. See docs/architecture.md
+	// "コントロールプレーンサービス自体の可用性": attachMu only serializes
+	// within a single process, so this API handler must never call
+	// tryAttach directly -- doing so would make it unsafe to run more than
+	// one replica of this binary (two replicas could each see "not
+	// blocked" and both attach the same volume_id).
 	out, err := s.attachments.Create(ctx, tenantID, name, VolumeAttachment{
 		Spec:   spec,
 		Status: VolumeAttachmentStatus{Phase: VolumeAttachmentPhasePending},
@@ -489,7 +589,6 @@ func (s *Service) CreateVolumeAttachment(ctx context.Context, tenantID, name str
 	if err != nil {
 		return nil, err
 	}
-	s.tryAttach(ctx, &out)
 	return &out, nil
 }
 

@@ -1696,7 +1696,7 @@ etcdにとって軽微なので、まずは定期compactionの設定だけで様
   (`compute.Reconciler.Run`——スケジューリング、compute-agentへのNATSコマンド発行、
   Pending/stuck-phase再送スイープ、Hypervisor死活監視スイープ——を実行するだけの、
   gRPCを一切話さないプロセス)に分離した(`cmd/compute`/`cmd/compute-reconciler`)
-- `compute-reconciler`は**常に1インスタンスのみ**デプロイする、というデプロイ側の規約に
+- 分離した各`*-reconciler`は**常に1インスタンスのみ**デプロイする、というデプロイ側の規約に
   依存する。リーダー選出のような自動フェイルオーバーは無く、クラッシュ時はオーケストレータが
   再起動するまでreconcileが止まる空白ができる——ホットスタンバイによる即座の昇格より単純さを
   優先した判断（kyuushaの想定規模なら再起動までの空白は許容範囲、という判断）
@@ -1704,14 +1704,27 @@ etcdにとって軽微なので、まずは定期compactionの設定だけで様
   ため、複数プロセス間で処理が引き継げる」という性質はここでも同じ形で効いている——
   `compute-reconciler`が再起動しても、etcdに書いた`Pending`/stuck-phaseなVMの状態と、
   JetStreamに溜まったコマンドの両方から素直に再開できる
-- **`network`/`block-storage`はこの分離をまだ適用していない**: どちらも`CreateSubnet`/
-  `CreateNetworkInterface`(VLAN/IPプール)や`CreateVolumeAttachment`(排他制御用ミューテックス)
-  の実際の割り当て判断がgRPCハンドラ内で同期的に行われており、computeの`Create`が
-  「Pendingで書くだけ、実割り当てはReconciler側」という形に既になっていたのとは違う。
-  同じ分離を安全に適用するには、先にこれら2サービスの割り当てロジックをcomputeと同じ
-  「Create時は同期割り当てを試みず常にPendingで返し、単一プロセスが後から割り当てる」
-  という形に作り直す必要があり、これは単なるプロセストポロジーの変更を超えた挙動変更
-  ——ユーザーとの合意の上で、まずcomputeだけを対象に先行実装し、判断を先送りにしている
+- **2026-09-13、`network`/`block-storage`にも同じ分離を適用した**（`cmd/network`/
+  `cmd/network-reconciler`、`cmd/block-storage`/`cmd/block-storage-reconciler`）。
+  どちらも当初、`CreateSubnet`/`CreateNetworkInterface`（VLAN/IPプール）や
+  `CreateVolumeAttachment`（排他制御用ミューテックス`attachMu`）の実際の割り当て判断が
+  gRPCハンドラ内で同期的に行われており、computeの`Create`が最初から
+  「Pendingで書くだけ、実割り当てはReconciler側」という形になっていたのとは違う構造
+  だったため、分離に先立って**両サービスのCreateから同期割り当てを完全に取り除き**、
+  常にPendingで返すよう作り直した——実際の割り当て（`tryAllocateVLAN`/`tryAllocateIP`/
+  `tryAttach`）は`*-reconciler`側だけが呼ぶ。素の10秒周期スイープ待ちにしてしまうと
+  よくある成功パターンの体感速度が落ちるため、各`*-reconciler`はSubnet/NetworkInterface/
+  VolumeAttachmentの`Watch`ストリームも張り、`EventAdded`（`EventModified`には反応しない
+  ——失敗時の`Update`自体がModifiedイベントを生むため、それにも反応すると容量が空くまで
+  etcdラウンドトリップ速度で無限リトライしてしまう）を見て即座に初回の割り当てを試みる、
+  という設計にした。周期スイープは「空き待ち」の再試行専用のバックストップとして残る
+- **この過程で見つかった別のバグ**: `compute`/`block-storage`のtenant quota使用量集計
+  （`usage map[string]tenantUsage`）が、VLAN/IPプールと全く同じ「プロセス内メモリのみ、
+  etcdからの復元処理が無い」バグを抱えていた——`compute-reconciler`分離より前から存在した
+  問題だが、複数レプリカ運用を目指す今回の作業で初めて実害が表面化する種類のバグだった
+  ため、`network.Service.rebuildPools`と同じ形の`rebuildUsage`を両サービスの`NewService`
+  に追加して解消した（3サービスとも回帰テストで確認済み: 復元しない状態に戻すと
+  確実にテストが落ちることを個別に確認）
 
 ### 正直な残課題: etcdクラスタ自体の冗長化はデプロイ環境側の前提
 
@@ -2073,7 +2086,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Image設計（`ImageFormat`: `KERNEL_ROOTFS`(直接カーネルブート系VMM用)/`QCOW2`(QEMU/libvirt/cloud-hypervisor用)、`driver_hint`との対応バリデーション、コンテンツアドレス型blobストア）
 - Flavor/machine_classという固定カタログの廃止（`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
 - UserData/cloud-init注入（NoCloud seed disk方式、HTTPメタデータサービスは不採用）
-- コントロールプレーンサービス自体の可用性（API面はステートレス複製。reconcile面は当初案のetcdリーダー選出から2026-09-13に変更し、computeについてはgRPC API(`cmd/compute`)とreconcileループ(`cmd/compute-reconciler`、常に単一インスタンス)への分離を実装済み。network/block-storageは同じ分離の前提条件（Create時同期割り当てのPending化）が未整備のため未着手）
+- コントロールプレーンサービス自体の可用性（API面はステートレス複製。reconcile面は当初案のetcdリーダー選出から2026-09-13に変更し、compute/network/block-storageの3サービス全てでgRPC API(`cmd/compute`/`cmd/network`/`cmd/block-storage`)とreconcileループ(`cmd/compute-reconciler`/`cmd/network-reconciler`/`cmd/block-storage-reconciler`、常に単一インスタンス)への分離を実装済み。network/block-storageは分離に先立ちCreate時の同期割り当て（VLAN/IPプール、排他制御ミューテックス）をPending化する作り直しも実施——その過程でtenant quota使用量集計の同種バグ（プロセス内メモリのみ、etcd復元処理無し）も発見・修正した）
 - バッキングストアにetcdを採用、実装済み（2026-09-11訂正: `internal/resource.Store`がそれまで完全にオンメモリで、状態が一切永続化されていなかったことが判明したため。PostgreSQL/MySQL、NATS JetStream KVも比較検討し、`resource_version`のグローバル単調増加という意味論がetcdと最も自然に一致すること、リーダー選出も同じ依存で賄えることが決め手。同日中に`internal/resource/store.go`をetcd-backedへ書き換え、5サービス全て・`playground/docker-compose.yml`まで含めて実装・ライブ確認済み——リーダー選出自体はまだ未着手、単一レプリカのままでの永続化のみ）
 - Imageのストレージ方針（`ImageArtifact{url, digest}`による外部URL参照のみ。kyuushaはblobを一切保管しない。オブジェクトストレージは任意の外部依存に格下げ）
 - ハイパーバイザー間の軽量ピアフェッチ（heartbeatでのキャッシュ済みdigest報告＋同一zone優先の直接HTTP転送。外部依存ではなくkyuusha自身の組み込み機能）

@@ -234,7 +234,6 @@ services:
     command:
       - "-grpc-addr=:8084"
       - "-etcd-endpoints=etcd:2379"
-      - "-compute-addr=compute:8081"
       - "-metrics-addr=:9096"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
@@ -242,8 +241,28 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_started
-    # No ports exposed to the host: same reasoning as compute above. No
-    # depends_on: compute despite -compute-addr above -- compute itself
+    # No ports exposed to the host: same reasoning as compute above.
+
+  # network's actual reconcile loop (vlan_id/ip_address/mac_address
+  # allocation, orphan-GC), split into its own process from the gRPC API
+  # above -- see cmd/network-reconciler's package doc comment. Exactly one
+  # replica: no ports exposed, nothing dials this container directly.
+  network-reconciler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: network-reconciler
+    command:
+      - "-etcd-endpoints=etcd:2379"
+      - "-compute-addr=compute:8081"
+      - "-metrics-addr=:9099"
+      - "-otlp-endpoint=jaeger:4317"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    # No depends_on: compute despite -compute-addr above -- compute itself
     # depends on network (Subnet/NetworkInterface clients), so the reverse
     # would be a real dependency cycle. Not needed anyway: grpc.NewClient
     # dials lazily, and sweepOrphanedNetworkInterfaces already treats a
@@ -256,11 +275,35 @@ services:
       target: block-storage
     command:
       - "-grpc-addr=:8085"
+      - "-etcd-endpoints=etcd:2379"
+      - "-identity-addr=identity:8082"
+      - "-metrics-addr=:9097"
+      - "-otlp-endpoint=jaeger:4317"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      identity:
+        condition: service_started
+      jaeger:
+        condition: service_started
+    # No ports exposed to the host: same reasoning as compute above.
+
+  # block-storage's actual reconcile loop (exclusive-attach attempts, the
+  # StorageConnection/Volume verification flow, retry/orphan sweeps), split
+  # into its own process from the gRPC API above -- see
+  # cmd/block-storage-reconciler's package doc comment. Exactly one
+  # replica: no ports exposed, nothing dials this container directly.
+  block-storage-reconciler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: block-storage-reconciler
+    command:
       - "-nats-url=nats://nats:4222"
       - "-etcd-endpoints=etcd:2379"
       - "-identity-addr=identity:8082"
       - "-compute-addr=compute:8081"
-      - "-metrics-addr=:9097"
+      - "-metrics-addr=:9100"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
       nats:
@@ -271,10 +314,10 @@ services:
         condition: service_started
       jaeger:
         condition: service_started
-    # No ports exposed to the host: same reasoning as compute above. No
-    # depends_on: compute despite -compute-addr above -- see network's
-    # identical note just above (same reasoning, same real cycle: compute
-    # depends on block-storage's VolumeClient/VolumeAttachmentClient).
+    # No depends_on: compute despite -compute-addr above -- see
+    # network-reconciler's identical note just above (same reasoning, same
+    # real cycle: compute depends on block-storage's VolumeClient/
+    # VolumeAttachmentClient).
 
   api-gateway:
     build:

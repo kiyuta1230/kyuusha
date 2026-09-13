@@ -175,12 +175,19 @@ func parseMACOct(mac string) (n uint32, ok bool) {
 	return uint32(hi)<<8 | uint32(lo), true
 }
 
-// Run retries Pending Subnets/NetworkInterfaces (pool exhaustion at Create
-// time) every pendingSweepInterval, and sweeps orphaned NetworkInterfaces
-// every orphanSweepInterval (see that constant's doc comment), until ctx is
-// done. Safe to call from only one goroutine; cmd/network/main.go starts it
-// once at startup.
+// Run is network's reconcile loop: allocates vlan_id/ip_address/mac_address
+// for Subnets/NetworkInterfaces CreateSubnet/CreateNetworkInterface leave
+// Pending (see their doc comments -- this is the only place that ever
+// touches vlanPool/ipPool/nextMACOct), and sweeps orphaned
+// NetworkInterfaces every orphanSweepInterval. Safe to call from only one
+// goroutine, and -- like compute-reconciler -- from only one process at a
+// time (see docs/architecture.md "コントロールプレーンサービス自体の可用性"):
+// cmd/network-reconciler calls this; cmd/network (the gRPC API) never
+// does. Blocks until ctx is done.
 func (s *Service) Run(ctx context.Context) error {
+	go s.watchPendingSubnets(ctx)
+	go s.watchPendingNetworkInterfaces(ctx)
+
 	ticker := time.NewTicker(pendingSweepInterval)
 	defer ticker.Stop()
 	orphanTicker := time.NewTicker(orphanSweepInterval)
@@ -195,6 +202,53 @@ func (s *Service) Run(ctx context.Context) error {
 		case <-orphanTicker.C:
 			s.sweepOrphanedNetworkInterfaces(ctx)
 		}
+	}
+}
+
+// watchPendingSubnets attempts vlan_id allocation immediately when a
+// Subnet is created while still Pending, instead of waiting up to
+// pendingSweepInterval for the periodic sweep to notice it -- mirrors
+// compute.Reconciler.Run's identical "the common, successful case
+// shouldn't have to wait for a sweep tick" reasoning. Deliberately reacts
+// to EventAdded only, not EventModified: tryAllocateVLAN's own Update call
+// on a failed attempt is itself a Modified event, and reacting to that too
+// would retry as fast as etcd round-trips complete instead of waiting for
+// capacity to actually free up elsewhere -- retryPendingSubnets' periodic
+// sweep is the right (and sufficient) backstop for that case.
+func (s *Service) watchPendingSubnets(ctx context.Context) {
+	events, err := s.WatchSubnets(ctx, "", 0)
+	if err != nil {
+		slog.Error("watch subnets for pending allocation failed", "err", err)
+		return
+	}
+	for e := range events {
+		if e.Type != EventAdded || e.Object.Status.Phase != SubnetPhasePending {
+			continue
+		}
+		sn := e.Object
+		s.tryAllocateVLAN(ctx, &sn)
+	}
+}
+
+// watchPendingNetworkInterfaces mirrors watchPendingSubnets, for
+// ip_address/mac_address allocation via tryAllocateIP -- see its doc
+// comment for why only EventAdded triggers an immediate attempt.
+func (s *Service) watchPendingNetworkInterfaces(ctx context.Context) {
+	events, err := s.WatchNetworkInterfaces(ctx, "", 0)
+	if err != nil {
+		slog.Error("watch network interfaces for pending allocation failed", "err", err)
+		return
+	}
+	for e := range events {
+		if e.Type != EventAdded || e.Object.Status.Phase != NetworkInterfacePhasePending {
+			continue
+		}
+		n := e.Object
+		subnet, err := s.subnets.Get(ctx, n.Meta.TenantID, n.Spec.SubnetID)
+		if err != nil || subnet.Status.Phase != SubnetPhaseReady {
+			continue // retryPendingNetworkInterfaces' sweep retries once the Subnet is Ready
+		}
+		s.tryAllocateIP(ctx, &n, subnet.Spec.CIDR, subnet.Spec.GatewayIP, subnet.Spec.AllocatableIPRanges)
 	}
 }
 
@@ -289,6 +343,14 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 		return &existing, nil
 	}
 
+	// Always created Pending -- the actual vlan_id allocation attempt
+	// happens only in cmd/network-reconciler (see
+	// watchPendingSubnets/retryPendingSubnets), never here. See
+	// docs/architecture.md "コントロールプレーンサービス自体の可用性":
+	// vlanPool is process-local state, so this API handler must never touch
+	// it directly -- doing so would make it unsafe to run more than one
+	// replica of this binary (each replica's own pool would drift from the
+	// others' the moment either one allocates).
 	out, err := s.subnets.Create(ctx, tenantID, name, Subnet{
 		Spec:   spec,
 		Status: SubnetStatus{Phase: SubnetPhasePending},
@@ -296,7 +358,6 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 	if err != nil {
 		return nil, err
 	}
-	s.tryAllocateVLAN(ctx, &out)
 	return &out, nil
 }
 
@@ -395,24 +456,36 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 		return nil, fmt.Errorf("%w: subnet %q is not Ready (phase=%s)", ErrValidation, spec.SubnetID, subnet.Status.Phase)
 	}
 
-	// MAC comes from its own unbounded space, so it's assigned up front
-	// regardless of whether IP allocation below succeeds immediately.
+	// Always created Pending, with no mac_address/ip_address set yet --
+	// nextMACOct is just as much process-local state as vlanPool/ipPool
+	// (two replicas would independently hand out the same counter value),
+	// so MAC assignment moves to cmd/network-reconciler too, folded into
+	// tryAllocateIP (see its doc comment) rather than done here.
 	out, err := s.interfaces.Create(ctx, tenantID, name, NetworkInterface{
 		Spec:   spec,
-		Status: NetworkInterfaceStatus{Phase: NetworkInterfacePhasePending, MACAddress: s.allocateMAC()},
+		Status: NetworkInterfaceStatus{Phase: NetworkInterfacePhasePending},
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.tryAllocateIP(ctx, &out, subnet.Spec.CIDR, subnet.Spec.GatewayIP, subnet.Spec.AllocatableIPRanges)
 	return &out, nil
 }
 
 // tryAllocateIP mirrors tryAllocateVLAN: mutates n in place, Ready+IPAddress
 // on success, still Pending with an IPPoolExhausted condition (retried
 // later) if the Subnet's CIDR (or allocatableRanges, if set) has no free
-// address left.
+// address left. Also assigns n's mac_address the first time it runs for n
+// (a no-op on a later retry, once already set) -- CreateNetworkInterface
+// itself never does this (see its doc comment): unlike vlan_id/ip_address,
+// mac_address allocation can't fail/exhaust, but nextMACOct is exactly as
+// process-local as vlanPool/ipPool, so it still has to happen only here,
+// in cmd/network-reconciler, not in the (possibly multi-replica) API
+// handler.
 func (s *Service) tryAllocateIP(ctx context.Context, n *NetworkInterface, cidr, gatewayIP string, allocatableRanges []string) {
+	if n.Status.MACAddress == "" {
+		n.Status.MACAddress = s.allocateMAC()
+	}
+
 	ip, ok := s.ips.allocate(n.Spec.SubnetID, cidr, gatewayIP, allocatableRanges)
 	if !ok {
 		n.Status.Conditions = upsertCondition(n.Status.Conditions, resource.Condition{

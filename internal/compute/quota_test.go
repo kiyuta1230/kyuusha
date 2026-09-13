@@ -91,3 +91,45 @@ func TestService_CreateEnforcesQuota(t *testing.T) {
 		t.Fatalf("Create after Delete freed quota: %v", err)
 	}
 }
+
+// TestService_NewServiceRebuildsUsageFromExistingVirtualMachines proves the
+// real bug found 2026-09-13 (same class as
+// network.Service.rebuildPools/blockstorage.Service.rebuildUsage, and
+// present here even before this session's compute-reconciler split):
+// usage is purely in-memory, so without rebuildUsage, a restart forgets
+// every tenant's real quota usage and could let Create approve a request
+// a live tenant_usage would have rejected. Constructs two Services against
+// the SAME etcd client/namespace (not resourcetest.Client(t) called
+// twice, which would give each its own isolated namespace) to simulate a
+// real restart.
+func TestService_NewServiceRebuildsUsageFromExistingVirtualMachines(t *testing.T) {
+	ctx := context.Background()
+	etcdClient := resourcetest.Client(t)
+	quota := &identityv1.QuotaSpec{
+		MaxVcpu: 4, MaxMemoryMb: 8192, MaxVms: 10, MaxVcpuPerVm: 4, MaxMemoryMbPerVm: 8192,
+	}
+	const tenant = "tenant-a"
+
+	svc1, err := NewService(ctx, etcdClient, &FakeTenantClient{Quota: quota}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
+	if err != nil {
+		t.Fatalf("NewService (first): %v", err)
+	}
+	if _, err := svc1.Create(ctx, tenant, "vm-1", VirtualMachineSpec{ImageID: "img-abc", VCPU: 3, MemoryMB: 4096}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	svc2, err := NewService(ctx, etcdClient, &FakeTenantClient{Quota: quota}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
+	if err != nil {
+		t.Fatalf("NewService (second, simulating a restart): %v", err)
+	}
+
+	// max_vcpu=4, vm-1 already used 3 -- only 1 more vcpu should fit.
+	// Without rebuildUsage, svc2 would start from an empty usage map and
+	// wrongly allow this.
+	if _, err := svc2.Create(ctx, tenant, "vm-2", VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 1024}); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("Create (after restart, over remaining vcpu headroom): got %v, want ErrQuotaExceeded -- rebuildUsage did not restore usage's state", err)
+	}
+	if _, err := svc2.Create(ctx, tenant, "vm-3", VirtualMachineSpec{ImageID: "img-abc", VCPU: 1, MemoryMB: 1024}); err != nil {
+		t.Fatalf("Create (after restart, within remaining vcpu headroom): %v", err)
+	}
+}

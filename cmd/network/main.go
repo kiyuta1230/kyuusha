@@ -1,9 +1,19 @@
-// Command network runs the network control-plane: the SubnetService and
-// NetworkInterfaceService gRPC APIs, plus the periodic sweep that retries
-// Subnets/NetworkInterfaces left Pending by pool exhaustion. See
-// docs/architecture.md "networkサービスのリソース: Subnet / NetworkInterface" and
-// docs/specs/network.md. VLAN ID/IP allocation (IPAM) is real; there is
-// still no tap wiring and no agent side at all.
+// Command network runs the network control-plane's gRPC API:
+// SubnetService and NetworkInterfaceService. Every handler is a direct
+// etcd read/write via network.Service -- Create leaves every Subnet/
+// NetworkInterface Pending, never attempting vlan_id/ip_address/
+// mac_address allocation itself (see network.Service.CreateSubnet's doc
+// comment), so this binary touches none of vlanPool/ipPool/nextMACOct, nor
+// (unlike cmd/network-reconciler) any east-west client at all -- the
+// orphan-GC sweep is this Service's only user of a compute client, and it
+// only runs from Run, which this binary never calls. Safe to run as any
+// number of replicas behind a load balancer.
+//
+// All actual allocation (plus the orphan-GC sweep) lives in the separate
+// cmd/network-reconciler binary instead -- see its own package doc
+// comment for the single-replica deployment invariant that binary depends
+// on (2026-09-13, mirroring cmd/compute-reconciler's split from cmd/compute:
+// docs/architecture.md "コントロールプレーンサービス自体の可用性" "Reconcile面").
 package main
 
 import (
@@ -26,18 +36,16 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/network/grpcserver"
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
-	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
 
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":8084", "address to serve SubnetService/NetworkInterfaceService on")
-	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for the orphaned-NetworkInterface sweep (does this NetworkInterface's vm_id still exist?)")
 	metricsAddr := flag.String("metrics-addr", ":9096", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
-	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers and used when dialing compute (see internal/mtls)")
+	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
-	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA both callers' and compute's certificates must chain to")
+	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA callers' certificates must chain to")
 	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
 	flag.Parse()
 
@@ -82,31 +90,14 @@ func main() {
 	}
 	defer etcdClient.Close()
 
-	clientCreds, err := mtls.ClientCredentials(*tlsCert, *tlsKey, *tlsCA)
-	if err != nil {
-		slog.Error("load mTLS client credentials", "err", err)
-		os.Exit(1)
-	}
-	computeConn, err := grpc.NewClient(*computeAddr,
-		grpc.WithTransportCredentials(clientCreds),
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-	)
-	if err != nil {
-		slog.Error("dial compute", "addr", *computeAddr, "err", err)
-		os.Exit(1)
-	}
-	defer computeConn.Close()
-
-	svc, err := network.NewService(ctx, etcdClient, computev1.NewVirtualMachineServiceClient(computeConn))
+	// Reconcile (vlan_id/ip_address/mac_address allocation, orphan sweep)
+	// deliberately never runs here -- see this package's doc comment.
+	// computeClient is nil since nothing in this binary ever uses it.
+	svc, err := network.NewService(ctx, etcdClient, nil)
 	if err != nil {
 		slog.Error("new network service", "err", err)
 		os.Exit(1)
 	}
-	go func() {
-		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("pending sweep stopped", "err", err)
-		}
-	}()
 
 	serverCreds, err := mtls.ServerCredentials(*tlsCert, *tlsKey, *tlsCA)
 	if err != nil {

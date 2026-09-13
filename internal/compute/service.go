@@ -65,12 +65,17 @@ type Service struct {
 	usage   map[string]tenantUsage
 }
 
+// NewService constructs a Service and synchronously rebuilds its tenant
+// quota usage (see rebuildUsage) from etcd before returning -- same
+// reasoning as network.NewService's/blockstorage.NewService's identical
+// rebuild calls: callers must not start serving Create/Delete requests
+// until this returns.
 func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, imageClient imagev1.ImageServiceClient, subnetClient networkv1.SubnetServiceClient, netifClient networkv1.NetworkInterfaceServiceClient, volumeClient blockstoragev1.VolumeServiceClient, volumeAttachmentClient blockstoragev1.VolumeAttachmentServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &Service{
+	svc := &Service{
 		store: resource.NewStore[VirtualMachine, *VirtualMachine](etcdClient, "vm", resource.StoreErrors{
 			NotFound:      ErrNotFound,
 			Conflict:      ErrConflict,
@@ -90,7 +95,47 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 		volumeAttachmentClient: volumeAttachmentClient,
 		quota:                  quota,
 		usage:                  make(map[string]tenantUsage),
-	}, nil
+	}
+	if err := svc.rebuildUsage(ctx); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// rebuildUsage restores usage's in-memory per-tenant quota accounting from
+// every existing VirtualMachine in etcd. Found 2026-09-13 (same bug class
+// as network.Service.rebuildPools/blockstorage.Service.rebuildUsage, and
+// present here even before this session's compute-reconciler split --
+// that split just made it newly relevant, since the whole point of
+// running compute's gRPC API as multiple replicas requires this to
+// actually be safe): usage is purely in-memory, populated only by
+// Create/Delete calls made within this process's own lifetime, so without
+// this, EVERY restart forgets every tenant's real usage and lets Create
+// approve requests a live tenant_usage would have rejected -- and,
+// separately, two API replicas would each maintain their own independent
+// usage map that drifts the moment either one processes a Create/Delete,
+// letting a tenant split requests across replicas to bypass quota
+// entirely. Excludes a VM with Meta.DeletedAt already set: Delete's first
+// call already decremented usage for it (see Delete's own doc comment on
+// why that happens before the object is actually gone, not after).
+func (s *Service) rebuildUsage(ctx context.Context) error {
+	vms, err := s.store.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("compute: rebuild usage: list virtual machines: %w", err)
+	}
+	usage := make(map[string]tenantUsage)
+	for _, vm := range vms {
+		if vm.Meta.DeletedAt != nil {
+			continue
+		}
+		u := usage[vm.Meta.TenantID]
+		u.VCPU += vm.Spec.VCPU
+		u.MemoryMB += vm.Spec.MemoryMB
+		u.VMCount++
+		usage[vm.Meta.TenantID] = u
+	}
+	s.usage = usage
+	return nil
 }
 
 // Create is idempotent when Name is set: a second Create with the same

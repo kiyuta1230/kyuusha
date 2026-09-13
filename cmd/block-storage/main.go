@@ -1,11 +1,20 @@
-// Command block-storage runs the block-storage control-plane: the
-// VolumeService, VolumeAttachmentService, and StorageConnectionService gRPC
-// APIs, plus the periodic sweep that retries VolumeAttachments left Pending
-// by the exclusive-attach constraint, and (over NATS) the StorageConnection/
-// Volume verification flow -- see internal/block-storage/verification.go
-// and docs/open-questions.md「Hypervisor↔ストレージバックエンドの接続確立を
-// kyuusha側で自動化すべきか」. See also docs/architecture.md
-// "block-storageサービスのリソース: Volume / VolumeAttachment" and
+// Command block-storage runs the block-storage control-plane's gRPC API:
+// VolumeService, VolumeAttachmentService, and StorageConnectionService.
+// Every handler is a direct etcd read/write via blockstorage.Service --
+// CreateVolumeAttachment leaves every VolumeAttachment Pending, never
+// attempting the exclusive-attach check itself (see its doc comment), so
+// this binary touches neither attachMu nor NATS/JetStream at all (no
+// -nats-url, no -compute-addr: the orphan-GC sweep, the only user of a
+// compute client, lives entirely in the reconciler) and is safe to run as
+// any number of replicas behind a load balancer.
+//
+// All actual reconciliation (exclusive-attach attempts, the
+// StorageConnection/Volume verification flow, retry/orphan sweeps) lives
+// in the separate cmd/block-storage-reconciler binary instead -- see its
+// own package doc comment for the single-replica deployment invariant
+// that binary depends on (2026-09-13, mirroring cmd/compute-reconciler's
+// and cmd/network-reconciler's identical splits: docs/architecture.md
+// "コントロールプレーンサービス自体の可用性" "Reconcile面"). See also
 // docs/specs/volume.md. kyuusha doesn't provision or export storage itself
 // (see docs/architecture.md「訂正: 責務の境界を...」) -- there is no
 // dedicated storage-node service to dial; Volume/VolumeAttachment/
@@ -23,8 +32,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -35,15 +42,12 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
 	blockstoragev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/blockstorage/v1"
-	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":8085", "address to serve VolumeService/VolumeAttachmentService/StorageConnectionService on")
-	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL, for the StorageConnection/Volume verification flow (see internal/block-storage/verification.go)")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
-	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for the orphaned-VolumeAttachment sweep (does this VolumeAttachment's vm_id still exist?)")
 	metricsAddr := flag.String("metrics-addr", ":9097", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers and used when dialing other services (see internal/mtls)")
@@ -102,29 +106,6 @@ func main() {
 	}
 	defer identityConn.Close()
 
-	computeConn, err := grpc.NewClient(*computeAddr,
-		grpc.WithTransportCredentials(clientCreds),
-		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-	)
-	if err != nil {
-		slog.Error("dial compute", "addr", *computeAddr, "err", err)
-		os.Exit(1)
-	}
-	defer computeConn.Close()
-
-	nc, err := nats.Connect(*natsURL)
-	if err != nil {
-		slog.Error("connect to nats", "err", err)
-		os.Exit(1)
-	}
-	defer nc.Close()
-
-	js, err := jetstream.New(nc)
-	if err != nil {
-		slog.Error("create jetstream context", "err", err)
-		os.Exit(1)
-	}
-
 	etcdClient, err := etcdconn.Connect(*etcdEndpoints)
 	if err != nil {
 		slog.Error("connect to etcd", "endpoints", *etcdEndpoints, "err", err)
@@ -132,16 +113,14 @@ func main() {
 	}
 	defer etcdClient.Close()
 
-	svc, err := blockstorage.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn))
+	// computeClient is nil: this binary's Service is never passed to Run,
+	// so the orphan-GC sweep (its only user) never runs here anyway -- see
+	// this package's doc comment.
+	svc, err := blockstorage.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), nil)
 	if err != nil {
 		slog.Error("new block-storage service", "err", err)
 		os.Exit(1)
 	}
-	go func() {
-		if err := svc.Run(ctx, nc, js); err != nil && ctx.Err() == nil {
-			slog.Error("pending sweep stopped", "err", err)
-		}
-	}()
 
 	serverCreds, err := mtls.ServerCredentials(*tlsCert, *tlsKey, *tlsCA)
 	if err != nil {

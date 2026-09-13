@@ -9,6 +9,54 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
+// mustCreateAndAttach creates a VolumeAttachment and immediately drives it
+// through the same exclusive-attach attempt cmd/block-storage-reconciler's
+// watchPendingVolumeAttachments would make on its Added event --
+// CreateVolumeAttachment itself never attempts this anymore (see its doc
+// comment: attachMu only serializes within a single process, unsafe to
+// call from a possibly multi-replica API handler), so a test that needs
+// one actually Attached must trigger the attempt explicitly, standing in
+// for the real reconciler process.
+func mustCreateAndAttach(t *testing.T, ctx context.Context, svc *Service, tenantID, name string, spec VolumeAttachmentSpec) *VolumeAttachment {
+	t.Helper()
+	a, err := svc.CreateVolumeAttachment(ctx, tenantID, name, spec)
+	if err != nil {
+		t.Fatalf("CreateVolumeAttachment: %v", err)
+	}
+	svc.tryAttach(ctx, a)
+	return a
+}
+
+// TestService_CreateVolumeAttachmentNeverAttachesSynchronously proves the
+// 2026-09-13 behavior change this session's network-reconciler/
+// block-storage-reconciler split led to: CreateVolumeAttachment must never
+// call tryAttach itself (see its doc comment) -- exclusive-attach
+// allocation only ever happens in cmd/block-storage-reconciler, so a
+// Create() call by itself, with no reconciler running at all, must always
+// return Pending, proving this API handler is safe to run as any number
+// of replicas without touching attachMu/hasActiveAttachment's shared
+// process-local state.
+func TestService_CreateVolumeAttachmentNeverAttachesSynchronously(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	vol, err := svc.CreateVolume(ctx, "tenant-a", "data-1", testVolumeSpec(10))
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+	vol = forceVolumeVerified(t, ctx, svc, vol)
+
+	// Nothing else holds vol.Meta.ID -- a reconciler's tryAttach would
+	// succeed immediately, so this proves Create really never calls it.
+	a, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{VMID: "vm-1", VolumeID: vol.Meta.ID})
+	if err != nil {
+		t.Fatalf("CreateVolumeAttachment: %v", err)
+	}
+	if a.Status.Phase != VolumeAttachmentPhasePending {
+		t.Fatalf("CreateVolumeAttachment attached synchronously: phase=%s, want Pending", a.Status.Phase)
+	}
+}
+
 func TestService_CreateVolumeAttachmentValidatesVolume(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
@@ -36,12 +84,9 @@ func TestService_HandleVolumeAttachedRecordsDevicePathAndHypervisor(t *testing.T
 		t.Fatalf("CreateVolume: %v", err)
 	}
 	vol = forceVolumeVerified(t, ctx, svc, vol)
-	att, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
+	att := mustCreateAndAttach(t, ctx, svc, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
 		VMID: "vm-1", VolumeID: vol.Meta.ID,
 	})
-	if err != nil {
-		t.Fatalf("CreateVolumeAttachment: %v", err)
-	}
 
 	svc.handleVolumeAttached(ctx, VolumeAttachedEvent{
 		AttachmentID: att.Meta.ID, TenantID: "tenant-a", Hypervisor: "hypervisor-1", DevicePath: "/dev/disk/by-id/scsi-test-serial",
@@ -83,12 +128,9 @@ func TestService_VolumeAttachmentAttachesWhenVolumeIsFree(t *testing.T) {
 		t.Fatalf("CreateVolume: %v", err)
 	}
 	vol = forceVolumeVerified(t, ctx, svc, vol)
-	att, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
+	att := mustCreateAndAttach(t, ctx, svc, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
 		VMID: "vm-1", VolumeID: vol.Meta.ID,
 	})
-	if err != nil {
-		t.Fatalf("CreateVolumeAttachment: %v", err)
-	}
 	if att.Status.Phase != VolumeAttachmentPhaseAttached {
 		t.Fatalf("phase = %q, want Attached", att.Status.Phase)
 	}
@@ -110,22 +152,16 @@ func TestService_ExclusiveAttachBlocksSecondAttachmentThenRetrySucceeds(t *testi
 		t.Fatalf("CreateVolume: %v", err)
 	}
 	vol = forceVolumeVerified(t, ctx, svc, vol)
-	first, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
+	first := mustCreateAndAttach(t, ctx, svc, "tenant-a", "volattach-vm-1", VolumeAttachmentSpec{
 		VMID: "vm-1", VolumeID: vol.Meta.ID,
 	})
-	if err != nil {
-		t.Fatalf("first CreateVolumeAttachment: %v", err)
-	}
 	if first.Status.Phase != VolumeAttachmentPhaseAttached {
 		t.Fatalf("first attachment phase = %q, want Attached", first.Status.Phase)
 	}
 
-	second, err := svc.CreateVolumeAttachment(ctx, "tenant-a", "volattach-vm-2", VolumeAttachmentSpec{
+	second := mustCreateAndAttach(t, ctx, svc, "tenant-a", "volattach-vm-2", VolumeAttachmentSpec{
 		VMID: "vm-2", VolumeID: vol.Meta.ID,
 	})
-	if err != nil {
-		t.Fatalf("second CreateVolumeAttachment: %v", err)
-	}
 	if second.Status.Phase != VolumeAttachmentPhasePending {
 		t.Fatalf("second attachment (same volume, first still active) phase = %q, want Pending", second.Status.Phase)
 	}
