@@ -355,10 +355,16 @@ services:
 
   # OCI registry for Track 2's oci://-scheme Image path (see
   # docs/architecture.md「Track 2実装方針」) -- the reference distribution
-  # implementation, plain HTTP (no TLS), not reachable from the host, only
-  # from compute-agent/image containers and image-assets-oci-seed below.
+  # implementation, plain HTTP (no TLS). Reachable from compute-agent/image
+  # containers as registry:5000 (internal DNS), and from the host as
+  # localhost:5000 -- unlike compute/identity/image/network/block-storage,
+  # this needs a host port mapping since `kyuusha image build`
+  # (cmd/kyuusha/imagebuild.go) is host-side tooling, not a compose service,
+  # the same reason nats/etcd/grafana/prometheus/jaeger below are published.
   registry:
     image: registry:2
+    ports:
+      - "5000:5000"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:5000/v2/"]
       interval: 2s

@@ -2,6 +2,13 @@
 *.test
 *.out
 
+# `go build ./...` from the repo root writes each main package's binary
+# here by its package name (cmd/kyuusha -> ./kyuusha, playground/ocitool ->
+# ./ocitool) unless -o is given -- easy to do by accident, so ignore the
+# known binary names instead of relying on remembering -o every time.
+/kyuusha
+/ocitool
+
 # The playground's "playground-nfs" storage connection fixture -- a plain
 # host directory standing in for a real NFS export, bind-mounted into every
 # compute-agent container (see playground/docker-compose.yml and

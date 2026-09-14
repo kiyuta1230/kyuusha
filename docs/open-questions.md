@@ -170,12 +170,12 @@ playgroundで実VM起動まで確認済み（HTTP経由・OCI経由どちらも�
   （旧ドキュメントが挙げていた「containerdのGCモデルとの整合」という論点自体は
   containerdを使わなくなったため消えたが、「いつ・何を削除するか」を自前で
   設計する必要は残っている）
-- **`kyuusha image build`は依然未実装**: `playground/ocitool`はplayground
-  検証専用のscaffolding（既にビルド済みの2ファイルをpushするだけ）であり、
-  「Dockerfile/OCIイメージのrootfsレイヤーをext4に変換して発行する」という
-  本来の`kyuusha image build`（[Image仕様](specs/image.md)、
-  [docs/architecture.md](architecture.md)「イメージ作成体験」参照）はまだ
-  存在しない
+- **`kyuusha image build`のカーネル自動選択は未実装**（2026-09-15、本体は実装済み）:
+  `cmd/kyuusha/imagebuild.go`としてDockerfileからのrootfsビルド・push・Image
+  Create一気通貫のパイプラインは実装・実機確認済み（[Image仕様](specs/image.md)
+  「`kyuusha image build`」参照）。残っているのは「kyuushaが用意する少数の推奨
+  カーネルから自動選択」（`docs/architecture.md`「イメージ作成体験」の当初構想）
+  のみ——現状は`-kernel-url`/`-kernel-digest`の明示指定が必須
 - **Track 3（Dragonfly/Spegel等のP2P導入）着手のタイミング判断基準**: Track 2
   完了により技術的な前提（レジストリプロトコル経由の配布）は揃ったが、実際に
   P2Pを導入するかは別判断。「Dragonfly級のP2Pが実際に必要なスケールに達した」と

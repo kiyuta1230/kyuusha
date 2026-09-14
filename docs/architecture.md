@@ -1565,10 +1565,10 @@ HTTP HEAD）が、`url`のスキームに応じてOCIレジストリのマニフ
 に依存することになる。同期バリデーション（`format`と提供されたartifactの整合性）は
 変更不要。
 
-**`kyuusha image build`（未実装のCLIツール）の変更**: 「OCIレイヤーをext4に
-フラット化してURLとして公開する」という当初構想から、「フラット化した後、
-`oras-go/v2`で実際にレジストリへpushし、`oci://`参照を`Image`リソースの
-Createに渡す」という形に変わる。
+**`kyuusha image build`の変更**: 「OCIレイヤーをext4にフラット化してURLとして
+公開する」という当初構想から、「フラット化した後、`oras-go/v2`で実際に
+レジストリへpushし、`oci://`参照を`Image`リソースのCreateに渡す」という形に
+変わる（2026-09-15実装完了、下記追記参照）。
 
 **playgroundへの追加**: `registry:2`（Docker/CNCF公式のリファレンス実装、
 distribution）を新しいdocker-composeサービスとして追加し、`image-assets`の
@@ -1604,8 +1604,32 @@ distribution）を新しいdocker-composeサービスとして追加し、`image
   設計通りTrack 2からも再利用されていることを確認した
 
 残る未決事項は[docs/open-questions.md](open-questions.md)「イメージの
-ローカル管理/OCIレジストリ対応」参照（`kyuusha image build`本体は未実装、
-エビクション未実装、Track 3着手基準は引き続き未定義）。
+ローカル管理/OCIレジストリ対応」参照（エビクション未実装、Track 3着手基準は
+引き続き未定義）。
+
+### 追記（2026-09-15）: `kyuusha image build`実装完了
+
+`playground/ocitool`のscaffolding止まりだった`kyuusha image build`本体を
+`cmd/kyuusha/imagebuild.go`として実装した（[Image仕様](specs/image.md)
+「`kyuusha image build`（Dockerfileからのrootfsビルド、実装済み）」参照）。
+`docker build` → `docker export | tar -x` → `mkfs.ext4 -d`（サイズ自動算出）
+→ `oras-go/v2`でOCIレジストリへpush → `ImageService.Create`、という一気通貫の
+パイプラインをCLI側だけで完結させる薄いラッパーとして実装し、`internal/image`
+サービス自体への変更は一切無い。
+
+実機確認: 自作の最小Alpineベースrootfs（`docker/fc-guest-init.sh`を`/init`として
+埋め込んだだけの独自Dockerfile、playground既存のテストアセットとは無関係）を
+`kyuusha image build`で実際にビルド・push・Image化し、そのImageからVMを作成して
+`Running`到達・ゲスト実起動（`kyuusha: guest booted OK`）まで確認した。
+
+実装中に見つかった設計上の論点: playgroundのようにレジストリがホストから見た
+アドレス（`localhost:5000`）とコンテナから見たアドレス（`registry:5000`、
+内部DNS）で異なる場合、pushの接続先とImageに記録すべき参照先が一致しない。
+`-registry`（push接続先）と`-registry-ref`（Imageに記録する参照先、省略時は
+`-registry`と同じ）を分けることで対応した。
+
+カーネルの「推奨カーネルからの自動選択」は未実装のまま（`-kernel-url`/
+`-kernel-digest`の明示指定必須）——[docs/open-questions.md](open-questions.md)参照。
 
 ## block-storageのバックエンド抽象化
 

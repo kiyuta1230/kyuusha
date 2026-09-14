@@ -30,6 +30,8 @@ func imageCmd(args []string) {
 	switch args[0] {
 	case "create":
 		imageCreate(args[1:])
+	case "build":
+		imageBuild(args[1:])
 	case "get":
 		imageGet(args[1:])
 	case "list":

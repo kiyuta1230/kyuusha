@@ -130,9 +130,40 @@ flowchart LR
 - CLI: `kyuusha image create -visibility=public`、または作成後に
   `kyuusha image share -id=... -visibility=private -shared-with-tenant-ids=tenant-b,tenant-c`
 
+## `kyuusha image build`（Dockerfileからのrootfsビルド、実装済み）
+
+`docs/architecture.md`「イメージ作成体験」が構想した「`docker build && docker push`相当の
+体験を1コマンドに」を実装したもの（`cmd/kyuusha/imagebuild.go`）。`internal/image`側の
+変更は一切なし——ビルド・push・`Create`呼び出しまで完全にCLI側で完結する薄いラッパー。
+
+```sh
+kyuusha image build -tenant=<tenant-id> -name=<name> \
+  -dockerfile=Dockerfile -context=. \
+  -registry=<push先のhost:port> -repo=myorg/myimage -tag=v1 \
+  -kernel-url=<既存のkernelアーティファクトのURL/OCI参照> -kernel-digest=sha256:...
+```
+
+- `docker build` → `docker create` → `docker export | tar -x` → `mkfs.ext4 -d`（サイズは
+  ビルド結果から自動算出、`-size-mb`で上書き可）で、Dockerfileのrootfsを`Image.spec.rootfs`が
+  要求する生のext4イメージへ変換する。実装は`docker/Dockerfile`の`image-assets`ステージが
+  playground自身のテストrootfsを作るのに使っている手法（`truncate` + `mkfs.ext4 -d`）と同一
+- 変換後、`oras-go/v2`（Track 2で採用済み）でOCIレジストリへpush、`oci://`/`oci+http://`参照を
+  組み立てて`ImageService.Create`を呼ぶところまで一気通貫
+- **`-registry`と`-registry-ref`は別物**: このコマンド自身がpushのために接続する先（例:
+  playgroundならホストから見た`localhost:5000`）と、Imageに記録する参照先（`image`/
+  `compute-agent`コンテナから見た`registry:5000`）が異なる場合、`-registry-ref`で後者を
+  明示する。同一アドレスで両者が一致する実運用のレジストリでは省略可（`-registry`をそのまま使う）
+- 前提として`docker`・`tar`・`mkfs.ext4`（e2fsprogs）がこのコマンドを実行するマシンに
+  必要——kyuushaのどのサービスにも依存を追加しない、CLI側だけで完結する薄いツール
+  （`docs/architecture.md`「イメージ作成体験」の設計方針通り）
+- カーネルは明示指定必須。「kyuushaが用意する少数の推奨カーネルから自動選択」は未実装
+  （[docs/open-questions.md](../open-questions.md)参照）
+- `QCOW2`はこの変換パスの対象外（[docs/architecture.md](../architecture.md)
+  「イメージ作成体験」参照）
+
 ## 未実装
 
 - ハイパーバイザー間の軽量ピアフェッチ（heartbeatでキャッシュ済みdigestを報告、同一zone優先の直接転送）
 - Dragonfly導入（バルクVM作成×新規Imageのthundering herd対策）
 - private S3互換ホスティング（`url`が何を指すか区別しないため、kyuusha側の対応は元々不要）
-- `kyuusha image build`（OCI/Dockerfileからrootfsを作るビルドツール）
+- `kyuusha image build`の推奨カーネル自動選択（現状は`-kernel-url`/`-kernel-digest`の明示指定必須）
