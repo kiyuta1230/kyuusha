@@ -26,20 +26,20 @@ CRUD+ポーリングは、クライアント側にも「終わったか定期的
 
 ```mermaid
 flowchart LR
-    subgraph 手続き型（OpenStack Nova）
+    subgraph proc["手続き型（OpenStack Nova）"]
         A1[nova-api] -->|RPC cast| A2[conductor]
         A2 -->|RPC cast| A3[scheduler]
         A3 -->|RPC cast| A4[compute]
-        A4 -.失敗したら?.-> A1
+        A4 -.->|失敗したら?| A1
     end
 ```
 
 ```mermaid
 flowchart LR
-    subgraph 宣言的reconcile（kyuusha）
-        B1[Client] -->|Create: spec書き込み| B2[(etcd)]
+    subgraph recon["宣言的reconcile（kyuusha）"]
+        B1[Client] -->|"Create: spec書き込み"| B2[(etcd)]
         B3[Reconciler] -->|Watch| B2
-        B3 -->|現在のstateとspecの差分を解消、失敗したら黙って再試行| B2
+        B3 -->|"差分を解消。失敗時は黙って再試行"| B2
     end
 ```
 
