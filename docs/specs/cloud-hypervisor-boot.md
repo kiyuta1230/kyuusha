@@ -87,11 +87,12 @@ QEMU時代のような「本来の起動方式(QCOW2)をあえて選ばない」
 
 ## compute-agent側の起動処理(`internal/compute-agent/chvmm`)
 
-1. **キャッシュ確認・rootfsの複製**: fcvmmと同じ手順(別ディレクトリ: 既定
-   `/var/lib/kyuusha/ch-cache`・`/var/lib/kyuusha/ch-run`。同じ資産でも
-   ドライバごとに別々にキャッシュ・コピーする——ディスク上の状態をドライバ単位で
-   独立して調べられるようにするためで、資産自体がFirecracker用/
-   cloud-hypervisor用で違うわけではない)
+1. **キャッシュ確認・rootfsの複製**: fcvmmと同じ`internal/compute-agent/imagestore.Store`
+   （既定`/var/lib/kyuusha/image-cache`）をfcvmmと**共有**する——同じImageをFirecracker用/
+   cloud-hypervisor用で別々にダウンロード・保持することはない（[Firecracker起動仕様]
+   (firecracker-boot.md)「compute-agent側の起動処理」参照）。VM専用の書き込み可能な
+   rootfsコピー（`<ch-run-dir>/<vm_id>/rootfs.raw`）はreflink（`FICLONE`）が使える
+   ファイルシステムならcopy-on-writeで複製し、使えなければ通常コピーへフォールバックする
 2. **起動**: 以下のcloud-hypervisor引数を組み立てて実行する
 
    | 引数 | 値/意図 |
@@ -175,7 +176,8 @@ CLOUD_HYPERVISOR`のVMはスケジュール不能になる)等、ドライバを
   seccompで足りると判断し、意図的に導入していない(上記「QEMUからの置き換え」
   参照)。Landlockによるファイルシステムアクセス制限の追加も同様に未着手
 
-ドライバを問わず共通の未実装事項(digest検証、`user_data`の機密情報対応、
+ドライバを問わず共通の未実装事項(`user_data`の機密情報対応、
 本物のcloud-initでの動作確認)は
 [VirtualMachine仕様](virtual-machine.md)「この実装がカバーしないもの(共通)」
-参照。
+参照(digest検証は実装済み——[Firecracker起動仕様](firecracker-boot.md)
+「compute-agent側の起動処理」参照)。

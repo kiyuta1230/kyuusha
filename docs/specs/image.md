@@ -43,7 +43,10 @@ sequenceDiagram
   （`KERNEL_ROOTFS`なら`kernel.url`/`rootfs.url`両方、`QCOW2`なら`disk.url`）
 - **非同期バリデーション**: 提供されたURLへのHTTP HEADのみ（`軽く検証する程度`。実際のバイト列は
   取得しない、digestの検証もしない）。到達不可なら`Error`+`Condition{type: URLUnreachable}`
-- digestの検証は行わない。実際にartifactを取得するハイパーバイザー側の責務（未実装）
+- image.Service自体はdigestの検証を行わない。実際にartifactを取得するハイパーバイザー側の
+  責務——`internal/compute-agent/imagestore.Store`がVM起動時のダウンロードをこの
+  `digest`と照合する（`spec.kernel.digest`/`spec.rootfs.digest`が空でない場合のみ。
+  [Firecracker起動仕様](firecracker-boot.md)「compute-agent側の起動処理」参照）
 
 ## computeとの連携（VM Create時）
 

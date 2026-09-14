@@ -272,6 +272,8 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 			MemoryMB:          cmd.MemoryMB,
 			KernelURL:         cmd.KernelURL,
 			RootfsURL:         cmd.RootfsURL,
+			KernelDigest:      cmd.KernelDigest,
+			RootfsDigest:      cmd.RootfsDigest,
 			BootArgs:          cmd.BootArgs,
 			NetworkInterfaces: buildNetIfaces(cmd.VMID, cmd.Interfaces),
 			UserData:          cmd.UserData,

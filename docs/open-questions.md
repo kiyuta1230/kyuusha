@@ -153,6 +153,28 @@ minijail/nsjailをkyuusha本体へ直接統合する」方針（[QEMU jailer設�
 「QEMUからcloud-hypervisorへの置き換え」、および上記2つの旧ドキュメント（どちらも
 冒頭に撤回済みの注記あり、経緯の記録として残している）を参照。
 
+## イメージのローカル管理: Track 1実装済み、残る未決事項（2026-09-14）
+
+`docs/architecture.md`「イメージのローカル管理」Track 1を実装した
+（`internal/compute-agent/imagestore`、digest検証付きの共有キャッシュ＋
+reflink CoWコピー、containerd自体は輸入せず自前実装——同節の追記参照）。
+overlayfs以外のフォールバックは`CloneFile`が`FICLONE`失敗時に通常コピーへ
+自動フォールバックする形で実装時に解決済み。残る未決事項:
+
+- **キャッシュのエビクション（LRU等）が未実装**: `imagestore.Store`は
+  取得したdigestを際限なく保持し続ける——削除するロジックがまだ無い
+  （旧ドキュメントが挙げていた「containerdのGCモデルとの整合」という論点自体は
+  containerdを使わなくなったため消えたが、「いつ・何を削除するか」を自前で
+  設計する必要は残っている）
+- **Track 2（`ImageArtifact`のOCI化、Dragonfly/Spegel導入）着手のタイミング判断基準**:
+  「Dragonfly級のP2Pが実際に必要なスケールに達した」と何をもって判断するか
+  （例: playground規模を超えた実クラスタでのorigin負荷の実測、特定テナントからの
+  バルクVM作成要求の頻度、等）。今のところ具体的な閾値は未定義
+- **既存Image（`digest`が空のもの）の扱い**: `imagestore`は`digest`が空なら
+  未検証の旧キャッシュパスへフォールバックする後方互換動作を持つが、
+  `internal/image`のCreate時バリデーションを将来`digest`必須にするかどうかは
+  未検討（今回は意図的に見送った——「変更しないもの」参照）
+
 ## ロールベースの細かい認可（RPCメソッド・リソース種別単位）をやるべきか
 
 現状`role`クレームは実質`admin`かそれ以外かの2値でしか使われておらず、「このロールは

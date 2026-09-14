@@ -21,13 +21,9 @@ package fcvmm
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,6 +35,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/imagestore"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/netsetup"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
@@ -90,10 +87,12 @@ type Manager struct {
 	// BinPath is the firecracker binary to exec. Defaults to "firecracker"
 	// (resolved via $PATH) if empty.
 	BinPath string
-	// CacheDir holds downloaded kernel/rootfs artifacts, keyed by a hash of
-	// their URL -- shared read-only across all VMs booted from the same
-	// Image. Defaults to /var/lib/kyuusha/fc-cache.
-	CacheDir string
+	// ImageStore caches downloaded kernel/rootfs artifacts, digest-verified
+	// and shared read-only across every VM this compute-agent boots --
+	// including chvmm's, since cmd/compute-agent/main.go constructs one
+	// Store and hands it to both drivers. Must be set; a nil ImageStore
+	// panics the first time Boot needs to fetch anything.
+	ImageStore *imagestore.Store
 	// RunDir holds one subdirectory per running VM (its console log --
 	// everything else Firecracker itself touches now lives inside the
 	// jail, see JailChrootBaseDir). Defaults to /var/lib/kyuusha/fc-run.
@@ -120,8 +119,6 @@ type Manager struct {
 	// means this host has none -- any VM with Volumes then fails to boot,
 	// same as a missing kernel/rootfs URL would.
 	StorageConnections volumeref.Connections
-
-	downloadMu sync.Mutex // serializes ensureCached; fine at playground scale
 
 	mu      sync.Mutex
 	running map[string]*runningVM
@@ -172,13 +169,6 @@ func (m *Manager) binPath() string {
 		return m.BinPath
 	}
 	return "firecracker"
-}
-
-func (m *Manager) cacheDir() string {
-	if m.CacheDir != "" {
-		return m.CacheDir
-	}
-	return "/var/lib/kyuusha/fc-cache"
 }
 
 func (m *Manager) runDir() string {
@@ -337,14 +327,11 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 	m.mu.Unlock()
 
-	if err := os.MkdirAll(m.cacheDir(), 0o755); err != nil {
-		return nil, fmt.Errorf("fcvmm: create cache dir: %w", err)
-	}
-	kernelPath, err := m.ensureCached(ctx, spec.KernelURL)
+	kernelPath, err := m.ImageStore.EnsureCached(ctx, spec.KernelURL, spec.KernelDigest)
 	if err != nil {
 		return nil, fmt.Errorf("fcvmm: fetch kernel: %w", err)
 	}
-	masterRootfs, err := m.ensureCached(ctx, spec.RootfsURL)
+	masterRootfs, err := m.ImageStore.EnsureCached(ctx, spec.RootfsURL, spec.RootfsDigest)
 	if err != nil {
 		return nil, fmt.Errorf("fcvmm: fetch rootfs: %w", err)
 	}
@@ -714,57 +701,6 @@ func (m *Manager) Destroy(vmID string) {
 	if err := os.RemoveAll(filepath.Join(m.runDir(), vmID)); err != nil {
 		slog.Warn("fcvmm: destroy: remove run dir failed", "vm_id", vmID, "err", err)
 	}
-}
-
-// ensureCached downloads rawURL into CacheDir if not already present,
-// keyed by a hash of the URL itself (not its content -- Image artifacts
-// aren't required to carry a digest; see docs/specs/image.md). Concurrent
-// callers for the same or different URLs are serialized by downloadMu,
-// which is fine at this system's target scale.
-func (m *Manager) ensureCached(ctx context.Context, rawURL string) (string, error) {
-	if rawURL == "" {
-		return "", fmt.Errorf("empty artifact URL")
-	}
-	sum := sha256.Sum256([]byte(rawURL))
-	dest := filepath.Join(m.cacheDir(), hex.EncodeToString(sum[:16]))
-
-	m.downloadMu.Lock()
-	defer m.downloadMu.Unlock()
-
-	if _, err := os.Stat(dest); err == nil {
-		return dest, nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("fetch %s: %w", rawURL, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("fetch %s: unexpected status %s", rawURL, resp.Status)
-	}
-
-	tmp := dest + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return "", fmt.Errorf("write %s: %w", dest, err)
-	}
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		return "", err
-	}
-	return dest, nil
 }
 
 type fcBootSource struct {

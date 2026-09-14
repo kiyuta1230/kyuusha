@@ -30,6 +30,7 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/chvmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/fcvmm"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/imagestore"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/resourcemetrics"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
@@ -51,14 +52,13 @@ func main() {
 	metricsAddr := flag.String("metrics-addr", ":9094", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	fcBin := flag.String("firecracker-bin", "firecracker", "firecracker binary jailer execs into for driver_hint=FIRECRACKER VMs")
-	fcCacheDir := flag.String("fc-cache-dir", "/var/lib/kyuusha/fc-cache", "directory caching downloaded kernel/rootfs artifacts, shared across VMs")
+	imageCacheDir := flag.String("image-cache-dir", "/var/lib/kyuusha/image-cache", "directory caching downloaded kernel/rootfs artifacts, digest-verified and shared across both VMM drivers and every VM they boot (see internal/compute-agent/imagestore)")
 	fcRunDir := flag.String("fc-run-dir", "/var/lib/kyuusha/fc-run", "directory holding each running VM's console log (everything else lives inside its jail, see -fc-jail-chroot-base-dir)")
 	fcJailerBin := flag.String("fc-jailer-bin", "jailer", "jailer binary every driver_hint=FIRECRACKER VM is exec'd through -- see docs/specs/firecracker-boot.md \"jailer\"")
 	fcJailChrootBaseDir := flag.String("fc-jail-chroot-base-dir", "/var/lib/kyuusha/fc-jail", "jailer's --chroot-base-dir: parent of <exec-file-basename>/<vm_id>/root for every VM's jail")
 	fcJailUID := flag.Uint("fc-jail-uid", 123, "uid jailer drops privileges to before exec'ing Firecracker inside its jail -- shared by every VM this compute-agent boots (see the fcvmm package doc comment)")
 	fcJailGID := flag.Uint("fc-jail-gid", 100, "gid jailer drops privileges to before exec'ing Firecracker inside its jail -- shared by every VM this compute-agent boots (see the fcvmm package doc comment)")
 	chBin := flag.String("ch-bin", "cloud-hypervisor", "cloud-hypervisor binary to exec for driver_hint=CLOUD_HYPERVISOR VMs (see internal/compute-agent/chvmm)")
-	chCacheDir := flag.String("ch-cache-dir", "/var/lib/kyuusha/ch-cache", "directory caching downloaded kernel/rootfs artifacts for driver_hint=CLOUD_HYPERVISOR VMs")
 	chRunDir := flag.String("ch-run-dir", "/var/lib/kyuusha/ch-run", "directory holding each running driver_hint=CLOUD_HYPERVISOR VM's writable rootfs copy and console log")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented when dialing compute (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
@@ -89,10 +89,17 @@ func main() {
 	// since both need the exact same map[string]vmm.VMM: the collector
 	// reads Running() from each driver, and Agent dispatches Boot/Stop/
 	// Destroy against the same instances.
+	// One Store shared by both drivers, so the same Image is never
+	// downloaded or held twice regardless of which driver_hint a VM
+	// requests -- see internal/compute-agent/imagestore and
+	// docs/architecture.md「イメージのローカル管理: containerdのcontent
+	// store/snapshotterへの移行検討」.
+	imageStore := &imagestore.Store{Dir: *imageCacheDir}
+
 	vmmDrivers := map[string]vmm.VMM{
 		string(compute.VmmDriverFirecracker): &fcvmm.Manager{
 			BinPath:            *fcBin,
-			CacheDir:           *fcCacheDir,
+			ImageStore:         imageStore,
 			RunDir:             *fcRunDir,
 			JailerBinPath:      *fcJailerBin,
 			JailChrootBaseDir:  *fcJailChrootBaseDir,
@@ -102,7 +109,7 @@ func main() {
 		},
 		string(compute.VmmDriverCloudHypervisor): &chvmm.Manager{
 			BinPath:            *chBin,
-			CacheDir:           *chCacheDir,
+			ImageStore:         imageStore,
 			RunDir:             *chRunDir,
 			StorageConnections: connections,
 		},

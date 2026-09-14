@@ -8,6 +8,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/imagestore"
 )
 
 // resolveExecPath turns bin (as given to -firecracker-bin/-jailer-bin,
@@ -32,28 +34,20 @@ func jailChrootDir(chrootBaseDir, fcExecPath, vmID string) string {
 	return filepath.Join(chrootBaseDir, filepath.Base(fcExecPath), vmID, "root")
 }
 
-// placeReadOnlyResource copies src into dst (inside a jail chroot) with
-// world-readable permissions -- sufficient for the jail's uid/gid to read
-// it without needing an ownership change, which matters for src paths that
-// are shared/cached across VMs (this system's shared kernel-image cache):
-// chowning a shared file to one VM's jail uid would be fine today (every
-// VM's jail shares the same uid/gid, see Manager's doc comment) but copying
-// instead of chowning-in-place avoids relying on that not changing.
+// placeReadOnlyResource clones src into dst (inside a jail chroot, via
+// imagestore.CloneFile -- copy-on-write where the filesystem supports it,
+// a plain copy otherwise) with world-readable permissions -- sufficient for
+// the jail's uid/gid to read it without needing an ownership change, which
+// matters for src paths that are shared/cached across VMs (this system's
+// shared kernel-image cache): chowning a shared file to one VM's jail uid
+// would be fine today (every VM's jail shares the same uid/gid, see
+// Manager's doc comment) but cloning instead of chowning-in-place avoids
+// relying on that not changing.
 func placeReadOnlyResource(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
+	if err := imagestore.CloneFile(src, dst); err != nil {
 		return err
 	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := out.ReadFrom(in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
+	return os.Chmod(dst, 0o644)
 }
 
 // placeWritableResource is placeReadOnlyResource for a resource Firecracker

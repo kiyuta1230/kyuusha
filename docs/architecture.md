@@ -1422,6 +1422,106 @@ FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが
   固定カタログ自体を廃止したため（「設計原則: 命名はOpenStackを踏襲しない」節）、
   `driver_hint`として素直にspecへ持たせる形に変更した
 
+## イメージのローカル管理: containerdのcontent store/snapshotterへの移行検討（2026-09-14）
+
+### 現状の実装（このセクションが書かれた時点の実態）
+
+上記「`spec.driver_hint`によるドライバ切り替え」節までの記述はVMMの起動方式についてで、
+Imageの実バイト列をハイパーバイザー側でどう扱うかは別問題として積み残されていた。
+実際のコード（`internal/compute-agent/fcvmm/manager.go`・`chvmm/manager.go`）を
+確認すると、以下の素朴な実装になっている:
+
+- `ensureCached`が`ImageArtifact.url`を`http.Get`で取得し、`sha256(URLそのもの)`を
+  キーにローカルディスクへ保存する——**`digest`フィールドの検証は一切行われていない**。
+  [Image仕様](specs/image.md)が「実際にartifactを取得するハイパーバイザー側の責務
+  （未実装）」としてきたそのギャップが、今もそのまま残っている
+- キーがURL文字列のハッシュであってバイト列のdigestではないため、同じ中身のImageを
+  別URLで公開すると別キャッシュ扱いになる（重複排除が効かない）
+- **fcvmm/chvmmはそれぞれ独立したキャッシュディレクトリ・独立した`ensureCached`実装を
+  持つ**（chvmm側のコード自体が「`fc-cache`とは意図的に共有しない別ディレクトリ」と
+  コメントしている）。同じImageを両ドライバがそれぞれ二重にダウンロード・保持しうる
+- VM専用の書き込み可能コピーは`copyFile`による**完全バイトコピー**で、reflink/CoWでは
+  ない（本ドキュメント冒頭「ephemeralルートディスクの実体」節が構想していた
+  「VirtualMachineごとにcopy-on-writeクローン」は未実装）
+- エビクション（LRU等）は未実装——キャッシュは際限なく肥大化する
+- ピアフェッチ・Dragonfly連携も[Image仕様](specs/image.md)「未実装」節の通り未着手
+
+### 決定: 2トラックに分ける（QEMU jailer検討時と同じ分割方針）
+
+ローカル層（1台のハイパーバイザー内で完結する話）と配送層（フリート全体にどう
+広げるか）は別の問題であり、後者（Dragonfly/Spegel導入）は前回の議論
+（[Image仕様](specs/image.md)「未実装」節、Dragonfly導入の節）から着手していない。
+今回はまず前者だけを独立した改善として進める。
+
+**Track 1（今回対象。低リスク）**: ローカルの取得・保存・展開ロジックを、fcvmm/chvmm
+共有の1パッケージへ統合する。
+
+### 追記（2026-09-14、実装時に判明）: containerd自体は輸入せず、自前の小さなパッケージにした
+
+当初「containerdの`content.Store`/`snapshots`パッケージへ置き換える」という方針で
+書いたが、実装に入る前に`github.com/containerd/containerd/content/local`を実際に
+試験的にモジュール依存として取り込んで検証したところ、以下が判明し方針を変えた:
+
+- **軽量な組み込みライブラリという想定が外れた**: v1系の`content/local`は、古い
+  固定バージョンのgrpc（`v1.59.0`——kyuushaが使う`v1.83.2`と衝突しうる）・
+  Windows専用の`Microsoft/hcsshim`・`containerd/cgroups`など、約30個の
+  無関係に重い推移的依存を連れてくる。v2系ではcontent/localがプラグイン登録
+  システム（`plugins/content/local`）に組み込まれ、デーモン無しの単純な埋め込み
+  ライブラリとしてはむしろ使いにくい構造になっていた
+- **snapshotter抽象はそもそも対象が合っていない**: kyuushaの`Image.spec.rootfs`は
+  OCIレイヤーのような複数ファイルのディレクトリツリーではなく、`mkfs.ext4 -d`で
+  作る**単一の生ディスクイメージファイル**（`docker/Dockerfile`の`image-assets`
+  ステージ参照）。containerdのsnapshotterはディレクトリツリーをoverlay mountで
+  合成する仕組みで、1ファイルをCoW複製したいkyuushaの要求には元々噛み合わない
+
+「digestで検証されたローカルキャッシュ＋VM専用CoWコピー」は、本ドキュメント
+「難しい分散システムの問題は自前で作らず、CNCF濃度の高い既製品に乗る」の基準に
+照らしても**自作が妥当な規模**（依存が軽く、実装も数百行程度）と判断し、containerdは
+輸入しないことにした。代わりに実装したのは:
+
+- **`internal/compute-agent/imagestore`**: digestをキーにしたローカルキャッシュ
+  （`Dir/blobs/sha256/<hex>`）。ダウンロードしながらSHA-256をストリーミング計算し、
+  宣言された`digest`と一致してから初めて`os.Rename`で確定パスへ配置する（不一致なら
+  破棄してエラー）——ここで初めて実際のdigest検証が入る（従来のギャップを埋める）。
+  `digest`が空（既存の互換パス）の場合はURL文字列のハッシュをキーにした旧来の
+  未検証キャッシュへフォールバックする。並行フェッチは単一のグローバルロックではなく
+  キャッシュキー単位のロックで排他し、無関係なImage同士の並行フェッチを妨げない
+- **`imagestore.CloneFile`**: VM専用の書き込み可能コピーを、Linuxの`FICLONE`
+  ioctl（`golang.org/x/sys/unix.IoctlFileClone`、既存の依存に追加コストなし）で
+  reflinkする。対応していないファイルシステム（ext4等）や別ファイルシステム間では
+  自動的に通常コピーへフォールバックする
+- `fcvmm`/`chvmm`の重複した`ensureCached`/`copyFile`実装を削除し、両ドライバが
+  1つの`imagestore.Store`（`cmd/compute-agent/main.go`で1つだけ構築し両Managerへ
+  注入、`-image-cache-dir`、旧`-fc-cache-dir`/`-ch-cache-dir`を統合・置き換え）を
+  共有するようにした——同じdigestのImageを両ドライバが二重に保持しなくなる
+- digestはproto変更なしで届く: `ImageArtifact.digest`を`internal/compute/
+  reconciler.go`が`CreateCommand.kernel_digest`/`rootfs_digest`（NATS）へ、
+  `internal/compute-agent/agent.go`が`vmm.BootSpec.KernelDigest`/`RootfsDigest`へ
+  そのまま中継するだけで済んだ
+- **変更しないもの**: proto（`ImageArtifact{url, digest}`はそのまま）、
+  `internal/image`サービス本体（digest必須化はしていない——空なら上記の
+  未検証フォールバックに乗る）、CLI（`kyuusha image build`含む）——
+  compute-agent内部の実装差し替えに閉じる
+
+**Track 2（将来、Dragonfly/Spegel導入とセットで判断）**: `ImageArtifact`を実際の
+OCIレジストリ参照に変える、より広い変更。DragonflyのMirror/dfdaemonもSpegelも
+HTTP(S)の**レジストリプロトコル**をインターセプトする設計であり、任意のURLへの
+素朴なGETを横取りする汎用プロキシではない——P2P配送の恩恵を受けるには、Imageが
+実際のOCIアーティファクトとしてレジストリ経由で配布されている必要がある。
+Track 1を完了しても、フリート全体にとって初めての巨大Imageを大量のハイパーバイザーが
+同時に必要とする「thundering herd」問題（上記「ハイパーバイザー間の軽量ピアフェッチ」
+節）は未解決のまま残る——Track 2を経て初めてDragonfly/Spegelの効果が乗る。
+
+Track 2をTrack 1と切り離す理由: `ImageArtifact`のOCI化はproto・`internal/image`の
+Create時バリデーション・`kyuusha image build`まで波及する広い変更で、Track 1と
+結合するとレビュー・検証が難しくなる。Track 1だけでも独立した価値
+（digest検証の実装、fcvmm/chvmm間のコード重複解消、CoW化）があるため、まず
+Track 1を完了・実運用で確認してから、Track 2の要否（Dragonfly級のP2Pが実際に
+必要なスケールに達しているか）を判断する。
+
+未決事項は[docs/open-questions.md](open-questions.md)「イメージのローカル管理を
+containerdへ移行する際の未決事項」へ転記した。
+
 ## block-storageのバックエンド抽象化
 
 ### 前提: ローカルディスクでは`Volume`の存在意義が成立しない

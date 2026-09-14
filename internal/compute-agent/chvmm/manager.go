@@ -23,12 +23,8 @@ package chvmm
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +34,7 @@ import (
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/imagestore"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/netsetup"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
@@ -75,13 +72,14 @@ type Manager struct {
 	// BinPath is the cloud-hypervisor binary to exec. Defaults to
 	// "cloud-hypervisor" (resolved via $PATH) if empty.
 	BinPath string
-	// CacheDir holds downloaded kernel/rootfs artifacts, keyed by a hash of
-	// their URL -- shared read-only across all VMs booted from the same
-	// Image. Kept separate from fcvmm's own cache dir (not because the
-	// artifacts differ -- a KERNEL_ROOTFS Image is identical either way --
-	// but so each driver's on-disk state stays independently inspectable.
-	// Defaults to /var/lib/kyuusha/ch-cache.
-	CacheDir string
+	// ImageStore caches downloaded kernel/rootfs artifacts, digest-verified
+	// and shared read-only across every VM this compute-agent boots --
+	// including fcvmm's, since cmd/compute-agent/main.go constructs one
+	// Store and hands it to both drivers (a KERNEL_ROOTFS Image is
+	// identical either way, so there was never a reason for each driver to
+	// keep its own separate, un-deduplicated copy). Must be set; a nil
+	// ImageStore panics the first time Boot needs to fetch anything.
+	ImageStore *imagestore.Store
 	// RunDir holds one subdirectory per running VM (its writable rootfs
 	// copy, console log, and cloud-init seed disk if any). Defaults to
 	// /var/lib/kyuusha/ch-run.
@@ -92,8 +90,6 @@ type Manager struct {
 	// means this host has none -- any VM with Volumes then fails to boot,
 	// same as a missing kernel/rootfs URL would.
 	StorageConnections volumeref.Connections
-
-	downloadMu sync.Mutex // serializes ensureCached; fine at playground scale
 
 	mu      sync.Mutex
 	running map[string]*runningVM
@@ -143,13 +139,6 @@ func (m *Manager) binPath() string {
 		return m.BinPath
 	}
 	return "cloud-hypervisor"
-}
-
-func (m *Manager) cacheDir() string {
-	if m.CacheDir != "" {
-		return m.CacheDir
-	}
-	return "/var/lib/kyuusha/ch-cache"
 }
 
 func (m *Manager) runDir() string {
@@ -261,14 +250,11 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 	m.mu.Unlock()
 
-	if err := os.MkdirAll(m.cacheDir(), 0o755); err != nil {
-		return nil, fmt.Errorf("chvmm: create cache dir: %w", err)
-	}
-	kernelPath, err := m.ensureCached(ctx, spec.KernelURL)
+	kernelPath, err := m.ImageStore.EnsureCached(ctx, spec.KernelURL, spec.KernelDigest)
 	if err != nil {
 		return nil, fmt.Errorf("chvmm: fetch kernel: %w", err)
 	}
-	masterRootfs, err := m.ensureCached(ctx, spec.RootfsURL)
+	masterRootfs, err := m.ImageStore.EnsureCached(ctx, spec.RootfsURL, spec.RootfsDigest)
 	if err != nil {
 		return nil, fmt.Errorf("chvmm: fetch rootfs: %w", err)
 	}
@@ -288,7 +274,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// guest's own writes since its last boot survive the restart.
 	rootfsCopy := filepath.Join(vmDir, "rootfs.raw")
 	if _, err := os.Stat(rootfsCopy); err != nil {
-		if err := copyFile(masterRootfs, rootfsCopy); err != nil {
+		if err := imagestore.CloneFile(masterRootfs, rootfsCopy); err != nil {
 			return nil, fmt.Errorf("chvmm: copy rootfs: %w", err)
 		}
 	}
@@ -506,72 +492,4 @@ func (m *Manager) Destroy(vmID string) {
 	if err := os.RemoveAll(filepath.Join(m.runDir(), vmID)); err != nil {
 		slog.Warn("chvmm: destroy: remove run dir failed", "vm_id", vmID, "err", err)
 	}
-}
-
-// ensureCached downloads rawURL into CacheDir if not already present, keyed
-// by a hash of the URL itself -- identical in spirit to fcvmm's own
-// ensureCached (deliberately not shared: each driver owns its own cache
-// directory and its own small download helper, so neither depends on the
-// other's internals).
-func (m *Manager) ensureCached(ctx context.Context, rawURL string) (string, error) {
-	if rawURL == "" {
-		return "", fmt.Errorf("empty artifact URL")
-	}
-	sum := sha256.Sum256([]byte(rawURL))
-	dest := filepath.Join(m.cacheDir(), hex.EncodeToString(sum[:16]))
-
-	m.downloadMu.Lock()
-	defer m.downloadMu.Unlock()
-
-	if _, err := os.Stat(dest); err == nil {
-		return dest, nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("fetch %s: %w", rawURL, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("fetch %s: unexpected status %s", rawURL, resp.Status)
-	}
-
-	tmp := dest + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return "", fmt.Errorf("write %s: %w", dest, err)
-	}
-	if err := f.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		return "", err
-	}
-	return dest, nil
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }

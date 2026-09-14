@@ -27,6 +27,7 @@ VMが`Scheduled`→`Provisioning`へ遷移する際（[VMスケジュール仕�
 |---|---|
 | `driver_hint` | `VirtualMachineSpec.driver_hint`（未指定なら`FIRECRACKER`） |
 | `kernel_url` / `rootfs_url` | 解決したImageの`spec.kernel.url` / `spec.rootfs.url`（`QCOW2`の場合は空） |
+| `kernel_digest` / `rootfs_digest` | 解決したImageの`spec.kernel.digest` / `spec.rootfs.digest`。compute-agentの`internal/compute-agent/imagestore`がダウンロード後のバイト列をこれと照合する（空の場合は未検証のまま従来通りキャッシュする。[Firecracker起動仕様](firecracker-boot.md)「compute-agent側の起動処理」参照） |
 | `boot_args` | Imageの`spec.boot_args`（空ならcompute-agent側のデフォルトを使う。デフォルト値自体はドライバごとに違う——[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)「boot_argsのデフォルトがFirecrackerと違う理由」参照） |
 | `interfaces` | `network_interfaces`から作られたNetworkInterface+そのSubnetの情報（[network.md](network.md)参照）。空配列ならネットワークなしで起動する |
 | `volumes` | `volumes`から作られたVolumeAttachmentのうち、実際に`Attached`まで到達したものについて、そのVolume自身が持つ`protocol`/`storage_connection`/`identifier`（[Volume仕様](volume.md)参照。kyuushaはここで何もログイン/マウントしない——compute-agentが起動時にこの情報から既に見えているデバイス/ファイルを探すだけ）。空配列ならVolumeなしで起動する——アタッチが`Pending`のまま（排他制御待ち）だったものはここに含まれない |
@@ -213,11 +214,18 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
 
 ## この実装がカバーしないもの（共通）
 
-- ダウンロードした`kernel_url`/`rootfs_url`の内容のdigest検証
 - `user_data`の機密情報対応（保存時暗号化、監査ログからの除外。
   `docs/architecture.md`「UserData注入」の「機密情報の扱いに関する注記」参照）
 - 本物のcloud-initを動かすゲストでの動作確認（playgroundの最小Alpineゲストには
   cloud-init自体が入っていないため、seed diskが正しく届くことまでしか確認していない）
+- **VMのリサイズ（vcpu/memory_mbの変更）**: `VirtualMachineSpec.vcpu`/`memory_mb`は
+  作成後不変。`Update` RPC自体は存在するが、spec側のこれらのフィールドが変わることは
+  想定しておらず（`internal/compute/service.go`の`Service.Update`のコメント参照）、
+  Hypervisor側の予約(`allocated_vcpu`/`allocated_memory_mb`)もVMM側の実プロセスも
+  追従しない。リサイズしたい場合は現状、VMを作り直す以外の手段がない
+- **イメージローカルキャッシュのエビクション**: `internal/compute-agent/imagestore`は
+  取得したdigestを際限なく保持し続ける——LRU等の削除ロジックがまだ無い
+  （[docs/open-questions.md](../open-questions.md)「イメージのローカル管理」参照）
 
 プロセス隔離もStop/Start（一時停止/再開）ももう「共通の未実装事項」ではない
 ——jailer相当の隔離は`driver_hint=FIRECRACKER`が実jailer(chroot+uid/gid drop)、

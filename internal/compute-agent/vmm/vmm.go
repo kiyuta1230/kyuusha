@@ -96,11 +96,19 @@ type BootSpec struct {
 	// value here since a VolumeAttachment lives in its VM's tenant, but
 	// exists for that struct's own, narrower reason). Carried only for
 	// Running's RunningVM.TenantID label; no driver otherwise interprets it.
-	TenantID          string
-	VCPU              int32
-	MemoryMB          int64
-	KernelURL         string
-	RootfsURL         string
+	TenantID  string
+	VCPU      int32
+	MemoryMB  int64
+	KernelURL string
+	RootfsURL string
+	// KernelDigest/RootfsDigest are the Image's own spec.kernel.digest/
+	// spec.rootfs.digest ("sha256:<hex>", see docs/specs/image.md), verified
+	// against the actually-downloaded bytes by internal/compute-agent/
+	// imagestore.Store.EnsureCached before a driver ever boots from them.
+	// Empty for an Image created before a digest was supplied -- see that
+	// method's doc comment for the (unverified) fallback this triggers.
+	KernelDigest      string
+	RootfsDigest      string
 	BootArgs          string
 	NetworkInterfaces []NetIface
 	// UserData is spec.user_data verbatim (see docs/architecture.md

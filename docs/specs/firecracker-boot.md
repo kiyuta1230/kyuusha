@@ -22,11 +22,14 @@ Firecrackerプロセス自体は必ずjailer経由で起動する（chroot+uid/g
 
 ## compute-agent側の起動処理（`internal/compute-agent/fcvmm`）
 
-1. **キャッシュ確認**: `kernel_url`/`rootfs_url`それぞれをURL文字列のSHA-256でキー化し、
-   `-fc-cache-dir`（既定`/var/lib/kyuusha/fc-cache`）に未取得ならHTTP GETで取得する。
-   同一Imageから起動する複数VMで共有される（**digest検証はしない** -- Imageの`digest`
-   フィールドはオプショナルなため。[Image仕様](image.md)の「digest検証は誰が読む時にするか」
-   の方針通り、ここでも検証しない）
+1. **キャッシュ確認**: `kernel_url`/`rootfs_url`を`internal/compute-agent/imagestore.Store`
+   （`-image-cache-dir`、既定`/var/lib/kyuusha/image-cache`）へ渡す。`kernel_digest`/
+   `rootfs_digest`（Imageの`digest`フィールド由来）が設定されていれば、ダウンロードした
+   バイト列をそのdigestで検証してから`sha256:<hex>`をキーにキャッシュする——digestが
+   一致しなければ起動自体を失敗させる。空の場合は従来通りURL文字列のハッシュをキーに
+   キャッシュする（未検証、後方互換のためのフォールバック）。このキャッシュは
+   `driver_hint=CLOUD_HYPERVISOR`（`internal/compute-agent/chvmm`）とも共有される
+   （同じImageを2ドライバが別々に保持することはない）
 2. **jailの用意**: `-fc-jail-chroot-base-dir/firecracker/<vm_id>/root`
    （jailer自身が使うのと全く同じ計算式でこのパスを事前に求める）を作り、
    Firecrackerが参照するリソースを全てその中へ置く——kernelイメージのコピー
@@ -86,7 +89,7 @@ jailer統合は**実装済み**: `driver_hint=FIRECRACKER`のVMは必ずFirecrac
 | フラグ | 既定値 | 説明 |
 |---|---|---|
 | `-firecracker-bin` | `firecracker`（`$PATH`から解決） | jailerがexecするFirecrackerバイナリ |
-| `-fc-cache-dir` | `/var/lib/kyuusha/fc-cache` | ダウンロード済みkernel/rootfsの共有キャッシュ |
+| `-image-cache-dir` | `/var/lib/kyuusha/image-cache` | ダウンロード済みkernel/rootfsの共有キャッシュ（`driver_hint=CLOUD_HYPERVISOR`とも共有、[internal/compute-agent/imagestore]） |
 | `-fc-run-dir` | `/var/lib/kyuusha/fc-run` | VMごとのconsole.log（それ以外は全てjailの中、下記参照） |
 | `-fc-jailer-bin` | `jailer`（`$PATH`から解決） | 全`driver_hint=FIRECRACKER` VMが経由するjailerバイナリ |
 | `-fc-jail-chroot-base-dir` | `/var/lib/kyuusha/fc-jail` | jailerの`--chroot-base-dir`。`<これ>/firecracker/<vm_id>/root`が各VMのjail |
@@ -119,6 +122,7 @@ docker-compose.yml側の設定は要らない——jailer自身が要求するch
 - クロスHypervisorのネットワーク疎通（同じHypervisor内のtap+ブリッジのみ。
   [network.md](network.md)「tap配線とローカルネットワーク」参照）
 
-ドライバを問わず共通の未実装事項（digest検証、`user_data`の機密情報対応、
+ドライバを問わず共通の未実装事項（`user_data`の機密情報対応、
 本物のcloud-initでの動作確認）は
-[VirtualMachine仕様](virtual-machine.md)「この実装がカバーしないもの（共通）」参照。
+[VirtualMachine仕様](virtual-machine.md)「この実装がカバーしないもの（共通）」参照
+（digest検証は実装済み——上記「compute-agent側の起動処理」参照）。

@@ -97,7 +97,15 @@ type CreateCommand struct {
 	DriverHint string `json:"driver_hint"`
 	KernelURL  string `json:"kernel_url,omitempty"`
 	RootfsURL  string `json:"rootfs_url,omitempty"`
-	BootArgs   string `json:"boot_args,omitempty"`
+	// KernelDigest/RootfsDigest are the Image's spec.kernel.digest/
+	// spec.rootfs.digest verbatim ("sha256:<hex>", see docs/specs/
+	// image.md) -- compute-agent's internal/compute-agent/imagestore
+	// verifies the downloaded bytes against these before caching them.
+	// Empty for an Image that never had one set, same as KernelURL/
+	// RootfsURL being empty for a QCOW2 Image.
+	KernelDigest string `json:"kernel_digest,omitempty"`
+	RootfsDigest string `json:"rootfs_digest,omitempty"`
+	BootArgs     string `json:"boot_args,omitempty"`
 	// Interfaces is populated by reconciler.go's PhaseScheduled branch from
 	// the NetworkInterfaces it just created (see internal/compute/
 	// network.go's createNetworkInterfaces) -- same reasoning as
