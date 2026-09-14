@@ -1,7 +1,7 @@
 # kyuusha アーキテクチャ設計（ドラフト v0.2）
 
 > ステータス: 実装は進行中（現状は[specs/](specs/README.md)、なぜこの設計かの
-> 要約は[why-not-openstack.md](why-not-openstack.md)を参照）。本ドキュメントは
+> 要約は[why-kyuusha.md](why-kyuusha.md)を参照）。本ドキュメントは
 > 設計判断の経緯・議論・トレードオフの記録であり、更新は都度ではなく折に触れて行う。
 > 目的: OpenStack同様のマイクロサービス分割によるIaaSの全体像を、他プロジェクト調査目的でまず固める。
 
@@ -1804,7 +1804,7 @@ VirtualMachine/Hypervisor側のHA（`SELF_HEAL`、フェンシング）は丁寧
 
 **なぜetcdか**: `internal/resource.Store`の設計（`spec`/`status`分離、`resource_version`
 による楽観的並行性制御、`Watch`によるバックログ再生+ライブ配信）は、そもそも
-Kubernetesの`apiserver`+`etcd`の設計をそのまま踏襲したもの（[why-not-openstack.md](why-not-openstack.md)
+Kubernetesの`apiserver`+`etcd`の設計をそのまま踏襲したもの（[why-kyuusha.md](why-kyuusha.md)
 参照）。etcdは**まさにこの意味論のために作られたKVS**で、次の点がほぼ1対1で対応する:
 
 - etcdの`mod_revision`はキーごとではなく**キースペース全体で単調増加するグローバルな
