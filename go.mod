@@ -8,6 +8,8 @@ require (
 	github.com/nats-io/nats-server/v2 v2.14.6
 	github.com/nats-io/nats.go v1.53.1
 	github.com/open-policy-agent/opa v1.20.2
+	github.com/opencontainers/go-digest v1.0.0
+	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.24.1
 	go.etcd.io/etcd/api/v3 v3.7.1
 	go.etcd.io/etcd/client/v3 v3.7.1
@@ -23,6 +25,7 @@ require (
 	golang.org/x/sys v0.47.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
+	oras.land/oras-go/v2 v2.6.2
 )
 
 require (

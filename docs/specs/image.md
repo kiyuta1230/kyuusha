@@ -41,12 +41,37 @@ sequenceDiagram
 
 - **同期バリデーション（Create時に即reject）**: `format`に対応するartifactが揃っているか
   （`KERNEL_ROOTFS`なら`kernel.url`/`rootfs.url`両方、`QCOW2`なら`disk.url`）
-- **非同期バリデーション**: 提供されたURLへのHTTP HEADのみ（`軽く検証する程度`。実際のバイト列は
-  取得しない、digestの検証もしない）。到達不可なら`Error`+`Condition{type: URLUnreachable}`
+- **非同期バリデーション**: `url`のスキームで分岐する（下記「OCIレジストリ参照（Track 2）」参照）
+  - `https://`/`http://`: 従来通りHTTP HEADのみ（軽く検証する程度。実際のバイト列は取得しない、
+    digestの検証もしない）。到達不可なら`Error`+`Condition{type: URLUnreachable}`
+  - `oci://`/`oci+http://`: OCIレジストリのマニフェスト解決（`oras-go/v2`の`Resolve`、
+    マニフェスト本体・blobは取得しない）。解決できなければ同じく`Error`+
+    `Condition{type: URLUnreachable}`
 - image.Service自体はdigestの検証を行わない。実際にartifactを取得するハイパーバイザー側の
   責務——`internal/compute-agent/imagestore.Store`がVM起動時のダウンロードをこの
   `digest`と照合する（`spec.kernel.digest`/`spec.rootfs.digest`が空でない場合のみ。
   [Firecracker起動仕様](firecracker-boot.md)「compute-agent側の起動処理」参照）
+
+## OCIレジストリ参照（Track 2、`docs/architecture.md`「Track 2実装方針」参照）
+
+`spec.kernel`/`spec.rootfs`/`spec.disk`の`url`は、プレーンなHTTP(S) URLに加えて
+OCIレジストリ参照も許容する（proto変更なし、`url`フィールドの意味を拡張しただけ）。
+
+- `oci://<registry>/<repository>:<tag-or-digest>` — HTTPS経由のOCIレジストリ
+- `oci+http://<registry>/<repository>:<tag-or-digest>` — 平文HTTP経由（TLSを前面に
+  置かないレジストリ向け。playgroundの`registry`サービスがこれ）
+
+kyuushaのkernel/rootfs/qcow2はそれぞれ**1レイヤーのOCIアーティファクト**として
+配布される想定（OCIレイヤーをコンテナのroot filesystemとして展開するのではなく、
+生のバイナリ/ディスクイメージ1ファイルをそのままレイヤーに収める。KubeVirtの
+`containerDisk`と同じ発想）。`internal/compute-agent/imagestore`（VM起動時の
+実取得）・`internal/image`（Create時の到達性チェック）ともに、マニフェストの
+`layers`が1つであることを前提とする——複数レイヤーのアーティファクトは
+エラーになる。
+
+pullクライアントは`oras.land/oras-go/v2`を採用（実際に`go-containerregistry`・
+containerdの`remotes/docker`と依存の重さを比較した上での選定。
+`docs/architecture.md`参照）。
 
 ## computeとの連携（VM Create時）
 

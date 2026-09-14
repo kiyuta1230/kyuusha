@@ -153,23 +153,35 @@ minijail/nsjailをkyuusha本体へ直接統合する」方針（[QEMU jailer設�
 「QEMUからcloud-hypervisorへの置き換え」、および上記2つの旧ドキュメント（どちらも
 冒頭に撤回済みの注記あり、経緯の記録として残している）を参照。
 
-## イメージのローカル管理: Track 1実装済み、残る未決事項（2026-09-14）
+## イメージのローカル管理/OCIレジストリ対応: Track 1・2実装済み、残る未決事項（2026-09-14）
 
-`docs/architecture.md`「イメージのローカル管理」Track 1を実装した
+`docs/architecture.md`「イメージのローカル管理」Track 1
 （`internal/compute-agent/imagestore`、digest検証付きの共有キャッシュ＋
-reflink CoWコピー、containerd自体は輸入せず自前実装——同節の追記参照）。
-overlayfs以外のフォールバックは`CloneFile`が`FICLONE`失敗時に通常コピーへ
-自動フォールバックする形で実装時に解決済み。残る未決事項:
+reflink CoWコピー、containerd自体は輸入せず自前実装）と、Track 2
+（`oras-go/v2`によるOCIレジストリ参照対応、`internal/image`のOCI到達性チェック、
+playgroundの`registry`サービス＋`ocitool`によるseed）の両方を実装し、
+playgroundで実VM起動まで確認済み（HTTP経由・OCI経由どちらも同じ
+`blobs/sha256/<hex>`パスに同じdigestでキャッシュされ、実Firecracker起動・
+ゲストブート成功）。overlayfs以外のフォールバックは`CloneFile`が`FICLONE`
+失敗時に通常コピーへ自動フォールバックする形で実装時に解決済み。残る未決事項:
 
 - **キャッシュのエビクション（LRU等）が未実装**: `imagestore.Store`は
   取得したdigestを際限なく保持し続ける——削除するロジックがまだ無い
   （旧ドキュメントが挙げていた「containerdのGCモデルとの整合」という論点自体は
   containerdを使わなくなったため消えたが、「いつ・何を削除するか」を自前で
   設計する必要は残っている）
-- **Track 2（`ImageArtifact`のOCI化、Dragonfly/Spegel導入）着手のタイミング判断基準**:
-  「Dragonfly級のP2Pが実際に必要なスケールに達した」と何をもって判断するか
-  （例: playground規模を超えた実クラスタでのorigin負荷の実測、特定テナントからの
-  バルクVM作成要求の頻度、等）。今のところ具体的な閾値は未定義
+- **`kyuusha image build`は依然未実装**: `playground/ocitool`はplayground
+  検証専用のscaffolding（既にビルド済みの2ファイルをpushするだけ）であり、
+  「Dockerfile/OCIイメージのrootfsレイヤーをext4に変換して発行する」という
+  本来の`kyuusha image build`（[Image仕様](specs/image.md)、
+  [docs/architecture.md](architecture.md)「イメージ作成体験」参照）はまだ
+  存在しない
+- **Track 3（Dragonfly/Spegel等のP2P導入）着手のタイミング判断基準**: Track 2
+  完了により技術的な前提（レジストリプロトコル経由の配布）は揃ったが、実際に
+  P2Pを導入するかは別判断。「Dragonfly級のP2Pが実際に必要なスケールに達した」と
+  何をもって判断するか（例: playground規模を超えた実クラスタでのorigin負荷の
+  実測、特定テナントからのバルクVM作成要求の頻度、等）。今のところ具体的な
+  閾値は未定義
 - **既存Image（`digest`が空のもの）の扱い**: `imagestore`は`digest`が空なら
   未検証の旧キャッシュパスへフォールバックする後方互換動作を持つが、
   `internal/image`のCreate時バリデーションを将来`digest`必須にするかどうかは

@@ -353,6 +353,34 @@ services:
       dockerfile: docker/Dockerfile
       target: image-assets-server
 
+  # OCI registry for Track 2's oci://-scheme Image path (see
+  # docs/architecture.md「Track 2実装方針」) -- the reference distribution
+  # implementation, plain HTTP (no TLS), not reachable from the host, only
+  # from compute-agent/image containers and image-assets-oci-seed below.
+  registry:
+    image: registry:2
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:5000/v2/"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # One-shot: pushes image-assets' kernel/rootfs into registry as OCI
+  # artifacts (see playground/ocitool/main.go) so an oci+http://registry:5000/...
+  # Image reference actually resolves. Exits 0 once done; docker compose ps
+  # correctly shows it as "Exited (0)" afterward, not an error.
+  image-assets-oci-seed:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: ocitool
+    command: ["-registry=registry:5000", "-assets=http://image-assets"]
+    depends_on:
+      registry:
+        condition: service_healthy
+      image-assets:
+        condition: service_started
+
   compute-agent-1:
     build:
       context: ..

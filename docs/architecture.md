@@ -1522,6 +1522,91 @@ Track 1を完了・実運用で確認してから、Track 2の要否（Dragonfly
 未決事項は[docs/open-questions.md](open-questions.md)「イメージのローカル管理を
 containerdへ移行する際の未決事項」へ転記した。
 
+### Track 2実装方針（2026-09-14 追記）: 3トラックへ再分割
+
+Track 1の実運用確認（playgroundでの実VM起動、digest検証・不一致拒否とも確認済み）が
+完了したため、Track 2に着手する。着手にあたり、Track 2自体をさらに2つに分ける
+——**OCIレジストリ化（Track 2）とDragonfly/Spegel等のP2P導入（Track 3）**。
+理由はTrack 1/2を分けた時と同じ: OCI化だけでも独立した価値（後述）があり、
+P2P導入は別途「実際に必要なスケールに達したか」の判断を要するため。
+
+**OCIプルクライアントの選定**: Track 1のcontainerd検証と同じ要領で、実際に
+モジュール依存として試して比較した。
+
+| ライブラリ | `go.sum`行数 | 主な依存 |
+|---|---|---|
+| `oras.land/oras-go/v2` | **8行** | `opencontainers/go-digest`・`image-spec`・`x/sync`のみ |
+| `google/go-containerregistry` | 30行 | `docker/cli`（認証情報ヘルパー用）・`logrus`等 |
+| containerd `core/remotes/docker`（v2） | 検証不可 | kyuushaの現行Goツールチェイン（1.26.0）が要求する`go >= 1.26.3`を満たさない。Track 1で確認した重いエコシステムの一部 |
+
+**`oras-go/v2`を採用**。依存が最小であることに加え、ORAS自体が「コンテナではない
+任意のアーティファクトをOCIレジストリで配布する」ために作られたツールで、
+カーネル/rootfs/qcow2という非コンテナアーティファクトを配るkyuushaの用途と
+設計思想が一致する。
+
+**proto変更なし**: `ImageArtifact{url, digest}`の形はそのまま、`url`フィールドの
+意味を拡張する。`oci://registry.example.com/repo:tag`（または
+`oci://registry.example.com/repo@sha256:...`）というスキームを新たに許容し、
+`https://`の素朴なURLと同じフィールドで共存させる。`internal/compute-agent/
+imagestore`は`url`のスキームで分岐するだけで、Track 1で作った content-addressed
+なローカルキャッシュ層（`blobs/sha256/<hex>`、digest検証、CloneFileによる
+per-VM CoWコピー）はそのまま再利用する——変わるのは「取得元」のみで、
+取得後の扱いはTrack 1の実装を一切変更しない。
+
+- `https://` → 既存通り`http.Get`
+- `oci://` → `oras-go/v2`でマニフェスト解決→blob pull。`digest`フィールドが
+  設定されていれば、取得後のバイト列をこれと照合する（`oci://repo@sha256:...`
+  という digest-pinned参照ならレジストリ自身のcontent-addressed pullで
+  実質二重検証になるが、害はないためそのまま行う）
+
+**`internal/image`側の変更**: Create時の非同期バリデーション（現状はURL到達性の
+HTTP HEAD）が、`url`のスキームに応じてOCIレジストリのマニフェスト解決へ分岐する
+必要がある——`internal/image`自体も`oras-go/v2`（軽量なので追加コストは小さい）
+に依存することになる。同期バリデーション（`format`と提供されたartifactの整合性）は
+変更不要。
+
+**`kyuusha image build`（未実装のCLIツール）の変更**: 「OCIレイヤーをext4に
+フラット化してURLとして公開する」という当初構想から、「フラット化した後、
+`oras-go/v2`で実際にレジストリへpushし、`oci://`参照を`Image`リソースの
+Createに渡す」という形に変わる。
+
+**playgroundへの追加**: `registry:2`（Docker/CNCF公式のリファレンス実装、
+distribution）を新しいdocker-composeサービスとして追加し、`image-assets`の
+ビルド時に既存のkernel/rootfsテストアセットをそこへ`oras push`する。既存の
+`https://`経由Imageと、新しい`oci://`経由Imageの両方をplaygroundで検証できる
+状態にする。
+
+**Track 3（Dragonfly/Spegel導入）は今回スコープ外のまま**: Track 2が完了すれば
+技術的な前提（レジストリプロトコル経由の配布）は揃うが、実際に導入するかは
+別途「Dragonfly級のP2Pが必要なスケールに達したか」の判断を待つ
+（[docs/open-questions.md](open-questions.md)参照）。
+
+### 追記（2026-09-14）: Track 2実装完了・playgroundでの実証結果
+
+上記方針通り実装し、playgroundで実VM起動まで確認した。
+
+- `internal/compute-agent/imagestore`が`oci://`/`oci+http://`スキームを
+  `oras-go/v2`経由で解決し、マニフェストのlayers[0]をfetch——digest検証・
+  content-addressedキャッシュ（`blobs/sha256/<hex>`）はTrack 1のローカル層を
+  そのまま再利用し、変更していない
+- `internal/image`のCreate時非同期バリデーションも同じスキーム判定で分岐し、
+  `oras.Resolve`によるマニフェスト解決のみ（blobは取得しない）で到達性を確認
+- playgroundに`registry`サービス（`registry:2`、平文HTTP）と
+  `playground/ocitool`（既存のkernel/rootfsテストアセットを単一レイヤーの
+  OCIアーティファクトとしてpushするだけの、`kyuusha image build`の
+  scaffolding版）を追加。`docker/Dockerfile`に`ocitool`ステージを追加し、
+  `docker-compose.yml`の`image-assets-oci-seed`が起動時に自動でpushする
+- 実機確認: `oci+http://registry:5000/kyuusha/vmlinux:v1`・
+  `.../kyuusha/rootfs:v1`を参照するImageを作成→`Ready`まで到達→VM作成→
+  `Running`まで到達→コンソールで`kyuusha: guest booted OK`を確認。
+  compute-agent側のキャッシュを見ると、HTTP経由で取得した場合と全く同じ
+  `blobs/sha256/<hex>`パス・同じdigestで保存されており、Track 1のローカル層が
+  設計通りTrack 2からも再利用されていることを確認した
+
+残る未決事項は[docs/open-questions.md](open-questions.md)「イメージの
+ローカル管理/OCIレジストリ対応」参照（`kyuusha image build`本体は未実装、
+エビクション未実装、Track 3着手基準は引き続き未定義）。
+
 ## block-storageのバックエンド抽象化
 
 ### 前提: ローカルディスクでは`Volume`の存在意義が成立しない

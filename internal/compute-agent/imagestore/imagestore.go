@@ -84,18 +84,11 @@ func (s *Store) EnsureCached(ctx context.Context, url, digest string) (string, e
 		return "", fmt.Errorf("imagestore: create cache dir: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := http.DefaultClient.Do(req)
+	rc, err := s.open(ctx, url)
 	if err != nil {
 		return "", fmt.Errorf("imagestore: fetch %s: %w", url, err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("imagestore: fetch %s: unexpected status %s", url, resp.Status)
-	}
+	defer rc.Close()
 
 	tmp := dest + ".tmp"
 	f, err := os.Create(tmp)
@@ -103,10 +96,10 @@ func (s *Store) EnsureCached(ctx context.Context, url, digest string) (string, e
 		return "", err
 	}
 
-	var body io.Reader = resp.Body
+	var body io.Reader = rc
 	h := sha256.New()
 	if digest != "" {
-		body = io.TeeReader(resp.Body, h)
+		body = io.TeeReader(rc, h)
 	}
 	if _, err := io.Copy(f, body); err != nil {
 		f.Close()
@@ -131,6 +124,50 @@ func (s *Store) EnsureCached(ctx context.Context, url, digest string) (string, e
 		return "", fmt.Errorf("imagestore: finalize %s: %w", dest, err)
 	}
 	return dest, nil
+}
+
+// open dispatches url to whichever transport its scheme names and returns a
+// stream of the artifact's raw bytes -- EnsureCached treats the result
+// identically regardless of which one served it (hash while streaming,
+// verify against digest, commit to the content-addressed path). See
+// docs/architecture.md「Track 2実装方針」for why the scheme prefix (not a
+// new proto field) is how an oras-go/v2-backed OCI registry reference is
+// told apart from a plain HTTP(S) URL.
+//
+//   - "https://", "http://": unchanged from before Track 2 -- a plain GET
+//   - "oci://<registry>/<repo>:<tag-or-digest>": OCI registry over HTTPS
+//   - "oci+http://<registry>/<repo>:<tag-or-digest>": OCI registry over
+//     plain HTTP -- for a registry with no TLS in front of it (playground's
+//     `registry:2` service; see docs/architecture.md's addendum). There is
+//     no real-world use for pulling a genuine public registry unencrypted,
+//     so this scheme exists purely for that case
+func (s *Store) open(ctx context.Context, url string) (io.ReadCloser, error) {
+	switch {
+	case strings.HasPrefix(url, "oci://"):
+		return fetchOCIBlob(ctx, strings.TrimPrefix(url, "oci://"), false)
+	case strings.HasPrefix(url, "oci+http://"):
+		return fetchOCIBlob(ctx, strings.TrimPrefix(url, "oci+http://"), true)
+	default:
+		return fetchHTTP(ctx, url)
+	}
+}
+
+// fetchHTTP is EnsureCached's original (pre-Track-2) transport: a plain GET,
+// no registry protocol involved.
+func fetchHTTP(ctx context.Context, url string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("unexpected status %s", resp.Status)
+	}
+	return resp.Body, nil
 }
 
 // destPath computes EnsureCached's cache key and on-disk path for url/

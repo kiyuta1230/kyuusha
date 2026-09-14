@@ -25,6 +25,7 @@ RUN CGO_ENABLED=0 go build -o /out/network ./cmd/network
 RUN CGO_ENABLED=0 go build -o /out/network-reconciler ./cmd/network-reconciler
 RUN CGO_ENABLED=0 go build -o /out/block-storage ./cmd/block-storage
 RUN CGO_ENABLED=0 go build -o /out/block-storage-reconciler ./cmd/block-storage-reconciler
+RUN CGO_ENABLED=0 go build -o /out/ocitool ./playground/ocitool
 
 FROM alpine:3 AS compute
 COPY --from=builder /out/compute /usr/local/bin/compute
@@ -151,6 +152,14 @@ FROM alpine:3 AS block-storage-reconciler
 COPY --from=builder /out/block-storage-reconciler /usr/local/bin/block-storage-reconciler
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
 ENTRYPOINT ["/usr/local/bin/block-storage-reconciler", "-tls-cert=/etc/kyuusha/tls/server.crt", "-tls-key=/etc/kyuusha/tls/server.key", "-tls-ca=/etc/kyuusha/tls/ca.crt"]
+
+# ocitool: playground-only scaffolding (see playground/ocitool/main.go), not
+# one of kyuusha's own binaries -- pushes image-assets' kernel/rootfs into
+# playground's OCI registry service so Track 2's oci+http:// Image path has
+# something real to pull from (see docs/architecture.md「Track 2実装方針」).
+FROM alpine:3 AS ocitool
+COPY --from=builder /out/ocitool /usr/local/bin/ocitool
+ENTRYPOINT ["/usr/local/bin/ocitool"]
 
 # ---- image-assets: prebuilt kernel + minimal rootfs for the playground's ----
 # Firecracker milestone (see docs/specs/firecracker-boot.md). A real Firecracker

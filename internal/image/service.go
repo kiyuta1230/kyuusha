@@ -251,7 +251,7 @@ func (s *Service) checkReachability(ctx context.Context, img Image) {
 	urls := artifactURLs(img.Spec)
 	var unreachable string
 	for _, u := range urls {
-		if err := s.headCheck(ctx, u); err != nil {
+		if err := s.reachable(ctx, u); err != nil {
 			unreachable = fmt.Sprintf("%s: %v", u, err)
 			break
 		}
@@ -274,9 +274,21 @@ func (s *Service) checkReachability(ctx context.Context, img Image) {
 	}
 }
 
-func (s *Service) headCheck(ctx context.Context, url string) error {
+// reachable dispatches url to whichever check its scheme names -- see
+// docs/architecture.md「Track 2実装方針」for why an "oci://"/"oci+http://"
+// prefix (not a new proto field) is how a Track 2 OCI registry reference is
+// told apart from a plain HTTP(S) URL, the same scheme convention
+// internal/compute-agent/imagestore uses to actually fetch the bytes.
+func (s *Service) reachable(ctx context.Context, url string) error {
 	ctx, cancel := context.WithTimeout(ctx, reachabilityTimeout)
 	defer cancel()
+	if isOCIURL(url) {
+		return ociReachable(ctx, url)
+	}
+	return s.headCheck(ctx, url)
+}
+
+func (s *Service) headCheck(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return err
