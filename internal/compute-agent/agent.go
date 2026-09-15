@@ -263,7 +263,8 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 	defer span.End()
 
 	result := compute.CreateResult{VMID: cmd.VMID, Success: true}
-	if driver, ok := a.Drivers[cmd.DriverHint]; ok && driver != nil && cmd.KernelURL != "" && cmd.RootfsURL != "" {
+	hasBootableImage := (cmd.KernelURL != "" && cmd.RootfsURL != "") || cmd.DiskURL != ""
+	if driver, ok := a.Drivers[cmd.DriverHint]; ok && driver != nil && hasBootableImage {
 		slog.Info("compute-agent: booting VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "driver_hint", cmd.DriverHint, "interfaces", len(cmd.Interfaces))
 		attached, err := driver.Boot(ctx, vmm.BootSpec{
 			VMID:              cmd.VMID,
@@ -274,6 +275,8 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 			RootfsURL:         cmd.RootfsURL,
 			KernelDigest:      cmd.KernelDigest,
 			RootfsDigest:      cmd.RootfsDigest,
+			DiskURL:           cmd.DiskURL,
+			DiskDigest:        cmd.DiskDigest,
 			BootArgs:          cmd.BootArgs,
 			NetworkInterfaces: buildNetIfaces(cmd.VMID, cmd.Interfaces),
 			UserData:          cmd.UserData,

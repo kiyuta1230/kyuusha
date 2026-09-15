@@ -43,21 +43,24 @@ zoneスコープ付きbootstrapトークン検証（`internal/bootstraptoken`）
 残っているのは主に: bootstrapトークンの使い捨て化（同じトークンを同じハイパーバイザーの
 再起動のたびに繰り返し使うこと自体は妨げていない）。必要になった時点で着手する。
 
-## cloud-hypervisorドライバのブート可能ディスク対応（Windows等の非Linuxゲスト）
+## cloud-hypervisorドライバのブート可能ディスク対応（Windows等の非Linuxゲスト、2026-09-15実装済み）
 
 2026-09に`driver_hint=QEMU`として実装し、同月中にcloud-hypervisorへ置き換えた
 （`internal/compute-agent/chvmm`、[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
-参照）。起動方式はFirecrackerと同じ「kernel/rootfsを直接指定する」方式を選び、
+参照）。当初はFirecrackerと同じ「kernel/rootfsを直接指定する」方式のみで、
 QEMU/cloud-hypervisorが本来可能な「ブートローダー内蔵の自己完結ディスク」
-（`QCOW2`）経由の起動は実装しなかった——同じ`KERNEL_ROOTFS`資産を両ドライバで
-使い回せることを優先したため。
+（`QCOW2`）経由の起動は実装していなかった。
 
-この選択の対価として、Windows等の非Linuxゲストは現状サポート外（BIOS/UEFIファームウェアを
-経由しないため原理的に起動できない）。`Image.spec.format=QCOW2`自体はスキーマ・
-Create時バリデーションとも既に存在するが、どのドライバもまだ`spec.disk`を消費しない
-（Reconcilerが読んでいない）——本当に必要になった時点で、cloud-hypervisorのUEFI/OVMF
-ブートパスを使う新しいパスを`chvmm`に足す（既存のkernel/rootfs直接ブートとは
-別の実装になる見込み）という判断で今は先送りしている。
+2026-09-15、`chvmm`にUEFIブート（edk2の`CLOUDHV.fd`ファームウェア＋
+`--disk path=...,image_type=qcow2`、rawへの変換はしない）を追加し解消した
+——[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)「起動方式2:
+UEFIブート」参照。Alpine Linux公式cloud image（無改変）での実機ブートを
+ログインプロンプト到達まで確認済み。fcvmm（Firecracker）は構造的に対応不可の
+ままで、`internal/compute/image.go`のCreate時バリデーションが`QCOW2`形式に
+`driver_hint=CLOUD_HYPERVISOR`を強制する。
+
+**残る未確認事項**: Windows自体での実機ブートはまだ確認していない（UEFI機構
+そのものはAlpine cloud imageで実証済み）。
 
 ## block-storageバックエンドの責務境界の作り直し（解決済み・実装済み、2026-09-10）
 

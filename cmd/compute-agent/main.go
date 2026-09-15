@@ -59,6 +59,7 @@ func main() {
 	fcJailUID := flag.Uint("fc-jail-uid", 123, "uid jailer drops privileges to before exec'ing Firecracker inside its jail -- shared by every VM this compute-agent boots (see the fcvmm package doc comment)")
 	fcJailGID := flag.Uint("fc-jail-gid", 100, "gid jailer drops privileges to before exec'ing Firecracker inside its jail -- shared by every VM this compute-agent boots (see the fcvmm package doc comment)")
 	chBin := flag.String("ch-bin", "cloud-hypervisor", "cloud-hypervisor binary to exec for driver_hint=CLOUD_HYPERVISOR VMs (see internal/compute-agent/chvmm)")
+	chFirmwarePath := flag.String("ch-firmware-path", "/usr/local/share/kyuusha/CLOUDHV.fd", "edk2 UEFI firmware (CLOUDHV.fd) passed to --firmware when booting a QCOW2 Image (see docs/specs/cloud-hypervisor-boot.md \"QCOW2起動\"); unused for KERNEL_ROOTFS Images")
 	chRunDir := flag.String("ch-run-dir", "/var/lib/kyuusha/ch-run", "directory holding each running driver_hint=CLOUD_HYPERVISOR VM's writable rootfs copy and console log")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented when dialing compute (see internal/mtls)")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
@@ -109,6 +110,7 @@ func main() {
 		},
 		string(compute.VmmDriverCloudHypervisor): &chvmm.Manager{
 			BinPath:            *chBin,
+			FirmwarePath:       *chFirmwarePath,
 			ImageStore:         imageStore,
 			RunDir:             *chRunDir,
 			StorageConnections: connections,

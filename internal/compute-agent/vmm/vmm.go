@@ -2,15 +2,14 @@
 // through: fcvmm.Manager (driver_hint=FIRECRACKER) and chvmm.Manager
 // (driver_hint=CLOUD_HYPERVISOR) both implement VMM against the same
 // BootSpec/NetIface shapes, so agent.go picks one by cmd.DriverHint instead
-// of hardcoding a single VMM. Both existing drivers boot from the same
-// KERNEL_ROOTFS Image assets (kernel + raw rootfs, no bootloader) -- see
-// docs/specs/firecracker-boot.md and docs/specs/cloud-hypervisor-boot.md.
-// BootSpec deliberately carries only what that boot method needs today; a
-// future driver booting from a self-contained disk image instead (see
-// docs/architecture.md's VMM driver notes on QCOW2 -- not implemented, not
-// currently planned) would most likely need its own additional fields
-// here, or its own BootSpec-like type, rather than forcing every existing
-// driver to carry fields it can't use.
+// of hardcoding a single VMM. fcvmm only ever boots KERNEL_ROOTFS Image
+// assets (kernel + raw rootfs, no bootloader -- see docs/specs/
+// firecracker-boot.md); chvmm boots either that same KERNEL_ROOTFS shape or
+// a QCOW2 self-contained disk via UEFI firmware (docs/specs/
+// cloud-hypervisor-boot.md「QCOW2起動」) -- BootSpec carries both shapes'
+// fields (KernelURL/RootfsURL or DiskURL, never both), and a driver that
+// doesn't understand one simply never receives it (QCOW2 requires
+// driver_hint=CLOUD_HYPERVISOR, enforced at Create time).
 package vmm
 
 import (
@@ -20,9 +19,10 @@ import (
 
 // VMM is what compute-agent needs from any VMM driver implementation.
 type VMM interface {
-	// Boot fetches (or reuses cached copies of) spec's kernel/rootfs, gives
-	// the VM its own writable rootfs copy, and starts the VMM process
-	// against them. It returns once the process has either exited
+	// Boot fetches (or reuses cached copies of) spec's kernel/rootfs or
+	// disk (whichever the Image's format populated), gives the VM its own
+	// writable copy, and starts the VMM process against it. It returns
+	// once the process has either exited
 	// immediately (an error) or stayed up past a driver-specific grace
 	// period (success) -- success does NOT mean the guest kernel finished
 	// booting, only that the VMM process itself launched. On success, the
@@ -107,8 +107,19 @@ type BootSpec struct {
 	// imagestore.Store.EnsureCached before a driver ever boots from them.
 	// Empty for an Image created before a digest was supplied -- see that
 	// method's doc comment for the (unverified) fallback this triggers.
-	KernelDigest      string
-	RootfsDigest      string
+	KernelDigest string
+	RootfsDigest string
+	// DiskURL/DiskDigest are the Image's spec.disk.url/spec.disk.digest for
+	// a QCOW2-format Image (docs/specs/image.md) -- set instead of
+	// KernelURL/RootfsURL, never alongside them (a KERNEL_ROOTFS Image sets
+	// the latter pair and leaves this one empty, and vice versa; Create-time
+	// validation guarantees exactly one shape per Image, see
+	// internal/image's format/artifact check). Only internal/compute-agent/
+	// chvmm consumes this -- QCOW2 requires driver_hint=CLOUD_HYPERVISOR
+	// (internal/compute/image.go rejects any other combination at Create
+	// time), so fcvmm never sees a non-empty DiskURL.
+	DiskURL           string
+	DiskDigest        string
 	BootArgs          string
 	NetworkInterfaces []NetIface
 	// UserData is spec.user_data verbatim (see docs/architecture.md

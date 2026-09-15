@@ -58,13 +58,14 @@ cloud-hypervisorを選ぶ理由はそこにある:
   OVS-DPDKのような高スループット経路を使うには前提になる
 - **NUMA/hugepages/CPU topology**: より柔軟。長時間稼働・性能重視のワークロード向け
 - **Windowsゲスト対応の可能性**: cloud-hypervisorはUEFI/OVMF経由のブートにも
-  対応しており、将来非Linuxゲストが必要になった際の選択肢になりうる
-  (現状の直接カーネルブート方式では引き続き非対応、下記参照)
+  対応しており、QCOW2形式のImageを介して実装済み（下記「起動方式: QCOW2
+  ブート」参照。UEFI機構そのものはAlpine公式cloud imageの実機ブートで実証済みだが、
+  Windows自体での確認はまだ）
 
 これらはいずれもVMM自体の機能差であり、下記の起動方式(kernel直接ブート)を
 選んだこととは独立——起動方式を変えても得られる/得られないわけではない。
 
-### 起動方式: カーネル直接ブート(ブート可能ディスクではない)
+### 起動方式1: カーネル直接ブート(`KERNEL_ROOTFS`)
 
 cloud-hypervisorは`--kernel`にPVHエントリポイントを持つvmlinuxを渡す形の
 直接カーネルブートをネイティブにサポートしている(BIOS/ブートローダーを経由
@@ -73,11 +74,54 @@ cloud-hypervisorは`--kernel`にPVHエントリポイントを持つvmlinuxを�
 QEMU時代のような「本来の起動方式(QCOW2)をあえて選ばない」という妥協は
 そもそも発生しない。
 
-**トレードオフ(意図的に受け入れている制約)**: 現状の実装は依然として
-**Linux専用**——BIOS/UEFIファームウェアを経由しないため、Windowsのような
-非Linuxゲストは起動できない。将来必要になったら、cloud-hypervisorのUEFI/OVMF
-ブートパスを使う別実装(まだ存在しないパス)を足す判断になる——
-`docs/open-questions.md`参照。
+この起動方式は依然として**Linux専用**——BIOS/UEFIファームウェアを経由しない
+ため、Windowsのような非Linuxゲストは起動できない。非Linuxゲストが要る場合は
+下記の起動方式2(`QCOW2`)を使う。
+
+### 起動方式2: UEFIブート(`QCOW2`、2026-09-15実装)
+
+`Image.spec.format=QCOW2`の場合、`internal/compute-agent/chvmm`は
+`--kernel`/`--cmdline`の代わりに`--firmware`でedk2ベースのUEFIファームウェア
+（`CLOUDHV.fd`）を渡し、`--disk`に`spec.disk`のqcow2ファイルをそのまま
+（`image_type=qcow2`、rawへの変換はしない——下記参照）渡す。ゲスト自身の
+ブートローダー（GRUB等）・カーネルがその後を引き継ぐ、実機のUEFIマシンと
+同じ流れ。
+
+- **ファームウェアはフルUEFI版（`CLOUDHV.fd`）を採用**、軽量な
+  Rust Hypervisor Firmwareは使わない——QCOW2対応の動機がWindows等の
+  非Linuxゲストであり、そのためには完全なUEFI/ACPI実装が要るため。
+  `docker/Dockerfile`のcompute-agentステージが
+  `https://github.com/cloud-hypervisor/edk2/releases/latest/download/CLOUDHV.fd`
+  から、firecracker/jailer/cloud-hypervisor本体と同じ「GitHub releasesの
+  既製バイナリをそのまま取ってくる」パターンで取得する（既定配置先
+  `/usr/local/share/kyuusha/CLOUDHV.fd`、`-ch-firmware-path`で変更可）
+- **qcow2はそのまま渡す、rawへ変換しない**: cloud-hypervisor公式のQuick
+  Startガイドは`qemu-img convert`でraw変換してから渡す例を示しているが、
+  `--disk`の`image_type=qcow2`パラメータ自体は正式にドキュメント化された
+  サポート済み機能。変換をしない判断の理由: (1) `qemu-img`という新規依存が
+  compute-agentに増えない、(2) 起動のたびに変換する時間的コストが無い、
+  (3) qcow2は圧縮/sparse形式なのでraw展開すると使用容量が増える
+- `spec.boot_args`はこの起動方式では使わない（UEFI起動はゲスト自身の
+  ブートローダーがカーネルコマンドラインを決めるため、cloud-hypervisorの
+  `--cmdline`はそもそも渡さない）。ネットワーク設定は
+  `kyuusha.net.<i>.*`カーネルパラメータ慣習ではなく、cloud-init NoCloud
+  seed disk（`spec.user_data`）経由で行う想定——実機のcloud imageは
+  こちらを読む
+- キャッシュ・VM専用コピーの仕組み（digest検証・content-addressed
+  キャッシュ・reflink CoW）はTrack 1/2で作った`internal/compute-agent/
+  imagestore`をそのまま再利用——ファイルの中身がkernel/rootfsかqcow2かを
+  区別しない設計だったため、変更不要だった
+- **fcvmm（Firecracker）はこの起動方式に一切関与しない**——構造的にUEFIを
+  経由できないため。`internal/compute/image.go`のCreate時バリデーションが
+  `QCOW2`形式に`driver_hint=CLOUD_HYPERVISOR`を強制しており、fcvmmへ
+  QCOW2のVMが渡ることはない
+
+**実機確認（2026-09-15）**: kyuusha自身のテストアセットではなく、**Alpine
+Linux公式のcloud image**（`generic_alpine-3.22.5-x86_64-uefi-tiny-r0.qcow2`、
+無改変）をそのままOCIレジストリへpushし、`format=qcow2`のImageから実際に
+VM起動。コンソールでedk2のBDS（Boot Device Selection）ログ→GRUBメニュー→
+Linuxカーネル起動→`vda2`（qcow2内の実パーティション）からのrootfsマウント→
+`Welcome to Alpine Linux 3.22`のログインプロンプト到達まで確認した。
 
 ## computeからcompute-agentへ渡る情報
 
@@ -87,13 +131,15 @@ QEMU時代のような「本来の起動方式(QCOW2)をあえて選ばない」
 
 ## compute-agent側の起動処理(`internal/compute-agent/chvmm`)
 
-1. **キャッシュ確認・rootfsの複製**: fcvmmと同じ`internal/compute-agent/imagestore.Store`
+1. **キャッシュ確認・複製**: fcvmmと同じ`internal/compute-agent/imagestore.Store`
    （既定`/var/lib/kyuusha/image-cache`）をfcvmmと**共有**する——同じImageをFirecracker用/
    cloud-hypervisor用で別々にダウンロード・保持することはない（[Firecracker起動仕様]
    (firecracker-boot.md)「compute-agent側の起動処理」参照）。VM専用の書き込み可能な
-   rootfsコピー（`<ch-run-dir>/<vm_id>/rootfs.raw`）はreflink（`FICLONE`）が使える
-   ファイルシステムならcopy-on-writeで複製し、使えなければ通常コピーへフォールバックする
-2. **起動**: 以下のcloud-hypervisor引数を組み立てて実行する
+   コピー（`<ch-run-dir>/<vm_id>/rootfs.raw`、またはQCOW2なら`disk.qcow2`）は
+   reflink（`FICLONE`）が使えるファイルシステムならcopy-on-writeで複製し、
+   使えなければ通常コピーへフォールバックする
+2. **起動**: `spec.disk`（QCOW2）の有無で分岐し、以下のcloud-hypervisor引数を
+   組み立てて実行する
 
    | 引数 | 値/意図 |
    |---|---|
@@ -163,11 +209,8 @@ CLOUD_HYPERVISOR`のVMはスケジュール不能になる)等、ドライバを
 
 ## この実装がカバーしないもの
 
-- 上記「起動方式」で述べた通り、非Linuxゲスト(Windows等)は現状サポート外
-  ——UEFI/OVMFブートパス経由の別実装が要る
-- `QCOW2`形式のImageはまだどのドライバにも消費されない(`internal/compute`の
-  Reconcilerが`spec.disk`を読んでいない。[Image仕様](image.md)参照)——将来の
-  ブート可能ディスクサポートが実装されて初めて意味を持つ
+- Windows自体での実機確認はまだ（UEFI起動機構自体はAlpine公式cloud imageで
+  実証済み——上記「起動方式2: UEFIブート」参照）
 - PCI passthrough (VFIO)・vhost-user networking: 上記「なぜcloud-hypervisorも
   要るのか」で挙げた本来の動機そのものは、まだどちらも未実装
 - cloud-hypervisor APIソケット(`--api-socket`)経由の制御(ライブマイグレーション、

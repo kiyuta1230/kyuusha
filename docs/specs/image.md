@@ -9,7 +9,7 @@ kyuusha自体はイメージのバイト列を一切コピー・保管しない�
 
 | フィールド | 説明 |
 |---|---|
-| `spec.format` | `KERNEL_ROOTFS`（カーネル+rootfsペア、直接カーネルブート。FIRECRACKER/CLOUD_HYPERVISORどちらの`driver_hint`でも使える——下記参照） / `QCOW2`（自己完結・ブートローダー内蔵ディスク、CLOUD_HYPERVISOR専用。まだどのドライバも消費しない） |
+| `spec.format` | `KERNEL_ROOTFS`（カーネル+rootfsペア、直接カーネルブート。FIRECRACKER/CLOUD_HYPERVISORどちらの`driver_hint`でも使える——下記参照） / `QCOW2`（自己完結・ブートローダー内蔵ディスク、CLOUD_HYPERVISOR専用。UEFIブート、[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)「起動方式2: UEFIブート」参照） |
 | `spec.kernel` / `spec.rootfs` | `{url, digest}`。`KERNEL_ROOTFS`時のみ必須 |
 | `spec.disk` | `{url, digest}`。`QCOW2`時のみ必須 |
 | `spec.boot_args` | 直接カーネルブート時の起動引数 |

@@ -1412,10 +1412,15 @@ FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが
 - **実装済み**: `FIRECRACKER`（`internal/compute-agent/fcvmm`）・`CLOUD_HYPERVISOR`
   （`internal/compute-agent/chvmm`、libvirt経由ではなくcloud-hypervisorを直接exec）の
   両方が実際にVMを起動する。どちらも同じ`KERNEL_ROOTFS`形式のImage（カーネル+生rootfs、
-  ブートローダーなし）を、それぞれの直接カーネルブート機構で起動する——
-  本来可能な「ブートローダー内蔵の自己完結ディスク」（`QCOW2`）を今回あえて選ばず、
-  同じImage資産を使い回せることを優先した（[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
-  「起動方式」参照。この選択の対価としてWindows等の非Linuxゲストは現状サポート外）
+  ブートローダーなし）を、それぞれの直接カーネルブート機構で起動できる
+  （[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)「起動方式1」参照）
+- **2026-09-15追記**: 「ブートローダー内蔵の自己完結ディスク」（`QCOW2`）経由の
+  起動も、`chvmm`にUEFIブート（edk2の`CLOUDHV.fd`ファームウェア）を足す形で
+  実装した——[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)「起動方式2:
+  UEFIブート」参照。Windows等の非Linuxゲストサポートが動機だったため、Alpine
+  Linux公式cloud imageでUEFI起動機構自体は実機確認済み（Windows自体はまだ）。
+  `fcvmm`は構造的に非対応のままで、`QCOW2`は引き続き`driver_hint=
+  CLOUD_HYPERVISOR`必須（`internal/compute/image.go`がCreate時に強制）
 - I/O性能ベンチマークはまだ未実施。同期fsync多用ワークロードで`driver_hint: CLOUD_HYPERVISOR`を
   明示指定すべきかのガイドは、それを経てから確定させる
 - 当初は「machine_class(実装都合を隠す間接的なラベル)」経由でドライバを間接的に決める設計だったが、

@@ -65,6 +65,13 @@ FROM ubuntu:24.04 AS compute-agent
 # cloud-hypervisor's static build has none (confirmed: `ldd` reports
 # "statically linked"), and needs no external jailer at all -- its own
 # built-in seccomp is on by default.
+#
+# CLOUDHV.fd -- the edk2-based UEFI firmware chvmm passes via --firmware
+# when booting a QCOW2 Image (docs/specs/cloud-hypervisor-boot.md
+# 「QCOW2起動」); unused for KERNEL_ROOTFS Images, which boot the guest
+# kernel directly with no firmware at all. Full UEFI (not the lighter Rust
+# Hypervisor Firmware) since QCOW2 support exists specifically for
+# non-Linux guests (Windows etc.) that need a real UEFI/ACPI surface.
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && ARCH="$(uname -m)" && FC_VERSION=v1.16.1 \
     && curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-${ARCH}.tgz" \
@@ -82,6 +89,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && curl -fsSL -o /usr/local/bin/cloud-hypervisor \
        "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VERSION}/${CH_ASSET}" \
     && chmod +x /usr/local/bin/cloud-hypervisor \
+    && case "$ARCH" in \
+         x86_64) CLOUDHV_ASSET=CLOUDHV.fd ;; \
+         aarch64) CLOUDHV_ASSET=CLOUDHV_EFI.fd ;; \
+         *) echo "unsupported arch for CLOUDHV firmware: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && mkdir -p /usr/local/share/kyuusha \
+    && curl -fsSL -o /usr/local/share/kyuusha/CLOUDHV.fd \
+       "https://github.com/cloud-hypervisor/edk2/releases/latest/download/${CLOUDHV_ASSET}" \
     && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 # e2fsprogs: builds the cloud-init NoCloud seed disk as an ext4 image via

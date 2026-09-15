@@ -79,15 +79,16 @@ const (
 // Provisioning. compute-agent acks on receipt, not on completion (see
 // docs/architecture.md), and reports back on evtSubjectCreateResult.
 //
-// DriverHint/KernelURL/RootfsURL/BootArgs are the VM's already-validated
-// Image resolved to concrete boot inputs at publish time (see
-// reconciler.go's PhaseScheduled branch): compute-agent has no image
+// DriverHint/KernelURL/RootfsURL/DiskURL/BootArgs are the VM's
+// already-validated Image resolved to concrete boot inputs at publish time
+// (see reconciler.go's PhaseScheduled branch): compute-agent has no image
 // service client of its own, so everything it needs to actually boot the
 // VM (via whichever of internal/compute-agent/fcvmm or .../chvmm
-// driver_hint selects) travels in this one message. KernelURL/RootfsURL
-// are empty for a QCOW2 Image (no driver consumes that format yet -- see
-// docs/specs/cloud-hypervisor-boot.md), in which case compute-agent
-// stub-succeeds as before.
+// driver_hint selects) travels in this one message. Exactly one of
+// (KernelURL+RootfsURL) or DiskURL is non-empty, matching the Image's own
+// format (KERNEL_ROOTFS or QCOW2 -- see docs/specs/image.md); an Image
+// whose format no registered driver consumes leaves all three empty, in
+// which case compute-agent stub-succeeds as before.
 type CreateCommand struct {
 	VMID       string `json:"vm_id"`
 	TenantID   string `json:"tenant_id"`
@@ -105,7 +106,15 @@ type CreateCommand struct {
 	// RootfsURL being empty for a QCOW2 Image.
 	KernelDigest string `json:"kernel_digest,omitempty"`
 	RootfsDigest string `json:"rootfs_digest,omitempty"`
-	BootArgs     string `json:"boot_args,omitempty"`
+	// DiskURL/DiskDigest are spec.disk.url/spec.disk.digest for a QCOW2
+	// Image -- see internal/compute-agent/vmm.BootSpec's identical fields
+	// for why this is never set alongside KernelURL/RootfsURL. Only
+	// internal/compute-agent/chvmm consumes it (QCOW2 requires
+	// driver_hint=CLOUD_HYPERVISOR, enforced at Create time by
+	// internal/compute/image.go).
+	DiskURL    string `json:"disk_url,omitempty"`
+	DiskDigest string `json:"disk_digest,omitempty"`
+	BootArgs   string `json:"boot_args,omitempty"`
 	// Interfaces is populated by reconciler.go's PhaseScheduled branch from
 	// the NetworkInterfaces it just created (see internal/compute/
 	// network.go's createNetworkInterfaces) -- same reasoning as

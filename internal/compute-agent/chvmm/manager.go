@@ -72,6 +72,13 @@ type Manager struct {
 	// BinPath is the cloud-hypervisor binary to exec. Defaults to
 	// "cloud-hypervisor" (resolved via $PATH) if empty.
 	BinPath string
+	// FirmwarePath is the edk2-based CLOUDHV.fd UEFI firmware Boot passes
+	// via --firmware for a QCOW2 Image (see docs/specs/cloud-hypervisor-boot.md
+	// 「QCOW2起動」) -- unused for a KERNEL_ROOTFS boot. Defaults to
+	// /usr/local/share/kyuusha/CLOUDHV.fd (where docker/Dockerfile's
+	// compute-agent stage fetches it, the same GitHub-releases pattern as
+	// the firecracker/jailer/cloud-hypervisor binaries themselves) if empty.
+	FirmwarePath string
 	// ImageStore caches downloaded kernel/rootfs artifacts, digest-verified
 	// and shared read-only across every VM this compute-agent boots --
 	// including fcvmm's, since cmd/compute-agent/main.go constructs one
@@ -139,6 +146,13 @@ func (m *Manager) binPath() string {
 		return m.BinPath
 	}
 	return "cloud-hypervisor"
+}
+
+func (m *Manager) firmwarePath() string {
+	if m.FirmwarePath != "" {
+		return m.FirmwarePath
+	}
+	return "/usr/local/share/kyuusha/CLOUDHV.fd"
 }
 
 func (m *Manager) runDir() string {
@@ -250,14 +264,12 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 	m.mu.Unlock()
 
-	kernelPath, err := m.ImageStore.EnsureCached(ctx, spec.KernelURL, spec.KernelDigest)
-	if err != nil {
-		return nil, fmt.Errorf("chvmm: fetch kernel: %w", err)
-	}
-	masterRootfs, err := m.ImageStore.EnsureCached(ctx, spec.RootfsURL, spec.RootfsDigest)
-	if err != nil {
-		return nil, fmt.Errorf("chvmm: fetch rootfs: %w", err)
-	}
+	// useQCOW2 mirrors internal/compute-agent/vmm.BootSpec's doc comment:
+	// exactly one of (KernelURL+RootfsURL) or DiskURL is ever set, matching
+	// the Image's own format. QCOW2 requires driver_hint=CLOUD_HYPERVISOR
+	// (internal/compute/image.go enforces this at Create time), so this is
+	// the only driver that ever sees DiskURL non-empty.
+	useQCOW2 := spec.DiskURL != ""
 
 	vmDir := filepath.Join(m.runDir(), spec.VMID)
 	if err := os.MkdirAll(vmDir, 0o755); err != nil {
@@ -272,11 +284,46 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// removes vmDir -- only Destroy does, called from Delete, not from
 	// here), reuse it as-is instead of recopying from the Image, so the
 	// guest's own writes since its last boot survive the restart.
-	rootfsCopy := filepath.Join(vmDir, "rootfs.raw")
-	if _, err := os.Stat(rootfsCopy); err != nil {
-		if err := imagestore.CloneFile(masterRootfs, rootfsCopy); err != nil {
-			return nil, fmt.Errorf("chvmm: copy rootfs: %w", err)
+	var kernelPath, primaryDiskPath string
+	var primaryDiskArg string
+	if useQCOW2 {
+		masterDisk, err := m.ImageStore.EnsureCached(ctx, spec.DiskURL, spec.DiskDigest)
+		if err != nil {
+			return nil, fmt.Errorf("chvmm: fetch disk: %w", err)
 		}
+		primaryDiskPath = filepath.Join(vmDir, "disk.qcow2")
+		if _, err := os.Stat(primaryDiskPath); err != nil {
+			if err := imagestore.CloneFile(masterDisk, primaryDiskPath); err != nil {
+				return nil, fmt.Errorf("chvmm: copy disk: %w", err)
+			}
+		}
+		// image_type=qcow2 explicit, not auto-detected: cloud-hypervisor's
+		// --disk accepts raw/qcow2/vhd/vhdx, and omitting image_type risks
+		// depending on undocumented default-detection behavior for
+		// something Create-time validation has already told us for certain
+		// (docs/specs/cloud-hypervisor-boot.md「QCOW2起動」参照). Passed
+		// as-is, never converted to raw (qemu-img convert, as cloud-
+		// hypervisor's own quick-start guide does) -- see that doc's
+		// rationale: avoids a qemu-img dependency and the extra boot-time
+		// I/O/disk cost of expanding a compressed/sparse qcow2 into raw.
+		primaryDiskArg = fmt.Sprintf("path=%s,image_type=qcow2", primaryDiskPath)
+	} else {
+		var err error
+		kernelPath, err = m.ImageStore.EnsureCached(ctx, spec.KernelURL, spec.KernelDigest)
+		if err != nil {
+			return nil, fmt.Errorf("chvmm: fetch kernel: %w", err)
+		}
+		masterRootfs, err := m.ImageStore.EnsureCached(ctx, spec.RootfsURL, spec.RootfsDigest)
+		if err != nil {
+			return nil, fmt.Errorf("chvmm: fetch rootfs: %w", err)
+		}
+		primaryDiskPath = filepath.Join(vmDir, "rootfs.raw")
+		if _, err := os.Stat(primaryDiskPath); err != nil {
+			if err := imagestore.CloneFile(masterRootfs, primaryDiskPath); err != nil {
+				return nil, fmt.Errorf("chvmm: copy rootfs: %w", err)
+			}
+		}
+		primaryDiskArg = fmt.Sprintf("path=%s", primaryDiskPath)
 	}
 
 	// Wire every real network interface before cloud-hypervisor starts (it
@@ -323,15 +370,24 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		}
 	}
 
-	bootArgs := spec.BootArgs
-	if bootArgs == "" {
-		bootArgs = defaultBootArgs
-	}
-	if len(netArgs) > 0 {
-		bootArgs = bootArgs + " " + strings.Join(netArgs, " ")
+	// bootArgs/netArgs feed --cmdline, which only applies to direct kernel
+	// boot -- a QCOW2 guest's own bootloader/kernel owns its command line,
+	// and network config for it travels through the cloud-init NoCloud seed
+	// disk (spec.UserData) instead of kyuusha's kyuusha.net.<i>.* kernel
+	// cmdline convention (docker/fc-guest-init.sh parses that convention;
+	// a real cloud image's own cloud-init does not).
+	var bootArgs string
+	if !useQCOW2 {
+		bootArgs = spec.BootArgs
+		if bootArgs == "" {
+			bootArgs = defaultBootArgs
+		}
+		if len(netArgs) > 0 {
+			bootArgs = bootArgs + " " + strings.Join(netArgs, " ")
+		}
 	}
 
-	diskArgs := []string{"--disk", fmt.Sprintf("path=%s", rootfsCopy)}
+	diskArgs := []string{"--disk", primaryDiskArg}
 	if spec.UserData != "" {
 		seedImg, err := vmm.BuildSeedDisk(vmDir, spec.VMID, spec.UserData, spec.NetworkInterfaces)
 		if err != nil {
@@ -368,9 +424,21 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 	defer consoleLog.Close()
 
-	args := []string{
-		"--kernel", kernelPath,
-		"--cmdline", bootArgs,
+	var bootMethodArgs []string
+	if useQCOW2 {
+		// UEFI boot via the edk2-based CLOUDHV.fd firmware (not the
+		// lighter Rust Hypervisor Firmware, which lacks the full UEFI/ACPI
+		// surface a Windows or other non-Linux guest needs -- see
+		// docs/specs/cloud-hypervisor-boot.md「QCOW2起動」). No --kernel/
+		// --cmdline here: the guest's own bootloader takes over from
+		// firmware, same as any real UEFI machine.
+		bootMethodArgs = []string{"--firmware", m.firmwarePath()}
+	} else {
+		bootMethodArgs = []string{"--kernel", kernelPath, "--cmdline", bootArgs}
+	}
+
+	args := append([]string{}, bootMethodArgs...)
+	args = append(args,
 		"--cpus", fmt.Sprintf("boot=%d", spec.VCPU),
 		"--memory", fmt.Sprintf("size=%dM", spec.MemoryMB),
 		// tty: writes straight to this process's own stdout/stderr (below),
@@ -380,7 +448,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		// non-serial virtio-console device -- ttyS0 is the only I/O surface.
 		"--serial", "tty",
 		"--console", "off",
-	}
+	)
 	args = append(args, diskArgs...)
 	args = append(args, chNetArgs...)
 

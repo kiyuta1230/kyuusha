@@ -5,9 +5,13 @@
 VirtualMachineは、実際にどのVMM（Virtual Machine Monitor）で起動されるかを
 `spec.driver_hint`で選べるリソース。今のところ2つの実ドライバがある——
 [Firecracker起動仕様](firecracker-boot.md)（`FIRECRACKER`、未指定時のデフォルト）と
-[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)（`CLOUD_HYPERVISOR`）。どちらも同じ`KERNEL_ROOTFS`形式のImage
-（[Image仕様](image.md)参照）を、`internal/compute-agent`配下の別々のVMMドライバ
-（`fcvmm`/`chvmm`）で起動する。
+[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)（`CLOUD_HYPERVISOR`）。
+`KERNEL_ROOTFS`形式のImage（[Image仕様](image.md)参照）はどちらのドライバでも
+起動できる（`internal/compute-agent`配下の別々のVMMドライバ`fcvmm`/`chvmm`）。
+`QCOW2`形式のImageは`chvmm`のみが対応（UEFIブート、2026-09-15実装——
+[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)「起動方式2: UEFIブート」
+参照）——`fcvmm`は構造的にブート可能ディスクを起動できないため、Create時に
+`driver_hint=CLOUD_HYPERVISOR`が強制される。
 
 このドキュメントには、**ドライバを問わず共通の**仕組みだけをまとめる。ドライバ固有の
 起動処理・引数・トレードオフはそれぞれのドキュメントを参照。`Pending`→`Scheduled`の
@@ -28,14 +32,15 @@ VMが`Scheduled`→`Provisioning`へ遷移する際（[VMスケジュール仕�
 | `driver_hint` | `VirtualMachineSpec.driver_hint`（未指定なら`FIRECRACKER`） |
 | `kernel_url` / `rootfs_url` | 解決したImageの`spec.kernel.url` / `spec.rootfs.url`（`QCOW2`の場合は空） |
 | `kernel_digest` / `rootfs_digest` | 解決したImageの`spec.kernel.digest` / `spec.rootfs.digest`。compute-agentの`internal/compute-agent/imagestore`がダウンロード後のバイト列をこれと照合する（空の場合は未検証のまま従来通りキャッシュする。[Firecracker起動仕様](firecracker-boot.md)「compute-agent側の起動処理」参照） |
+| `disk_url` / `disk_digest` | 解決したImageの`spec.disk.url` / `spec.disk.digest`（`KERNEL_ROOTFS`の場合は空。`kernel_url`/`rootfs_url`と同時に非空になることはない）。`chvmm`のみが消費する——[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)「起動方式2: UEFIブート」参照 |
 | `boot_args` | Imageの`spec.boot_args`（空ならcompute-agent側のデフォルトを使う。デフォルト値自体はドライバごとに違う——[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)「boot_argsのデフォルトがFirecrackerと違う理由」参照） |
 | `interfaces` | `network_interfaces`から作られたNetworkInterface+そのSubnetの情報（[network.md](network.md)参照）。空配列ならネットワークなしで起動する |
 | `volumes` | `volumes`から作られたVolumeAttachmentのうち、実際に`Attached`まで到達したものについて、そのVolume自身が持つ`protocol`/`storage_connection`/`identifier`（[Volume仕様](volume.md)参照。kyuushaはここで何もログイン/マウントしない——compute-agentが起動時にこの情報から既に見えているデバイス/ファイルを探すだけ）。空配列ならVolumeなしで起動する——アタッチが`Pending`のまま（排他制御待ち）だったものはここに含まれない |
 | `user_data` | `VirtualMachineSpec.user_data`そのまま。空なら何も注入しない（下記「UserData注入」参照） |
 
-`kernel_url`/`rootfs_url`が空、または`driver_hint`に対応する登録済みドライバがない場合
-（`internal/compute-agent/agent.go`の`Drivers`マップに無い値）、compute-agentは
-即座に成功を返す旧来のstub動作にフォールバックする。
+`kernel_url`+`rootfs_url`と`disk_url`のどちらも空、または`driver_hint`に対応する
+登録済みドライバがない場合（`internal/compute-agent/agent.go`の`Drivers`マップに
+無い値）、compute-agentは即座に成功を返す旧来のstub動作にフォールバックする。
 
 ## 起動確認（成否判定）
 

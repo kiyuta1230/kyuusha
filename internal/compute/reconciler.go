@@ -338,6 +338,8 @@ func (r *Reconciler) provisionAndPublish(ctx context.Context, vm VirtualMachine)
 	cmd.RootfsURL = img.GetSpec().GetRootfs().GetUrl()
 	cmd.KernelDigest = img.GetSpec().GetKernel().GetDigest()
 	cmd.RootfsDigest = img.GetSpec().GetRootfs().GetDigest()
+	cmd.DiskURL = img.GetSpec().GetDisk().GetUrl()
+	cmd.DiskDigest = img.GetSpec().GetDisk().GetDigest()
 	cmd.BootArgs = img.GetSpec().GetBootArgs()
 
 	payload, _ := json.Marshal(cmd)
