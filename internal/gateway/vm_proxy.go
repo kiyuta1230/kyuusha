@@ -56,6 +56,10 @@ func (p *VirtualMachineProxy) Start(ctx context.Context, req *computev1.StartVir
 	return p.backend.Start(ctx, req)
 }
 
+func (p *VirtualMachineProxy) Resize(ctx context.Context, req *computev1.ResizeVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	return p.backend.Resize(ctx, req)
+}
+
 func (p *VirtualMachineProxy) Watch(req *computev1.WatchVirtualMachinesRequest, stream computev1.VirtualMachineService_WatchServer) error {
 	backendStream, err := p.backend.Watch(stream.Context(), req)
 	if err != nil {

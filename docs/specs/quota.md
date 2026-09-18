@@ -66,6 +66,37 @@ allow if {
 - 拒否は`Create`自体への同期的な`ResourceExhausted`。VMオブジェクトは作られない（`Error`フェーズへ倒すことはしない）
 - `tenant_usage`への加算は、VM作成（`resource.Store.Create`）が成功した**後**に行う。作成が失敗した場合は加算しない
 
+## 強制フロー（VM Resize時）
+
+`VirtualMachineService.Resize`（[VirtualMachine仕様](virtual-machine.md)「リサイズ」参照）は
+Createとは別の判定を行う: リサイズ対象のVMは既にtenant_usageに自分の**現在の**
+vcpu/memory_mbが算入済みなので、Createの`usage+request<=limit`という絶対値の判定ではなく
+`usage-old+new<=limit`（＝`usage+delta<=limit`）というデルタの判定が必要になる。また
+`vm_count`はResizeで変化しない（VMを新しく作りも消しもしない）ため、`allow`の
+`vm_count+1<=max_vms`項はResizeには一切現れない。
+
+この形の違いから、`allow`をそのまま流用せず`internal/compute/quota.rego`に
+`allow_resize`という別ルールを追加している（同じpackage内の兄弟ルール、Rego内で
+mode分岐させるのではなく）:
+
+```rego
+allow_resize if {
+	input.usage.vcpu + input.request.delta_vcpu <= input.limit.max_vcpu
+	input.usage.memory_mb + input.request.delta_memory_mb <= input.limit.max_memory_mb
+	input.request.new_vcpu <= input.limit.max_vcpu_per_vm
+	input.request.new_memory_mb <= input.limit.max_memory_mb_per_vm
+}
+```
+
+- 集計側（`max_vcpu`/`max_memory_mb`）はデルタで判定し、1台あたり上限
+  （`max_vcpu_per_vm`/`max_memory_mb_per_vm`）は新しい絶対値で判定する
+- 縮小のみ（両軸ともdeltaが0以下）のリサイズはquotaを絶対に超過しえないため、
+  identityへの`lookupQuota`呼び出し自体を省略する（`allow_resize`の評価にも進まない）
+- 判定後の`tenant_usage`更新もCreateと同じくデルタ加算（`vcpu += delta_vcpu`等）で、
+  `vm_count`は触らない
+- `usageMu`はCreate/Delete同様、Resizeの「取得→判定→Hypervisor容量調整→
+  VM更新→tenant_usage更新」の一連の処理全体を通して保持する
+
 ## 解放（VM/Volume Delete時）
 
 削除対象VMの`spec.vcpu`/`spec.memory_mb`分を`tenant_usage`から減算し、`vm_count`を1減らす。

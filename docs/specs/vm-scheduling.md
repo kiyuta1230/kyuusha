@@ -74,6 +74,28 @@ PCIデバイスフィルタは未実装（PCI在庫が存在しないため）�
 - VM作成が失敗し`Error`へ遷移する時。このとき`status.hypervisor`を空文字列にクリアし、
   後続のVM削除で二重に解放されないようにする
 
+## リサイズ時の容量調整
+
+`VirtualMachineService.Resize`（[VirtualMachine仕様](virtual-machine.md)「リサイズ」参照）は、
+上記の予約/解放とは別の、より単純な経路を通る：
+
+- VMが既に割り当て済みのHypervisor（`status.hypervisor`）に対する容量の**デルタ調整**のみ行う。
+  `filterSchedulable`/`Pick`の再実行は一切しない——候補一覧も作らず、スケジューリングも
+  やり直さない
+- 成長方向（新vcpu/memory_mbが現在の値より大きい）の軸だけ、その軸の空き容量
+  （`allocatable - allocated`）がデルタ以上あるか検証する。縮小方向の軸は常に収まる
+  （容量を解放するだけなので）
+- 収まらない場合は`ResourceExhausted`（`ErrHypervisorCapacityExceeded`）で拒否する。
+  「予約」節のスケジューリング失敗時（`ErrUnschedulable`、候補が1つも無い）とは
+  意味が異なる別エラーとして扱う——こちらは「候補が無い」のではなく
+  「この1台に収まらない」ため
+- **他Hypervisorへの再スケジュールはしない**: 収まらなければそこで拒否して終わり。
+  ユーザーはVMを作り直す以外の手段がない
+- 予約と同じくGet→mutate→Updateの楽観的並行性制御（`updateHypervisor`の
+  リトライループ）を再利用する。成功後にVM側の`store.Update`が失敗した場合、
+  適用したデルタと同じ値で逆方向の調整（`releaseHypervisorCapacity`相当）を行い
+  ロールバックする
+
 ## スケジュール失敗時の挙動
 
 - VMは`Pending`のまま留まり、`Condition{type: Unschedulable, status: True, reason: InsufficientCapacity}`が設定される

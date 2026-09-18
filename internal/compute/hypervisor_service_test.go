@@ -283,6 +283,142 @@ func TestService_ReserveHypervisorCapacityRaceNeverOversubscribes(t *testing.T) 
 	}
 }
 
+// TestService_ResizeRejectsWhenHypervisorLacksCapacity confirms a grow
+// Resize that doesn't fit the VM's already-assigned Hypervisor is rejected
+// outright (no cross-hypervisor migration -- see docs/specs/vm-scheduling.md),
+// and that rejection leaves the Hypervisor's reservation untouched (no
+// partial charge from the capacity check itself).
+func TestService_ResizeRejectsWhenHypervisorLacksCapacity(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 4, 8192, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 4096})
+
+	// Only 2 more vCPU free (4 allocatable - 2 allocated); asking for 5 more (2->7) doesn't fit.
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 7, 4096); !errors.Is(err, ErrHypervisorCapacityExceeded) {
+		t.Fatalf("over hypervisor capacity: got %v, want ErrHypervisorCapacityExceeded", err)
+	}
+
+	h, err := svc.GetHypervisor(ctx, "hypervisor-1")
+	if err != nil {
+		t.Fatalf("GetHypervisor: %v", err)
+	}
+	if h.Status.AllocatedVCPU != 2 || h.Status.AllocatedMemoryMB != 4096 {
+		t.Fatalf("Hypervisor allocation changed after a rejected Resize: %+v, want unchanged vcpu=2 memory_mb=4096", h.Status)
+	}
+	stored, err := svc.Get(ctx, tenant, vm.Meta.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Spec.VCPU != 2 {
+		t.Fatalf("stored Spec.VCPU changed after a rejected Resize: %d, want unchanged 2", stored.Spec.VCPU)
+	}
+}
+
+// TestService_ResizeGrowsHypervisorReservation confirms a successful grow
+// increases AllocatedVCPU/AllocatedMemoryMB by exactly the delta.
+func TestService_ResizeGrowsHypervisorReservation(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 8, 16384, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
+
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 5, 5120); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	h, err := svc.GetHypervisor(ctx, "hypervisor-1")
+	if err != nil {
+		t.Fatalf("GetHypervisor: %v", err)
+	}
+	if h.Status.AllocatedVCPU != 5 || h.Status.AllocatedMemoryMB != 5120 {
+		t.Fatalf("AllocatedVCPU/MemoryMB = %d/%d, want 5/5120", h.Status.AllocatedVCPU, h.Status.AllocatedMemoryMB)
+	}
+}
+
+// TestService_ResizeShrinkReleasesHypervisorReservation confirms a
+// successful shrink decreases AllocatedVCPU/AllocatedMemoryMB by exactly
+// the delta, rather than leaking the old, larger reservation.
+func TestService_ResizeShrinkReleasesHypervisorReservation(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 8, 16384, VirtualMachineSpec{ImageID: "img-abc", VCPU: 6, MemoryMB: 6144})
+
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 2, 2048); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	h, err := svc.GetHypervisor(ctx, "hypervisor-1")
+	if err != nil {
+		t.Fatalf("GetHypervisor: %v", err)
+	}
+	if h.Status.AllocatedVCPU != 2 || h.Status.AllocatedMemoryMB != 2048 {
+		t.Fatalf("AllocatedVCPU/MemoryMB = %d/%d, want 2/2048 (shrink must free capacity, not leak it)", h.Status.AllocatedVCPU, h.Status.AllocatedMemoryMB)
+	}
+}
+
+// TestService_ResizeCapacityRaceNeverOversubscribes mirrors
+// TestService_ReserveHypervisorCapacityRaceNeverOversubscribes for
+// resizeHypervisorCapacity: fires more concurrent grow-deltas at one
+// Hypervisor than its capacity allows, calling resizeHypervisorCapacity
+// directly (as Resize's own global usageMu would otherwise fully serialize
+// every Resize call and never exercise this race -- the real concurrency
+// this needs to be safe against is a concurrent Resize racing a concurrent
+// Create/scheduleVM onto the same Hypervisor, both of which bottom out in
+// updateHypervisor's retry-on-conflict CAS loop, independent of usageMu).
+func TestService_ResizeCapacityRaceNeverOversubscribes(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	const allocatableVCPU = 6
+	const perDelta = 2
+	const attempts = 6 // demands 12 vCPU total against 6 available: at most 3 can win
+
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", allocatableVCPU, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, attempts)
+	for i := range attempts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = svc.resizeHypervisorCapacity(ctx, "hypervisor-1", perDelta, 1024)
+		}(i)
+	}
+	wg.Wait()
+
+	var succeeded int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrHypervisorCapacityExceeded):
+			// Correctly lost the race: fit no longer available by the time
+			// this attempt's write actually landed.
+		default:
+			t.Fatalf("resizeHypervisorCapacity: unexpected error: %v", err)
+		}
+	}
+
+	h, err := svc.GetHypervisor(ctx, "hypervisor-1")
+	if err != nil {
+		t.Fatalf("GetHypervisor: %v", err)
+	}
+	if h.Status.AllocatedVCPU > allocatableVCPU {
+		t.Fatalf("AllocatedVCPU = %d, want <= %d (capacity was oversubscribed)", h.Status.AllocatedVCPU, allocatableVCPU)
+	}
+	if want := int32(succeeded) * perDelta; h.Status.AllocatedVCPU != want {
+		t.Fatalf("AllocatedVCPU = %d, want %d (%d resizes succeeded)", h.Status.AllocatedVCPU, want, succeeded)
+	}
+	if succeeded == 0 || succeeded == attempts {
+		t.Fatalf("succeeded = %d/%d, want somewhere strictly in between to actually exercise the race (adjust attempts/capacity if this is flaky)", succeeded, attempts)
+	}
+}
+
 func TestService_HeartbeatAndHealthSweep(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)

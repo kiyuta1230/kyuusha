@@ -61,6 +61,10 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 		t.Fatalf("idempotent Create minted a new ID: %s vs %s", again.Meta.ID, m.Meta.ID)
 	}
 
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+		t.Fatalf("RegisterHypervisor: %v", err)
+	}
+
 	// Simulate the scheduler advancing the phase, with optimistic concurrency.
 	m.Status.Phase = PhaseScheduled
 	m.Status.Hypervisor = "hypervisor-1"
@@ -72,25 +76,83 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 		t.Fatalf("stale Update: got %v, want ErrConflict", err)
 	}
 
-	if err := svc.Delete(ctx, tenant, updated.Meta.ID); err != nil {
+	// Drive Scheduled -> Running (simulating reconcile()'s real
+	// provisioning), then a Stop -> Resize -> Start cycle: the same path a
+	// real client would use to change a VM's vcpu/memory_mb (see
+	// Service.Resize -- cold resize only, Stopped -> Stopped).
+	updated.Status.Phase = PhaseRunning
+	running, err := svc.Update(ctx, updated)
+	if err != nil {
+		t.Fatalf("Update to Running: %v", err)
+	}
+
+	stopping, err := svc.Stop(ctx, tenant, running.Meta.ID, false)
+	if err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	stopping.Status.Phase = PhaseStopped // simulate reconcile() completing the teardown
+	stopped, err := svc.Update(ctx, stopping)
+	if err != nil {
+		t.Fatalf("Update to Stopped: %v", err)
+	}
+
+	resized, err := svc.Resize(ctx, tenant, stopped.Meta.ID, 4, 8192)
+	if err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	if resized.Spec.VCPU != 4 || resized.Spec.MemoryMB != 8192 {
+		t.Fatalf("Spec after Resize = %+v, want vcpu=4 memory_mb=8192", resized.Spec)
+	}
+
+	started, err := svc.Start(ctx, tenant, resized.Meta.ID)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Confirms provisionAndPublish would boot with the resized values: Start
+	// itself never touches Spec, so this is really asserting Resize's write
+	// stuck and Start left it alone.
+	if started.Spec.VCPU != 4 || started.Spec.MemoryMB != 8192 {
+		t.Fatalf("Spec after Start = %+v, want the resized vcpu=4 memory_mb=8192 to have survived", started.Spec)
+	}
+
+	if err := svc.Delete(ctx, tenant, started.Meta.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	wantTypes := []EventType{EventAdded, EventModified, EventDeleted}
-	for _, want := range wantTypes {
+	// Added, then some number of Modified events (Scheduled, Running,
+	// Stopping, Stopped, the Resize, Starting), then Deleted.
+	select {
+	case e := <-events:
+		if e.Type != EventAdded {
+			t.Fatalf("event type = %s, want %s", e.Type, EventAdded)
+		}
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for %s event", EventAdded)
+	}
+	var modifiedCount int
+drain:
+	for {
 		select {
 		case e := <-events:
-			if e.Type != want {
-				t.Fatalf("event type = %s, want %s", e.Type, want)
+			switch e.Type {
+			case EventModified:
+				modifiedCount++
+			case EventDeleted:
+				break drain
+			default:
+				t.Fatalf("unexpected event type %s", e.Type)
 			}
 		case <-ctx.Done():
-			t.Fatalf("timed out waiting for %s event", want)
+			t.Fatalf("timed out waiting for %s event", EventDeleted)
 		}
+	}
+	if modifiedCount == 0 {
+		t.Fatalf("no Modified events observed before Deleted")
 	}
 
 	// A fresh Watch resumed from the last known resource_version should see
 	// nothing new (no relist error, empty backlog) since we're caught up.
-	lastRV := updated.Meta.ResourceVersion + 1 // +1 for the Delete event
+	lastRV := started.Meta.ResourceVersion + 1 // +1 for the Delete event
 	resumed, err := svc.Watch(ctx, tenant, lastRV, "")
 	if err != nil {
 		t.Fatalf("resumed Watch: %v", err)
@@ -338,6 +400,166 @@ func TestService_StartRequiresStopped(t *testing.T) {
 
 	if _, err := svc.Start(ctx, tenant, started.Meta.ID); !errors.Is(err, ErrInvalidPhase) {
 		t.Fatalf("Start on already-Starting VM: got %v, want ErrInvalidPhase", err)
+	}
+}
+
+// stoppedVMWithHypervisor creates a VM, registers a Hypervisor with the
+// given capacity, forces the VM to Stopped + pinned to that Hypervisor (as
+// if it had already been scheduled and stopped -- Resize tests don't drive
+// the reconciler), and reserves the VM's own spec against that Hypervisor
+// (mirroring what real scheduling would already have done), so a resize's
+// capacity delta check has a realistic baseline to work against.
+func stoppedVMWithHypervisor(t *testing.T, ctx context.Context, svc *Service, tenant, hypervisorID string, allocatableVCPU int32, allocatableMemoryMB int64, spec VirtualMachineSpec) VirtualMachine {
+	t.Helper()
+	if _, err := svc.RegisterHypervisor(ctx, hypervisorID, "zone-a", allocatableVCPU, allocatableMemoryMB, []string{"FIRECRACKER"}, nil); err != nil {
+		t.Fatalf("RegisterHypervisor: %v", err)
+	}
+	vm, err := svc.Create(ctx, tenant, "", spec)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := svc.reserveHypervisorCapacity(ctx, hypervisorID, spec.VCPU, spec.MemoryMB); err != nil {
+		t.Fatalf("reserveHypervisorCapacity: %v", err)
+	}
+	vm.Status.Phase = PhaseStopped
+	vm.Status.Hypervisor = hypervisorID
+	stopped, err := svc.Update(ctx, vm)
+	if err != nil {
+		t.Fatalf("Update to Stopped: %v", err)
+	}
+	return *stopped
+}
+
+// TestService_ResizeRequiresStopped mirrors TestService_StopRequiresRunning/
+// TestService_StartRequiresStopped for Resize's own phase gate.
+func TestService_ResizeRequiresStopped(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{ImageID: "img-abc", VCPU: 1, MemoryMB: 512})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 2, 1024); !errors.Is(err, ErrInvalidPhase) {
+		t.Fatalf("Resize on Pending VM: got %v, want ErrInvalidPhase", err)
+	}
+
+	vm.Status.Phase = PhaseRunning
+	vm.Status.Hypervisor = "hypervisor-1"
+	running, err := svc.Update(ctx, vm)
+	if err != nil {
+		t.Fatalf("Update to Running: %v", err)
+	}
+	if _, err := svc.Resize(ctx, tenant, running.Meta.ID, 2, 1024); !errors.Is(err, ErrInvalidPhase) {
+		t.Fatalf("Resize on Running VM: got %v, want ErrInvalidPhase", err)
+	}
+
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+		t.Fatalf("RegisterHypervisor: %v", err)
+	}
+	running.Status.Phase = PhaseStopped
+	stoppedVM, err := svc.Update(ctx, running)
+	if err != nil {
+		t.Fatalf("Update to Stopped: %v", err)
+	}
+
+	resized, err := svc.Resize(ctx, tenant, stoppedVM.Meta.ID, 2, 1024)
+	if err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	if resized.Spec.VCPU != 2 || resized.Spec.MemoryMB != 1024 {
+		t.Fatalf("Spec = %+v, want vcpu=2 memory_mb=1024", resized.Spec)
+	}
+	if resized.Status.Phase != PhaseStopped {
+		t.Fatalf("Phase = %q, want unchanged Stopped", resized.Status.Phase)
+	}
+}
+
+func TestService_ResizeRejectsNonPositiveValues(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 8, 16384, VirtualMachineSpec{ImageID: "img-abc", VCPU: 1, MemoryMB: 512})
+
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 0, 1024); !errors.Is(err, ErrValidation) {
+		t.Fatalf("vcpu=0: got %v, want ErrValidation", err)
+	}
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 2, -1); !errors.Is(err, ErrValidation) {
+		t.Fatalf("memory_mb=-1: got %v, want ErrValidation", err)
+	}
+}
+
+func TestService_ResizeNotFound(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, "tenant-a", "hypervisor-1", 8, 16384, VirtualMachineSpec{ImageID: "img-abc", VCPU: 1, MemoryMB: 512})
+
+	if _, err := svc.Resize(ctx, "tenant-b", vm.Meta.ID, 2, 1024); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant Resize: got %v, want ErrNotFound", err)
+	}
+}
+
+// TestService_ResizeSameSizeIsNoop confirms a resize to the VM's current
+// size returns successfully without bumping resource_version or otherwise
+// touching stored state -- deliberately not routed through the
+// quota/capacity/store.Update machinery at all (see Service.Resize's
+// no-op short-circuit).
+func TestService_ResizeSameSizeIsNoop(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 8, 16384, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
+
+	out, err := svc.Resize(ctx, tenant, vm.Meta.ID, 2, 2048)
+	if err != nil {
+		t.Fatalf("Resize to same size: %v", err)
+	}
+	if out.Meta.ResourceVersion != vm.Meta.ResourceVersion {
+		t.Fatalf("ResourceVersion changed on a same-size Resize: %d -> %d", vm.Meta.ResourceVersion, out.Meta.ResourceVersion)
+	}
+
+	h, err := svc.GetHypervisor(ctx, "hypervisor-1")
+	if err != nil {
+		t.Fatalf("GetHypervisor: %v", err)
+	}
+	if h.Status.AllocatedVCPU != 2 || h.Status.AllocatedMemoryMB != 2048 {
+		t.Fatalf("Hypervisor allocation changed on a same-size Resize: %+v", h.Status)
+	}
+}
+
+// TestService_ResizeUpdatesTenantUsage confirms tenant_usage tracks the
+// vcpu/memory_mb delta (both growing and shrinking) without touching
+// VMCount, mirroring Create/Delete's own usage bookkeeping.
+func TestService_ResizeUpdatesTenantUsage(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 8, 16384, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
+
+	before := svc.usage[tenant]
+	if before.VCPU != 2 || before.MemoryMB != 2048 || before.VMCount != 1 {
+		t.Fatalf("usage before Resize = %+v, want vcpu=2 memory_mb=2048 vm_count=1", before)
+	}
+
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 4, 4096); err != nil {
+		t.Fatalf("grow Resize: %v", err)
+	}
+	afterGrow := svc.usage[tenant]
+	if afterGrow.VCPU != 4 || afterGrow.MemoryMB != 4096 || afterGrow.VMCount != 1 {
+		t.Fatalf("usage after grow = %+v, want vcpu=4 memory_mb=4096 vm_count=1 (unchanged)", afterGrow)
+	}
+
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 1, 512); err != nil {
+		t.Fatalf("shrink Resize: %v", err)
+	}
+	afterShrink := svc.usage[tenant]
+	if afterShrink.VCPU != 1 || afterShrink.MemoryMB != 512 || afterShrink.VMCount != 1 {
+		t.Fatalf("usage after shrink = %+v, want vcpu=1 memory_mb=512 vm_count=1 (unchanged)", afterShrink)
 	}
 }
 

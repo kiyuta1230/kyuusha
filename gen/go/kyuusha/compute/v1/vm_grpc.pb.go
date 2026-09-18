@@ -27,6 +27,7 @@ const (
 	VirtualMachineService_Delete_FullMethodName        = "/kyuusha.compute.v1.VirtualMachineService/Delete"
 	VirtualMachineService_Stop_FullMethodName          = "/kyuusha.compute.v1.VirtualMachineService/Stop"
 	VirtualMachineService_Start_FullMethodName         = "/kyuusha.compute.v1.VirtualMachineService/Start"
+	VirtualMachineService_Resize_FullMethodName        = "/kyuusha.compute.v1.VirtualMachineService/Resize"
 	VirtualMachineService_Watch_FullMethodName         = "/kyuusha.compute.v1.VirtualMachineService/Watch"
 	VirtualMachineService_StreamConsole_FullMethodName = "/kyuusha.compute.v1.VirtualMachineService/StreamConsole"
 )
@@ -45,6 +46,11 @@ type VirtualMachineServiceClient interface {
 	// (Running for Stop, Stopped for Start).
 	Stop(ctx context.Context, in *StopVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	Start(ctx context.Context, in *StartVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
+	// Resize changes vcpu/memory_mb of a Stopped VM in place: FailedPrecondition
+	// if the VM isn't Stopped, ResourceExhausted if the new size would exceed
+	// tenant quota or the current Hypervisor's free capacity (no
+	// cross-hypervisor migration -- see docs/specs/vm-scheduling.md).
+	Resize(ctx context.Context, in *ResizeVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	Watch(ctx context.Context, in *WatchVirtualMachinesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VirtualMachineEvent], error)
 	// Serial console (see docs/specs/firecracker-boot.md). Only meaningful
 	// for a VM that has actually been scheduled and had a real VMM boot
@@ -130,6 +136,16 @@ func (c *virtualMachineServiceClient) Start(ctx context.Context, in *StartVirtua
 	return out, nil
 }
 
+func (c *virtualMachineServiceClient) Resize(ctx context.Context, in *ResizeVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VirtualMachine)
+	err := c.cc.Invoke(ctx, VirtualMachineService_Resize_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *virtualMachineServiceClient) Watch(ctx context.Context, in *WatchVirtualMachinesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VirtualMachineEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &VirtualMachineService_ServiceDesc.Streams[0], VirtualMachineService_Watch_FullMethodName, cOpts...)
@@ -182,6 +198,11 @@ type VirtualMachineServiceServer interface {
 	// (Running for Stop, Stopped for Start).
 	Stop(context.Context, *StopVirtualMachineRequest) (*VirtualMachine, error)
 	Start(context.Context, *StartVirtualMachineRequest) (*VirtualMachine, error)
+	// Resize changes vcpu/memory_mb of a Stopped VM in place: FailedPrecondition
+	// if the VM isn't Stopped, ResourceExhausted if the new size would exceed
+	// tenant quota or the current Hypervisor's free capacity (no
+	// cross-hypervisor migration -- see docs/specs/vm-scheduling.md).
+	Resize(context.Context, *ResizeVirtualMachineRequest) (*VirtualMachine, error)
 	Watch(*WatchVirtualMachinesRequest, grpc.ServerStreamingServer[VirtualMachineEvent]) error
 	// Serial console (see docs/specs/firecracker-boot.md). Only meaningful
 	// for a VM that has actually been scheduled and had a real VMM boot
@@ -217,6 +238,9 @@ func (UnimplementedVirtualMachineServiceServer) Stop(context.Context, *StopVirtu
 }
 func (UnimplementedVirtualMachineServiceServer) Start(context.Context, *StartVirtualMachineRequest) (*VirtualMachine, error) {
 	return nil, status.Error(codes.Unimplemented, "method Start not implemented")
+}
+func (UnimplementedVirtualMachineServiceServer) Resize(context.Context, *ResizeVirtualMachineRequest) (*VirtualMachine, error) {
+	return nil, status.Error(codes.Unimplemented, "method Resize not implemented")
 }
 func (UnimplementedVirtualMachineServiceServer) Watch(*WatchVirtualMachinesRequest, grpc.ServerStreamingServer[VirtualMachineEvent]) error {
 	return status.Error(codes.Unimplemented, "method Watch not implemented")
@@ -371,6 +395,24 @@ func _VirtualMachineService_Start_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VirtualMachineService_Resize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResizeVirtualMachineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VirtualMachineServiceServer).Resize(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VirtualMachineService_Resize_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VirtualMachineServiceServer).Resize(ctx, req.(*ResizeVirtualMachineRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VirtualMachineService_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchVirtualMachinesRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -427,6 +469,10 @@ var VirtualMachineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Start",
 			Handler:    _VirtualMachineService_Start_Handler,
+		},
+		{
+			MethodName: "Resize",
+			Handler:    _VirtualMachineService_Resize_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

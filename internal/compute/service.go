@@ -218,9 +218,10 @@ func (s *Service) List(ctx context.Context, tenantID string) ([]VirtualMachine, 
 }
 
 // Update requires machine.Meta.ResourceVersion to match the stored value
-// (optimistic concurrency); mismatches return ErrConflict. Spec fields
-// (vcpu/memory_mb) aren't expected to change via Update -- there's no
-// resize feature -- so this doesn't touch tenant_usage.
+// (optimistic concurrency); mismatches return ErrConflict. Spec.VCPU/
+// Spec.MemoryMB aren't expected to change via Update -- that's Resize's job
+// (Stopped-only, with its own quota/Hypervisor-capacity accounting) -- so
+// this doesn't touch tenant_usage.
 func (s *Service) Update(ctx context.Context, machine *VirtualMachine) (*VirtualMachine, error) {
 	current, err := s.store.Get(ctx, machine.Meta.TenantID, machine.Meta.ID)
 	if err != nil {
@@ -396,6 +397,90 @@ func (s *Service) Start(ctx context.Context, tenantID, id string) (*VirtualMachi
 	if err != nil {
 		return nil, err
 	}
+	return &out, nil
+}
+
+// Resize changes a Stopped VM's vcpu/memory_mb in place (cold resize only --
+// see docs/specs/virtual-machine.md). No live/hot resize exists: cloud-
+// hypervisor's API socket is deliberately unused (docs/specs/cloud-
+// hypervisor-boot.md), so the only way to change a booted VM's size is to
+// stop it, change Spec here, and Start it again -- Start's reconcile() path
+// (provisionAndPublish) already rebuilds its CreateCommand straight from
+// Spec every time, so no VMM-driver/reconciler changes are needed for the
+// new size to take effect.
+//
+// Like Create/Delete, this holds usageMu for the whole check-then-commit
+// sequence since it adjusts tenant_usage; VMCount is left untouched (a
+// resize never creates or removes a VM). Unlike Create, the Hypervisor this
+// VM is already pinned to is never re-picked -- only a capacity delta is
+// applied against it (resizeHypervisorCapacity), and if the new size
+// doesn't fit there, the resize is rejected outright rather than migrating
+// to a different Hypervisor (see docs/specs/vm-scheduling.md).
+func (s *Service) Resize(ctx context.Context, tenantID, id string, vcpu int32, memoryMB int64) (*VirtualMachine, error) {
+	if vcpu <= 0 {
+		return nil, fmt.Errorf("%w: vcpu must be positive", ErrValidation)
+	}
+	if memoryMB <= 0 {
+		return nil, fmt.Errorf("%w: memory_mb must be positive", ErrValidation)
+	}
+
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+
+	vm, err := s.store.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if vm.Status.Phase != PhaseStopped {
+		return nil, fmt.Errorf("%w: vm must be Stopped to Resize (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
+	}
+
+	if vcpu == vm.Spec.VCPU && memoryMB == vm.Spec.MemoryMB {
+		return &vm, nil
+	}
+
+	deltaVCPU := vcpu - vm.Spec.VCPU
+	deltaMemoryMB := memoryMB - vm.Spec.MemoryMB
+
+	// A pure shrink (both deltas <= 0) can never violate quota -- it only
+	// frees headroom -- so identity isn't consulted at all in that case.
+	if deltaVCPU > 0 || deltaMemoryMB > 0 {
+		limit, err := lookupQuota(ctx, s.identityClient, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		usage := s.usage[tenantID]
+		allowed, err := s.quota.allowResize(ctx, usage, deltaVCPU, deltaMemoryMB, vcpu, memoryMB, limit)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, fmt.Errorf("%w: tenant %q", ErrQuotaExceeded, tenantID)
+		}
+	}
+
+	if err := s.resizeHypervisorCapacity(ctx, vm.Status.Hypervisor, deltaVCPU, deltaMemoryMB); err != nil {
+		return nil, err
+	}
+
+	vm.Spec.VCPU = vcpu
+	vm.Spec.MemoryMB = memoryMB
+	out, err := s.store.Update(ctx, vm)
+	if err != nil {
+		// Roll back the capacity delta already applied above -- the same
+		// delta values undo it in either direction (a grow's rollback
+		// subtracts what was added, a shrink's rollback adds back what was
+		// released), same Saga-style compensating-action shape
+		// releaseHypervisorCapacity/reconcile() already use elsewhere.
+		s.releaseHypervisorCapacity(ctx, vm.Status.Hypervisor, deltaVCPU, deltaMemoryMB)
+		return nil, err
+	}
+
+	usage := s.usage[tenantID]
+	usage.VCPU += deltaVCPU
+	usage.MemoryMB += deltaMemoryMB
+	s.usage[tenantID] = usage
+
 	return &out, nil
 }
 

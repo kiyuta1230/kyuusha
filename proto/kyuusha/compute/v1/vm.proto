@@ -135,6 +135,18 @@ message StartVirtualMachineRequest {
   string id = 2;
 }
 
+// ResizeVirtualMachineRequest: Stopped -> Stopped only (cold resize -- see
+// docs/specs/virtual-machine.md). No resource_version field: like Stop/Start,
+// this does its own Get-then-mutate-then-Update internally and relies on
+// resource.Store.Update's own compare-and-swap, rather than asking the
+// caller to supply one.
+message ResizeVirtualMachineRequest {
+  string tenant_id = 1;
+  string id = 2;
+  int32 vcpu = 3;
+  int64 memory_mb = 4;
+}
+
 message WatchVirtualMachinesRequest {
   string tenant_id = 1;
   int64 since_resource_version = 2;
@@ -182,6 +194,11 @@ service VirtualMachineService {
   // (Running for Stop, Stopped for Start).
   rpc Stop(StopVirtualMachineRequest) returns (VirtualMachine);
   rpc Start(StartVirtualMachineRequest) returns (VirtualMachine);
+  // Resize changes vcpu/memory_mb of a Stopped VM in place: FailedPrecondition
+  // if the VM isn't Stopped, ResourceExhausted if the new size would exceed
+  // tenant quota or the current Hypervisor's free capacity (no
+  // cross-hypervisor migration -- see docs/specs/vm-scheduling.md).
+  rpc Resize(ResizeVirtualMachineRequest) returns (VirtualMachine);
   rpc Watch(WatchVirtualMachinesRequest) returns (stream VirtualMachineEvent);
   // Serial console (see docs/specs/firecracker-boot.md). Only meaningful
   // for a VM that has actually been scheduled and had a real VMM boot

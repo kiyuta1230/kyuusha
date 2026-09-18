@@ -92,6 +92,80 @@ func TestService_CreateEnforcesQuota(t *testing.T) {
 	}
 }
 
+// TestService_ResizeEnforcesQuota exercises allow_resize's aggregate-delta
+// check: growing past the tenant's remaining headroom is rejected, and
+// rejection leaves both tenant_usage and the stored VM's Spec untouched (no
+// partial charge).
+func TestService_ResizeEnforcesQuota(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{
+		MaxVcpu: 4, MaxMemoryMb: 8192, MaxVms: 10, MaxVcpuPerVm: 8, MaxMemoryMbPerVm: 8192,
+	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 16, 32768, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
+
+	// Growing to vcpu=5 would push tenant total to 5 > max_vcpu=4.
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 5, 2048); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("over tenant total: got %v, want ErrQuotaExceeded", err)
+	}
+
+	usage := svc.usage[tenant]
+	if usage.VCPU != 2 || usage.MemoryMB != 2048 {
+		t.Fatalf("usage changed after a rejected Resize: %+v, want unchanged vcpu=2 memory_mb=2048", usage)
+	}
+	stored, err := svc.Get(ctx, tenant, vm.Meta.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Spec.VCPU != 2 || stored.Spec.MemoryMB != 2048 {
+		t.Fatalf("stored Spec changed after a rejected Resize: %+v, want unchanged vcpu=2 memory_mb=2048", stored.Spec)
+	}
+}
+
+// TestService_ResizeAllowsShrinkEvenNearQuotaLimit confirms a shrink is
+// never blocked by quota, even when the tenant is already at its limit --
+// see Service.Resize's "pure shrink never violates quota" short-circuit.
+func TestService_ResizeAllowsShrinkEvenNearQuotaLimit(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{
+		MaxVcpu: 2, MaxMemoryMb: 2048, MaxVms: 10, MaxVcpuPerVm: 2, MaxMemoryMbPerVm: 2048,
+	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 16, 32768, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
+
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 1, 1024); err != nil {
+		t.Fatalf("shrink at quota limit: %v", err)
+	}
+}
+
+// TestService_ResizeEnforcesPerVMCap exercises allow_resize's per-VM branch
+// specifically: aggregate tenant usage has headroom, but the requested new
+// size alone exceeds max_vcpu_per_vm/max_memory_mb_per_vm.
+func TestService_ResizeEnforcesPerVMCap(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{
+		MaxVcpu: 16, MaxMemoryMb: 32768, MaxVms: 10, MaxVcpuPerVm: 4, MaxMemoryMbPerVm: 4096,
+	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	const tenant = "tenant-a"
+
+	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 16, 32768, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
+
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 5, 2048); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("over max_vcpu_per_vm (plenty of tenant headroom): got %v, want ErrQuotaExceeded", err)
+	}
+}
+
 // TestService_NewServiceRebuildsUsageFromExistingVirtualMachines proves the
 // real bug found 2026-09-13 (same class as
 // network.Service.rebuildPools/blockstorage.Service.rebuildUsage, and

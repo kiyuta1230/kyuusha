@@ -149,6 +149,33 @@ fcvmm/chvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`�
   `EEXIST`で失敗する）ため、rootfsだけを外へ退避してchroot全体を作り直し、
   rootfsだけ元へ戻す、という一手間が要る。
 
+## リサイズ（`Resize`、コールドリサイズのみ、2026-09-19実装）
+
+`VirtualMachineService.Resize(tenant_id, id, vcpu, memory_mb)`は`Stopped`の
+VMのみに許可される（それ以外は`FailedPrecondition`）。`Stop`/`Start`同様
+`resource_version`は取らず、Get→フェーズチェック→mutate→`store.Update`を
+サービス内で完結させ、`resource.Store.Update`自身のcompare-and-swapに
+任せる。
+
+- **コールドオンリー**: ライブ/ホットリサイズは存在しない。cloud-hypervisorは
+  `--api-socket`を使わずCLIフラグで起動時に一括設定するだけ
+  （[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照）で、実行中プロセスへの
+  ホットプラグ経路が無いため。`Stopped`中に`spec.vcpu`/`memory_mb`を書き換えておけば、
+  次の`Start`が`provisionAndPublish`経由で`vm.Spec`から`CreateCommand`を
+  再構築する際に新サイズで起動する——VMMドライバ・Reconciler・NATSコマンド、
+  いずれも変更不要（新しいphaseも追加していない: `Resize`はStopped→Stoppedのまま
+  同期的に完了する）
+- **Hypervisor容量**: VMが既に割り当て済みのHypervisorに対してのみ、
+  `allocated_vcpu`/`allocated_memory_mb`のデルタ調整を行う
+  （[VMスケジュール仕様](vm-scheduling.md)「リサイズ時の容量調整」参照）。
+  収まらない場合は別のHypervisorへ再スケジュールせず、そのまま
+  `ResourceExhausted`で拒否する——ユーザーはVMを作り直す以外の手段がない
+- **Quota**: 成長方向（vcpu/memory_mbのいずれかが増える）のみ判定する。
+  縮小のみのリサイズはquotaを絶対に超過しえないため、identityへの問い合わせ自体を
+  スキップする（[Quota仕様](quota.md)「強制フロー（VM Resize時）」参照）
+- 同一サイズへのResizeは`store.Update`すら呼ばない真のno-op（`resource_version`は
+  変化しない）
+
 ## 削除
 
 VMが削除されると、Reconcilerは（Hypervisor容量の解放と同時に）`DeleteCommand`を
@@ -223,19 +250,22 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
   `docs/architecture.md`「UserData注入」の「機密情報の扱いに関する注記」参照）
 - 本物のcloud-initを動かすゲストでの動作確認（playgroundの最小Alpineゲストには
   cloud-init自体が入っていないため、seed diskが正しく届くことまでしか確認していない）
-- **VMのリサイズ（vcpu/memory_mbの変更）**: `VirtualMachineSpec.vcpu`/`memory_mb`は
-  作成後不変。`Update` RPC自体は存在するが、spec側のこれらのフィールドが変わることは
-  想定しておらず（`internal/compute/service.go`の`Service.Update`のコメント参照）、
-  Hypervisor側の予約(`allocated_vcpu`/`allocated_memory_mb`)もVMM側の実プロセスも
-  追従しない。リサイズしたい場合は現状、VMを作り直す以外の手段がない
+- **ライブ/ホットリサイズ**: `Resize`はStoppedのVMに対するコールドリサイズのみ
+  （上記「リサイズ」節参照）。実行中VMのvcpu/memory_mbをダウンタイム無しで
+  変更するには、cloud-hypervisorの`--api-socket`導入とホットプラグ対応という
+  別途大きめの設計が要る
+- **リサイズ時のHypervisor間移行**: 新サイズが現在のHypervisorの空き容量に
+  収まらない場合、別のHypervisorへVMを移動してリサイズを成立させる機能は無い
+  （上記「リサイズ」節参照、拒否のみ）
 - **イメージローカルキャッシュのエビクション**: `internal/compute-agent/imagestore`は
   取得したdigestを際限なく保持し続ける——LRU等の削除ロジックがまだ無い
   （[docs/open-questions.md](../open-questions.md)「イメージのローカル管理」参照）
 
-プロセス隔離もStop/Start（一時停止/再開）ももう「共通の未実装事項」ではない
-——jailer相当の隔離は`driver_hint=FIRECRACKER`が実jailer(chroot+uid/gid drop)、
-`driver_hint=CLOUD_HYPERVISOR`が静的バイナリ+組み込みseccompという別の形で、
-それぞれ対応済み（上記「cgroupリソース制限」節参照）。Stop/Startは2026-09-12実装
-（上記「停止/起動」節参照）。ドライバ固有の未実装事項（例: Firecrackerのクロス
+プロセス隔離もStop/Start（一時停止/再開）もコールドリサイズももう
+「共通の未実装事項」ではない——jailer相当の隔離は`driver_hint=FIRECRACKER`が
+実jailer(chroot+uid/gid drop)、`driver_hint=CLOUD_HYPERVISOR`が静的バイナリ+
+組み込みseccompという別の形で、それぞれ対応済み（上記「cgroupリソース制限」節参照）。
+Stop/Startは2026-09-12実装（上記「停止/起動」節参照）、`Resize`は2026-09-19実装
+（上記「リサイズ」節参照）。ドライバ固有の未実装事項（例: Firecrackerのクロス
 hypervisorネットワーク疎通、cloud-hypervisorのPCI passthrough/vhost-user）は
 それぞれの仕様書の「この実装がカバーしないもの」を参照。

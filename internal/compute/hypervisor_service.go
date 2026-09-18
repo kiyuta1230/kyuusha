@@ -14,6 +14,14 @@ var (
 	ErrHypervisorHistoryPruned = errors.New("hypervisor: watch resume point too old, relist required")
 	ErrUnschedulable           = errors.New("vm: no hypervisor satisfies scheduling constraints")
 	ErrHypervisorRevoked       = errors.New("hypervisor: this id has been revoked, registration rejected")
+	// ErrHypervisorCapacityExceeded is Resize's counterpart to
+	// ErrUnschedulable: unlike scheduling (where no candidate among possibly
+	// many fit), a resize is pinned to the VM's already-assigned Hypervisor,
+	// so failure specifically means "that one Hypervisor doesn't have room" --
+	// distinct enough (for logs/metrics/client messages, and because it maps
+	// to ResourceExhausted like quota, not the FailedPrecondition Unschedulable
+	// implies) to warrant its own error rather than reusing ErrUnschedulable.
+	ErrHypervisorCapacityExceeded = errors.New("vm: hypervisor lacks capacity for resize")
 )
 
 // HypervisorEvent is re-exported from the generic resource.Store, distinct
@@ -303,6 +311,29 @@ func (s *Service) reserveHypervisorCapacity(ctx context.Context, id string, vcpu
 		}
 		h.Status.AllocatedVCPU += vcpu
 		h.Status.AllocatedMemoryMB += memoryMB
+		return nil
+	})
+}
+
+// resizeHypervisorCapacity adjusts a Hypervisor's Allocated{VCPU,MemoryMB}
+// by (deltaVCPU, deltaMemoryMB) for a Resize of a VM already pinned to id --
+// no candidate list, no filterSchedulable/Pick, just a capacity delta
+// against the one Hypervisor this VM already sits on (see
+// docs/specs/vm-scheduling.md's Resize section). Capacity is only checked
+// when growing on a given axis (deltaVCPU/deltaMemoryMB > 0): a shrink
+// (negative delta) always fits, since it only frees capacity. On success the
+// delta is applied via the same += either direction relies on, so a shrink's
+// negative delta correctly reduces the reservation.
+func (s *Service) resizeHypervisorCapacity(ctx context.Context, id string, deltaVCPU int32, deltaMemoryMB int64) error {
+	return s.updateHypervisor(ctx, id, func(h *Hypervisor) error {
+		if deltaVCPU > 0 && h.Status.AllocatableVCPU-h.Status.AllocatedVCPU < deltaVCPU {
+			return ErrHypervisorCapacityExceeded
+		}
+		if deltaMemoryMB > 0 && h.Status.AllocatableMemoryMB-h.Status.AllocatedMemoryMB < deltaMemoryMB {
+			return ErrHypervisorCapacityExceeded
+		}
+		h.Status.AllocatedVCPU += deltaVCPU
+		h.Status.AllocatedMemoryMB += deltaMemoryMB
 		return nil
 	})
 }

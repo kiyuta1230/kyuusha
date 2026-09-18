@@ -57,7 +57,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  kyuusha vm <create|get|list|watch|console|delete|stop|start|reboot|hard-reboot|add-finalizer|remove-finalizer> [flags]
+  kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|reboot|hard-reboot|add-finalizer|remove-finalizer> [flags]
   kyuusha tenant <create|get|list|watch|update|delete> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
   kyuusha hypervisor bootstrap-token create -zone=... [flags]   (dev-only, local signing; see internal/bootstraptoken)
@@ -93,6 +93,8 @@ func vmCmd(args []string) {
 		vmStop(args[1:])
 	case "start":
 		vmStart(args[1:])
+	case "resize":
+		vmResize(args[1:])
 	case "reboot":
 		vmReboot(args[1:], false)
 	case "hard-reboot":
@@ -330,6 +332,33 @@ func vmStart(args []string) {
 	vm, err := client.Start(ctx, &computev1.StartVirtualMachineRequest{TenantId: *tenant, Id: *id})
 	if err != nil {
 		fatal("start: %v", err)
+	}
+	printVM(vm)
+}
+
+// vmResize changes vcpu/memory_mb of a Stopped VM (cold resize only -- see
+// docs/specs/virtual-machine.md). No resource_version flag: like vmStop/
+// vmStart, Resize does its own Get-then-mutate-then-Update server-side.
+func vmResize(args []string) {
+	fs := flag.NewFlagSet("vm resize", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	vcpu := fs.Int("vcpu", 0, "new vCPU count (required)")
+	memoryMB := fs.Int64("memory-mb", 0, "new memory in MB (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" || *vcpu == 0 || *memoryMB == 0 {
+		fatal("-tenant, -id, -vcpu, and -memory-mb are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+	vm, err := client.Resize(ctx, &computev1.ResizeVirtualMachineRequest{
+		TenantId: *tenant, Id: *id, Vcpu: int32(*vcpu), MemoryMb: *memoryMB,
+	})
+	if err != nil {
+		fatal("resize: %v", err)
 	}
 	printVM(vm)
 }

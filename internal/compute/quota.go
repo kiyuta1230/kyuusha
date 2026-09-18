@@ -28,7 +28,8 @@ type tenantUsage struct {
 // query, same foundation as internal/authz, per "Quota設計"'s explicit
 // instruction to put it there rather than as hand-rolled Go comparisons.
 type quotaChecker struct {
-	query rego.PreparedEvalQuery
+	query       rego.PreparedEvalQuery
+	resizeQuery rego.PreparedEvalQuery
 }
 
 func newQuotaChecker(ctx context.Context) (*quotaChecker, error) {
@@ -39,7 +40,14 @@ func newQuotaChecker(ctx context.Context) (*quotaChecker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prepare quota policy: %w", err)
 	}
-	return &quotaChecker{query: query}, nil
+	resizeQuery, err := rego.New(
+		rego.Query("data.kyuusha.compute.quota.allow_resize"),
+		rego.Module("quota.rego", quotaPolicySrc),
+	).PrepareForEval(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("prepare quota resize policy: %w", err)
+	}
+	return &quotaChecker{query: query, resizeQuery: resizeQuery}, nil
 }
 
 func (q *quotaChecker) allow(ctx context.Context, usage tenantUsage, requestVCPU int32, requestMemoryMB int64, limit *identityv1.QuotaSpec) (bool, error) {
@@ -64,6 +72,42 @@ func (q *quotaChecker) allow(ctx context.Context, usage tenantUsage, requestVCPU
 	results, err := q.query.Eval(ctx, rego.EvalInput(input))
 	if err != nil {
 		return false, fmt.Errorf("evaluate quota policy: %w", err)
+	}
+	if len(results) == 0 || len(results[0].Expressions) == 0 {
+		return false, nil
+	}
+	allowed, _ := results[0].Expressions[0].Value.(bool)
+	return allowed, nil
+}
+
+// allowResize is Resize's counterpart to allow: see quota.rego's
+// allow_resize for why this is a separate rule rather than reusing allow
+// (vm_count doesn't change, and the aggregate check is against a delta, not
+// an absolute new usage).
+func (q *quotaChecker) allowResize(ctx context.Context, usage tenantUsage, deltaVCPU int32, deltaMemoryMB int64, newVCPU int32, newMemoryMB int64, limit *identityv1.QuotaSpec) (bool, error) {
+	input := map[string]any{
+		"usage": map[string]any{
+			"vcpu":      usage.VCPU,
+			"memory_mb": usage.MemoryMB,
+			"vm_count":  usage.VMCount,
+		},
+		"request": map[string]any{
+			"delta_vcpu":      deltaVCPU,
+			"delta_memory_mb": deltaMemoryMB,
+			"new_vcpu":        newVCPU,
+			"new_memory_mb":   newMemoryMB,
+		},
+		"limit": map[string]any{
+			"max_vcpu":             limit.GetMaxVcpu(),
+			"max_memory_mb":        limit.GetMaxMemoryMb(),
+			"max_vms":              limit.GetMaxVms(),
+			"max_vcpu_per_vm":      limit.GetMaxVcpuPerVm(),
+			"max_memory_mb_per_vm": limit.GetMaxMemoryMbPerVm(),
+		},
+	}
+	results, err := q.resizeQuery.Eval(ctx, rego.EvalInput(input))
+	if err != nil {
+		return false, fmt.Errorf("evaluate quota resize policy: %w", err)
 	}
 	if len(results) == 0 || len(results[0].Expressions) == 0 {
 		return false, nil

@@ -50,6 +50,10 @@ func (f *FakeVirtualMachineClient) Start(context.Context, *computev1.StartVirtua
 	panic("FakeVirtualMachineClient: Start not implemented; network.Service never calls it")
 }
 
+func (f *FakeVirtualMachineClient) Resize(context.Context, *computev1.ResizeVirtualMachineRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	panic("FakeVirtualMachineClient: Resize not implemented; network.Service never calls it")
+}
+
 func (f *FakeVirtualMachineClient) Watch(context.Context, *computev1.WatchVirtualMachinesRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[computev1.VirtualMachineEvent], error) {
 	panic("FakeVirtualMachineClient: Watch not implemented; network.Service never calls it")
 }
