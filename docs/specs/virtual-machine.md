@@ -175,6 +175,13 @@ VMのみに許可される（それ以外は`FailedPrecondition`）。`Stop`/`St
   スキップする（[Quota仕様](quota.md)「強制フロー（VM Resize時）」参照）
 - 同一サイズへのResizeは`store.Update`すら呼ばない真のno-op（`resource_version`は
   変化しない）
+- **vcpu制約はドライバ依存**: `driver_hint=FIRECRACKER`のVMは、要求されたvcpuが
+  Firecracker自身の制約（1または偶数、最大32）を満たさないと`ErrValidation`
+  （`InvalidArgument`）で拒否される——VMの`spec.driver_hint`はResizeでは変更できない
+  固定値なので、既存VMの`driver_hint`に対して判定する（[Firecracker起動仕様]
+  (firecracker-boot.md)「spec.vcpuの制約」参照）。`driver_hint=CLOUD_HYPERVISOR`
+  にはこの制約は無い。同じ検証は`Create`にも入っている（`internal/compute/
+  virtualmachine.go`の`validateVCPUForDriver`）
 
 ## 削除
 

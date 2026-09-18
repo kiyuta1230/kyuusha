@@ -295,8 +295,8 @@ func TestService_ResizeRejectsWhenHypervisorLacksCapacity(t *testing.T) {
 
 	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 4, 8192, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 4096})
 
-	// Only 2 more vCPU free (4 allocatable - 2 allocated); asking for 5 more (2->7) doesn't fit.
-	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 7, 4096); !errors.Is(err, ErrHypervisorCapacityExceeded) {
+	// Only 2 more vCPU free (4 allocatable - 2 allocated); asking for 6 more (2->8) doesn't fit.
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 8, 4096); !errors.Is(err, ErrHypervisorCapacityExceeded) {
 		t.Fatalf("over hypervisor capacity: got %v, want ErrHypervisorCapacityExceeded", err)
 	}
 
@@ -325,15 +325,15 @@ func TestService_ResizeGrowsHypervisorReservation(t *testing.T) {
 
 	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 8, 16384, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
 
-	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 5, 5120); err != nil {
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 6, 5120); err != nil {
 		t.Fatalf("Resize: %v", err)
 	}
 	h, err := svc.GetHypervisor(ctx, "hypervisor-1")
 	if err != nil {
 		t.Fatalf("GetHypervisor: %v", err)
 	}
-	if h.Status.AllocatedVCPU != 5 || h.Status.AllocatedMemoryMB != 5120 {
-		t.Fatalf("AllocatedVCPU/MemoryMB = %d/%d, want 5/5120", h.Status.AllocatedVCPU, h.Status.AllocatedMemoryMB)
+	if h.Status.AllocatedVCPU != 6 || h.Status.AllocatedMemoryMB != 5120 {
+		t.Fatalf("AllocatedVCPU/MemoryMB = %d/%d, want 6/5120", h.Status.AllocatedVCPU, h.Status.AllocatedMemoryMB)
 	}
 }
 

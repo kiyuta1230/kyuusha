@@ -15,6 +15,17 @@ Firecrackerプロセス自体は必ずjailer経由で起動する（chroot+uid/g
 （同じ`KERNEL_ROOTFS`形式のImageを、`internal/compute-agent/chvmm`が別のVMMプロセスで
 起動する）。
 
+**`spec.vcpu`の制約（Firecracker固有）**: Firecracker自身の
+`MachineConfiguration.vcpu_count`スキーマは「1、または偶数、最大32」しか受け付けない
+（vCPUペアをゲストへhyperthreadingトポロジとして見せる都合、vcpu_count==1の場合のみ例外）。
+`internal/compute-agent/fcvmm`自体はこれをローカルで検証せず`spec.vcpu`を
+`config.json`の`vcpu_count`へそのまま書き込むだけなので、違反した値はFirecracker
+プロセス自身の起動時チェックで拒否される。この非同期な失敗（VM作成なら`Error`フェーズ、
+Resizeなら後続の`Start`まで顕在化しない）を避けるため、`compute.Service.Create`/
+`Resize`が`validateVCPUForDriver`（`internal/compute/virtualmachine.go`）で
+同期的にこの制約を検証する——`driver_hint=CLOUD_HYPERVISOR`にはこの制約は無い
+（[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照）。
+
 ## computeからcompute-agentへ渡る情報
 
 ドライバを問わず共通の`CreateCommand`ペイロード（stubフォールバックの条件含む）——

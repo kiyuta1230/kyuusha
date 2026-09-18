@@ -491,6 +491,85 @@ func TestService_ResizeRejectsNonPositiveValues(t *testing.T) {
 	}
 }
 
+// TestService_CreateRejectsInvalidFirecrackerVCPU exercises
+// validateVCPUForDriver: Firecracker's own MachineConfiguration.vcpu_count
+// schema requires 1 or an even number, max 32 (fcvmm passes spec.VCPU
+// straight into config.json with no local validation of its own, so this
+// codebase must reject it synchronously at Create time or the failure only
+// surfaces later as an opaque boot failure -- see validateVCPUForDriver's
+// doc comment). cloud-hypervisor has no such constraint.
+func TestService_CreateRejectsInvalidFirecrackerVCPU(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	if _, err := svc.Create(ctx, tenant, "", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 3, MemoryMB: 512, DriverHint: VmmDriverFirecracker,
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("odd vcpu=3 on Firecracker: got %v, want ErrValidation", err)
+	}
+	if _, err := svc.Create(ctx, tenant, "", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 64, MemoryMB: 512, DriverHint: VmmDriverFirecracker,
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("vcpu=64 on Firecracker (over max 32): got %v, want ErrValidation", err)
+	}
+	// The default (unspecified) driver_hint is Firecracker (see Create's own
+	// doc comment), so the same odd-vcpu rejection applies without an
+	// explicit driver_hint too.
+	if _, err := svc.Create(ctx, tenant, "", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 3, MemoryMB: 512,
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("odd vcpu=3 with default driver_hint: got %v, want ErrValidation", err)
+	}
+
+	// vcpu=1 and any positive even number are valid for Firecracker.
+	if _, err := svc.Create(ctx, tenant, "web-1", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 1, MemoryMB: 512, DriverHint: VmmDriverFirecracker,
+	}); err != nil {
+		t.Fatalf("vcpu=1 on Firecracker: %v", err)
+	}
+	if _, err := svc.Create(ctx, tenant, "web-2", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 4, MemoryMB: 512, DriverHint: VmmDriverFirecracker,
+	}); err != nil {
+		t.Fatalf("even vcpu=4 on Firecracker: %v", err)
+	}
+
+	// cloud-hypervisor has no parity constraint: an odd vcpu is fine.
+	if _, err := svc.Create(ctx, tenant, "web-3", VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 3, MemoryMB: 512, DriverHint: VmmDriverCloudHypervisor,
+	}); err != nil {
+		t.Fatalf("odd vcpu=3 on CloudHypervisor: %v", err)
+	}
+}
+
+// TestService_ResizeRejectsInvalidFirecrackerVCPU mirrors
+// TestService_CreateRejectsInvalidFirecrackerVCPU for Resize: unlike Create,
+// Resize can't take an explicit driver_hint (a VM's driver never changes),
+// so it validates the requested vcpu against the VM's own existing
+// Spec.DriverHint.
+func TestService_ResizeRejectsInvalidFirecrackerVCPU(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+	const tenant = "tenant-a"
+
+	fcVM := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 64, 65536, VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 2, MemoryMB: 512, DriverHint: VmmDriverFirecracker,
+	})
+	if _, err := svc.Resize(ctx, tenant, fcVM.Meta.ID, 3, 512); !errors.Is(err, ErrValidation) {
+		t.Fatalf("resize Firecracker VM to odd vcpu=3: got %v, want ErrValidation", err)
+	}
+	if _, err := svc.Resize(ctx, tenant, fcVM.Meta.ID, 6, 512); err != nil {
+		t.Fatalf("resize Firecracker VM to even vcpu=6: %v", err)
+	}
+
+	chVM := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-2", 64, 65536, VirtualMachineSpec{
+		ImageID: "img-abc", VCPU: 2, MemoryMB: 512, DriverHint: VmmDriverCloudHypervisor,
+	})
+	if _, err := svc.Resize(ctx, tenant, chVM.Meta.ID, 3, 512); err != nil {
+		t.Fatalf("resize CloudHypervisor VM to odd vcpu=3: %v", err)
+	}
+}
+
 func TestService_ResizeNotFound(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)

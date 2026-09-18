@@ -155,6 +155,9 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	if spec.DriverHint == VmmDriverUnspecified {
 		spec.DriverHint = VmmDriverFirecracker
 	}
+	if err := validateVCPUForDriver(spec.VCPU, spec.DriverHint); err != nil {
+		return nil, err
+	}
 
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
@@ -433,6 +436,9 @@ func (s *Service) Resize(ctx context.Context, tenantID, id string, vcpu int32, m
 	}
 	if vm.Status.Phase != PhaseStopped {
 		return nil, fmt.Errorf("%w: vm must be Stopped to Resize (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
+	}
+	if err := validateVCPUForDriver(vcpu, vm.Spec.DriverHint); err != nil {
+		return nil, err
 	}
 
 	if vcpu == vm.Spec.VCPU && memoryMB == vm.Spec.MemoryMB {

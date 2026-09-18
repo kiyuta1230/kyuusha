@@ -35,7 +35,7 @@ func TestService_CreateEnforcesQuota(t *testing.T) {
 
 	// Exceeds max_vcpu_per_vm even though tenant totals have room.
 	if _, err := svc.Create(ctx, tenant, "", VirtualMachineSpec{ImageID: "img-abc",
-		VCPU: 3, MemoryMB: 1024,
+		VCPU: 4, MemoryMB: 1024,
 	}); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("over per-VM cap: got %v, want ErrQuotaExceeded", err)
 	}
@@ -108,8 +108,8 @@ func TestService_ResizeEnforcesQuota(t *testing.T) {
 
 	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 16, 32768, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
 
-	// Growing to vcpu=5 would push tenant total to 5 > max_vcpu=4.
-	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 5, 2048); !errors.Is(err, ErrQuotaExceeded) {
+	// Growing to vcpu=6 would push tenant total to 6 > max_vcpu=4.
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 6, 2048); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("over tenant total: got %v, want ErrQuotaExceeded", err)
 	}
 
@@ -161,7 +161,7 @@ func TestService_ResizeEnforcesPerVMCap(t *testing.T) {
 
 	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 16, 32768, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
 
-	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 5, 2048); !errors.Is(err, ErrQuotaExceeded) {
+	if _, err := svc.Resize(ctx, tenant, vm.Meta.ID, 6, 2048); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("over max_vcpu_per_vm (plenty of tenant headroom): got %v, want ErrQuotaExceeded", err)
 	}
 }
@@ -188,7 +188,10 @@ func TestService_NewServiceRebuildsUsageFromExistingVirtualMachines(t *testing.T
 	if err != nil {
 		t.Fatalf("NewService (first): %v", err)
 	}
-	if _, err := svc1.Create(ctx, tenant, "vm-1", VirtualMachineSpec{ImageID: "img-abc", VCPU: 3, MemoryMB: 4096}); err != nil {
+	// DriverHint: CloudHypervisor -- odd vcpu=3 would otherwise be rejected
+	// by Firecracker's own even-or-1 vcpu_count constraint (see
+	// validateVCPUForDriver); this test only cares about usage arithmetic.
+	if _, err := svc1.Create(ctx, tenant, "vm-1", VirtualMachineSpec{ImageID: "img-abc", VCPU: 3, MemoryMB: 4096, DriverHint: VmmDriverCloudHypervisor}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 

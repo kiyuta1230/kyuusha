@@ -4,6 +4,7 @@
 package compute
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/resource"
@@ -16,6 +17,36 @@ const (
 	VmmDriverFirecracker     VmmDriver = "FIRECRACKER"
 	VmmDriverCloudHypervisor VmmDriver = "CLOUD_HYPERVISOR"
 )
+
+// firecrackerMaxVCPU mirrors Firecracker's own MachineConfiguration.vcpu_count
+// schema (1-32, and any value above 1 must be even -- Firecracker exposes
+// vCPU pairs as hyperthread siblings to the guest unless vcpu_count==1).
+// cloud-hypervisor's `--cpus boot=N` has no such constraint (see
+// docs/specs/cloud-hypervisor-boot.md).
+const firecrackerMaxVCPU = 32
+
+// validateVCPUForDriver enforces Firecracker's vcpu_count constraint
+// synchronously at Create/Resize time rather than letting it surface later
+// as an opaque boot failure: fcvmm.Boot passes spec.VCPU straight into
+// config.json with no local validation (internal/compute-agent/fcvmm), so
+// an invalid value is only ever caught by Firecracker's own binary at
+// process startup -- by which point, for Create, Hypervisor capacity has
+// already been reserved and the VM has already moved through Scheduled ->
+// Provisioning, or for Resize, the bad spec has already been persisted
+// (Resize is synchronous and doesn't touch a VMM at all -- see Service.
+// Resize) and the failure wouldn't surface until a later Start.
+func validateVCPUForDriver(vcpu int32, driver VmmDriver) error {
+	if driver != VmmDriverFirecracker {
+		return nil
+	}
+	if vcpu > firecrackerMaxVCPU {
+		return fmt.Errorf("%w: vcpu %d exceeds Firecracker's max of %d", ErrValidation, vcpu, firecrackerMaxVCPU)
+	}
+	if vcpu != 1 && vcpu%2 != 0 {
+		return fmt.Errorf("%w: vcpu %d is invalid for driver_hint %s (must be 1 or an even number)", ErrValidation, vcpu, VmmDriverFirecracker)
+	}
+	return nil
+}
 
 type NetworkAttachment struct {
 	SubnetID string
