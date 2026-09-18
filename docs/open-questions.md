@@ -201,3 +201,27 @@ CreateはできるがDeleteはできない」のようなメソッド単位・�
 docs/architecture.mdでは「主要な外部クライアントはKaaSコントローラー1つで、自クラスタの
 全リソース種別を管理する必要があるため分割の実利が薄い」として意図的に据え置いていた
 （OPA採用によりいつでも先送りできる、という前提込みで）。判断保留中。
+
+## リサイズのホットプラグ（ライブ/ホット）対応（見送り中、将来の検討事項）
+
+`VirtualMachineService.Resize`（2026-09-19実装、[VirtualMachine仕様](specs/virtual-machine.md)
+「リサイズ」参照）は`Stopped`のVMに対するコールドリサイズのみで、実行中VMのvcpu/memory_mbを
+ダウンタイム無しで変更する手段は無い。当面このままにする、という判断（見送り、まだ着手しない）。
+
+- **cloud-hypervisor**: 元々「boot-vcpus/max-vcpus」の分離設計を持ち、本物のvcpuホット
+  プラグ＋`virtio-mem`によるメモリホットプラグに対応した`--api-socket`経由のresize APIを
+  備えている。このリポジトリは現状APIソケットを使わずCLIフラグで起動時に一括設定するだけ
+  なので（[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)参照）、やるとすれば
+  APIソケット導入＋起動時に`max_vcpu`を宣言する設計変更が要る
+- **Firecracker**: vCPUホットプラグは構造的に不可能——vCPUスレッドはブート時に`/machine-config`
+  で1回設定され、以降VMのライフタイム中1:1で固定（[Firecracker起動仕様](specs/firecracker-boot.md)
+  「spec.vcpuの制約」参照）。`virtio-balloon`によるメモリの縮小/再拡大は実行中でも可能だが、
+  ブート時に設定した`mem_size_mib`という上限を超えて増やすことはできず、真の意味での
+  メモリリサイズではない
+
+やるとしたらcloud-hypervisor限定の機能になり、Firecracker VMに対するホットリサイズ要求を
+どう扱うか（拒否する／コールドリサイズへ自動フォールバックする）という非対称性がAPI設計に
+そのまま表れる。ダウンタイムを許容できないワークロードが実際に出てくるまでは、コールド
+リサイズで大半のユースケースはカバーできる、という判断で見送っている。着手する場合は
+cloud-hypervisor限定のオプトイン機能として実装するのが筋が良さそうという見立てのみ、
+詳細設計はまだしていない。

@@ -260,7 +260,10 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
 - **ライブ/ホットリサイズ**: `Resize`はStoppedのVMに対するコールドリサイズのみ
   （上記「リサイズ」節参照）。実行中VMのvcpu/memory_mbをダウンタイム無しで
   変更するには、cloud-hypervisorの`--api-socket`導入とホットプラグ対応という
-  別途大きめの設計が要る
+  別途大きめの設計が要る。しかもFirecrackerはvCPUホットプラグ自体が構造的に
+  不可能なため、やるとすればcloud-hypervisor限定の機能になる——見送りの
+  経緯・トレードオフは[open-questions.md](../open-questions.md)
+  「リサイズのホットプラグ（ライブ/ホット）対応」参照
 - **リサイズ時のHypervisor間移行**: 新サイズが現在のHypervisorの空き容量に
   収まらない場合、別のHypervisorへVMを移動してリサイズを成立させる機能は無い
   （上記「リサイズ」節参照、拒否のみ）
