@@ -156,8 +156,16 @@ Image/NetworkInterface/VolumeAttachmentと同じ非同期パターンで確認�
    （`ms.blockstorage.evt.<hypervisor>.volume.verify-result`）。結果は
    `Volume.status.conditions`の`IdentifierVerified`として記録され、そのVolumeの
    `StorageConnection`も`Ready`であれば`Ready`へ進む。**確認が取れなければ
-   （identifier不在等）`Pending`のまま**——`Error`へは倒さない。失敗しても次のsweepで
-   また聞きに行く（無期限リトライ、上限やバックオフは無い）。同じ結果に乗ってくる
+   （identifier不在等）`Pending`のまま**——`Error`へは倒さない。失敗しても諦めない
+   （上限は無い）が、2026-09-19より指数バックオフを導入した
+   （`verifyEligibleAndAdvance`、`internal/block-storage/verification.go`）:
+   最初の再送は`pendingSweepInterval`＝10秒後、以降失敗するたびに倍々（最大
+   `verifyRetryMax`＝5分間隔）で間隔を広げる——identifierが恒久的に存在しない
+   （typo等）Volumeに対して、`sweepPendingVolumes`が10秒ごと永遠に問い合わせ続ける
+   のは無駄という判断。検証が成功した時点でバックオフ状態はクリアされる
+   （`clearVerifyBackoff`）。この状態は`Service`のin-memoryマップのみで永続化しない
+   （プロセス再起動で最初の間隔からやり直しになる——他のin-memory状態と同じ許容度）。
+   同じ結果に乗ってくる
    実サイズ（`size_bytes`）が申告`spec.size_gb`と10%以上ずれていれば、
    `correctDeclaredSize`（`internal/block-storage/verification.go`）が
    **`spec.size_gb`自体を実測値へ書き換え、`tenant_usage.volume_gb`もその差分だけ
@@ -368,8 +376,6 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
 - **StorageConnectionの削除保護のみ、GC無し**: `StorageConnection`は参照している
   Volumeが残っている間は削除できない（`ErrValidation`）が、逆に参照されなくなった
   StorageConnectionの自動削除は無い（明示的に消すまで残り続ける）
-- **検証コマンドのリトライ間隔・上限は未チューニング**: 現状は無期限、
-  `pendingSweepInterval`＝10秒ごと
 
 ## エンドポイント
 

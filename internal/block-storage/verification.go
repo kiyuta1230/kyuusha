@@ -348,12 +348,78 @@ func (s *Service) sweepStorageConnections(ctx context.Context) {
 	}
 }
 
+// verifyRetryInterval/verifyRetryMax tune what used to be an untuned retry
+// (docs/specs/volume.md「検証コマンドのリトライ間隔・上限は未チューニング」):
+// sweepPendingVolumes used to (re-)send a VerifyVolumeCommand for every
+// still-unverified Pending Volume on every single pendingSweepInterval
+// tick, forever -- fine for a Volume that resolves within the first few
+// ticks, wasteful (unbounded NATS traffic + compute-agent volumeref.Resolve
+// calls, forever) for one whose identifier will simply never exist (typo,
+// decommissioned backend, etc). verifyEligibleAndAdvance now backs off
+// exponentially per-Volume, starting at the same cadence as before and
+// capped at verifyRetryMax. Deliberately still has no attempt cap and never
+// moves the Volume to Error -- same "確認できなければPendingのまま"
+// philosophy as the rest of this file, just slower about re-asking once a
+// Volume has gone unverified for a while.
+const (
+	verifyRetryInterval = pendingSweepInterval
+	verifyRetryMax      = 5 * time.Minute
+)
+
+// verifyRetryState is verifyBackoff's per-Volume value (Service.
+// verifyBackoff, service.go): next is when this Volume becomes eligible for
+// another VerifyVolumeCommand, interval is the delay that produced it (so
+// the next backoff can double from it).
+type verifyRetryState struct {
+	next     time.Time
+	interval time.Duration
+}
+
+// verifyEligibleAndAdvance reports whether it's time to (re-)send a
+// VerifyVolumeCommand for volumeID, and if so, atomically schedules the
+// next eligible attempt (doubled from last time, capped at verifyRetryMax).
+// The schedule is advanced up front, on the attempt itself, not only after
+// a failure reply comes back -- a command that never gets a reply at all
+// (e.g. no Hypervisor currently reports this storage_connection, so
+// verifyVolume never even publishes one) must still back off, not retry
+// every tick forever.
+func (s *Service) verifyEligibleAndAdvance(volumeID string) bool {
+	s.verifyBackoffMu.Lock()
+	defer s.verifyBackoffMu.Unlock()
+	prev, ok := s.verifyBackoff[volumeID]
+	if ok && time.Now().Before(prev.next) {
+		return false
+	}
+	interval := verifyRetryInterval
+	if ok {
+		interval = prev.interval * 2
+		if interval > verifyRetryMax {
+			interval = verifyRetryMax
+		}
+	}
+	if s.verifyBackoff == nil {
+		s.verifyBackoff = make(map[string]verifyRetryState)
+	}
+	s.verifyBackoff[volumeID] = verifyRetryState{next: time.Now().Add(interval), interval: interval}
+	return true
+}
+
+// clearVerifyBackoff drops volumeID's backoff state once its identifier has
+// actually been confirmed (handleVerifyResult on success), so a Volume that
+// later needs re-verification for any reason starts fresh rather than
+// inheriting however far it had backed off before.
+func (s *Service) clearVerifyBackoff(volumeID string) {
+	s.verifyBackoffMu.Lock()
+	defer s.verifyBackoffMu.Unlock()
+	delete(s.verifyBackoff, volumeID)
+}
+
 // sweepPendingVolumes promotes a Pending Volume to Ready once both (1) its
 // StorageConnection is Ready and (2) its own identifier has already been
-// confirmed (conditionIdentifierVerified); otherwise, if not yet confirmed,
-// (re-)sends a verify command -- unconditionally on every tick, not just
-// once, since there's no harm in asking again and it's the only way to
-// recover from a dropped command/reply.
+// confirmed (conditionIdentifierVerified); otherwise, if not yet confirmed
+// and not currently backed off (verifyEligibleAndAdvance), (re-)sends a
+// verify command -- there's no harm in asking again and it's the only way
+// to recover from a dropped command/reply.
 func (s *Service) sweepPendingVolumes(ctx context.Context) {
 	all, err := s.volumes.List(ctx, "")
 	if err != nil {
@@ -375,7 +441,7 @@ func (s *Service) sweepPendingVolumes(ctx context.Context) {
 			}
 			continue
 		}
-		if !hasCondition(vol.Status.Conditions, conditionIdentifierVerified, resource.ConditionTrue) {
+		if !hasCondition(vol.Status.Conditions, conditionIdentifierVerified, resource.ConditionTrue) && s.verifyEligibleAndAdvance(vol.Meta.ID) {
 			s.verifyVolume(ctx, vol)
 		}
 	}
@@ -438,6 +504,7 @@ func (s *Service) handleVerifyResult(ctx context.Context, res VerifyVolumeResult
 	if res.Success {
 		status = resource.ConditionTrue
 		reason = ""
+		s.clearVerifyBackoff(res.VolumeID)
 	}
 	vol.Status.Conditions = upsertCondition(vol.Status.Conditions, resource.Condition{
 		Type: conditionIdentifierVerified, Status: status, Reason: reason, LastTransitionAt: time.Now(),

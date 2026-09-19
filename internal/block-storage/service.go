@@ -128,6 +128,14 @@ type Service struct {
 	// verification.go's recordHypervisorConnections), never persisted.
 	hcMu                  sync.Mutex
 	hypervisorConnections map[string]hypervisorConnInfo
+
+	// verifyBackoffMu guards verifyBackoff, this Service's in-memory
+	// per-Volume exponential-backoff state for sweepPendingVolumes (see
+	// verification.go) -- never persisted, rebuilt implicitly (starts back
+	// at the initial interval) on restart, same tolerance rebuildUsage's
+	// own doc comment accepts elsewhere for purely in-process state.
+	verifyBackoffMu sync.Mutex
+	verifyBackoff   map[string]verifyRetryState
 }
 
 // NewService constructs a Service and synchronously rebuilds its tenant
@@ -298,7 +306,9 @@ func (s *Service) watchPendingVolumes(ctx context.Context) {
 		if e.Type != EventAdded || e.Object.Status.Phase != VolumePhasePending {
 			continue
 		}
-		s.verifyVolume(ctx, e.Object)
+		if s.verifyEligibleAndAdvance(e.Object.Meta.ID) {
+			s.verifyVolume(ctx, e.Object)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package blockstorage
 import (
 	"context"
 	"testing"
+	"time"
 
 	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	"github.com/kiyuta1230/kyuusha/internal/resource"
@@ -243,4 +244,113 @@ func newTestServiceNoConnection(t *testing.T, ctx context.Context) *Service {
 		t.Fatalf("NewService: %v", err)
 	}
 	return svc
+}
+
+// TestVerifyEligibleAndAdvance_BacksOffExponentially is the regression test
+// for the previously-untuned retry docs/specs/volume.md called out
+// (「検証コマンドのリトライ間隔・上限は未チューニング」): a Volume that keeps
+// failing verification must be asked about less and less often, not on
+// every single tick forever.
+func TestVerifyEligibleAndAdvance_BacksOffExponentially(t *testing.T) {
+	svc := &Service{}
+	const volID = "vol-1"
+
+	if !svc.verifyEligibleAndAdvance(volID) {
+		t.Fatal("first attempt: want eligible")
+	}
+	if svc.verifyEligibleAndAdvance(volID) {
+		t.Fatal("immediate re-check: want NOT eligible (backoff just scheduled)")
+	}
+
+	svc.verifyBackoffMu.Lock()
+	if got := svc.verifyBackoff[volID].interval; got != verifyRetryInterval {
+		t.Fatalf("interval after 1st attempt = %v, want %v", got, verifyRetryInterval)
+	}
+	// Pretend the backoff has already elapsed, rather than sleeping for real.
+	state := svc.verifyBackoff[volID]
+	state.next = time.Now().Add(-time.Second)
+	svc.verifyBackoff[volID] = state
+	svc.verifyBackoffMu.Unlock()
+
+	if !svc.verifyEligibleAndAdvance(volID) {
+		t.Fatal("2nd attempt once backoff elapsed: want eligible")
+	}
+	svc.verifyBackoffMu.Lock()
+	got := svc.verifyBackoff[volID].interval
+	svc.verifyBackoffMu.Unlock()
+	if want := verifyRetryInterval * 2; got != want {
+		t.Fatalf("interval after 2nd attempt = %v, want %v (doubled)", got, want)
+	}
+}
+
+func TestVerifyEligibleAndAdvance_CapsAtMax(t *testing.T) {
+	svc := &Service{verifyBackoff: map[string]verifyRetryState{
+		"vol-1": {next: time.Now().Add(-time.Second), interval: verifyRetryMax},
+	}}
+	if !svc.verifyEligibleAndAdvance("vol-1") {
+		t.Fatal("want eligible once due")
+	}
+	svc.verifyBackoffMu.Lock()
+	got := svc.verifyBackoff["vol-1"].interval
+	svc.verifyBackoffMu.Unlock()
+	if got != verifyRetryMax {
+		t.Fatalf("interval = %v, want capped at %v (not doubled past the cap)", got, verifyRetryMax)
+	}
+}
+
+// TestClearVerifyBackoff_ResetsState confirms a Volume that succeeds after
+// previously failing starts fresh (verifyRetryInterval) if it ever needs
+// re-verification again, rather than inheriting however far it had backed
+// off before.
+func TestClearVerifyBackoff_ResetsState(t *testing.T) {
+	svc := &Service{}
+	const volID = "vol-1"
+	svc.verifyEligibleAndAdvance(volID) // seed backoff state
+	svc.clearVerifyBackoff(volID)
+
+	svc.verifyBackoffMu.Lock()
+	_, ok := svc.verifyBackoff[volID]
+	svc.verifyBackoffMu.Unlock()
+	if ok {
+		t.Fatal("verifyBackoff state should be cleared")
+	}
+	if !svc.verifyEligibleAndAdvance(volID) {
+		t.Fatal("after clear, should be immediately eligible again")
+	}
+}
+
+// TestHandleVerifyResult_ClearsBackoffOnSuccess confirms the real success
+// path (not just the standalone helper) actually clears backoff state.
+// Backoff itself is scheduled at the point a verify attempt is SENT
+// (verifyEligibleAndAdvance, called from sweepPendingVolumes/
+// watchPendingVolumes before publishing) rather than when a reply comes
+// back, so this simulates that ordering directly rather than going through
+// the NATS-dependent sweep.
+func TestHandleVerifyResult_ClearsBackoffOnSuccess(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	vol, err := svc.CreateVolume(ctx, "tenant-a", "vol-1", testVolumeSpec(10))
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+
+	if !svc.verifyEligibleAndAdvance(vol.Meta.ID) {
+		t.Fatal("first attempt: want eligible")
+	}
+	svc.handleVerifyResult(ctx, VerifyVolumeResult{TenantID: "tenant-a", VolumeID: vol.Meta.ID, Success: false, Error: "no such file"})
+	svc.verifyBackoffMu.Lock()
+	_, backedOff := svc.verifyBackoff[vol.Meta.ID]
+	svc.verifyBackoffMu.Unlock()
+	if !backedOff {
+		t.Fatal("a failed verification's already-scheduled backoff state should still be there")
+	}
+
+	svc.handleVerifyResult(ctx, VerifyVolumeResult{TenantID: "tenant-a", VolumeID: vol.Meta.ID, Success: true, SizeBytes: 10 * 1024 * 1024 * 1024})
+	svc.verifyBackoffMu.Lock()
+	_, stillBackedOff := svc.verifyBackoff[vol.Meta.ID]
+	svc.verifyBackoffMu.Unlock()
+	if stillBackedOff {
+		t.Fatal("a successful verification must clear backoff state")
+	}
 }
