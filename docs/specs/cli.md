@@ -7,6 +7,16 @@
 
 - `-addr`: api-gatewayのアドレス（既定`localhost:8080`）
 - `-token`: bearerトークン（省略時は環境変数`$KYUUSHA_TOKEN`）。両方空なら実行時エラー
+- `-tenant`: 省略した場合、`-token`（または`$KYUUSHA_TOKEN`）のJWTペイロードを
+  署名検証なしでローカルデコードし、`tenant_id`クレームをデフォルト値として使う
+  （`resolveTenant`、`cmd/kyuusha/main.go`）。ただし`role`クレームが空でない
+  トークン（`admin`/`storage-admin`/`network-admin`/`viewer`）の場合は自動補完
+  せず、明示指定を要求する——これらのロールでは`tenant_id`クレームが「操作対象の
+  テナント」を意味しないため（[docs/open-questions.md](../open-questions.md)
+  「CLIの-tenantフラグをトークンのクレームからデフォルトすべきか」参照）。
+  ワイヤプロトコル・サーバー側authzモデルには一切影響しない、CLIだけの利便性機能。
+  `kyuusha token mint`自体（これから発行するトークンの`tenant_id`を指定する
+  コマンド）はこの自動補完の対象外
 - 認証・認可の詳細は[認証・認可仕様](authn-authz.md)を参照
 
 ## `kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|attach-volume|detach-volume|reboot|hard-reboot|add-finalizer|remove-finalizer>`

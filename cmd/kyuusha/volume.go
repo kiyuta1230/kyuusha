@@ -56,6 +56,9 @@ func volumeCreate(args []string) {
 	identifier := fs.String("identifier", "", "protocol-specific identifier: for ISCSI/NVME_OF, the block device's stable name under /dev/disk/by-id/; for NFS, a path relative to the connection's mount point (required)")
 	annotations := fs.String("annotations", "", "comma-separated key=value pairs, never interpreted by kyuusha itself -- purely a reference field for admins/users (e.g. a QoS tier)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *sizeGB == 0 || *protocol == "" || *storageConnection == "" || *identifier == "" {
 		fatal("-tenant, -size-gb, -protocol, -storage-connection, and -identifier are required")
@@ -92,6 +95,9 @@ func volumeGet(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "volume ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -111,6 +117,9 @@ func volumeList(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -133,6 +142,9 @@ func volumeWatch(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -171,6 +183,9 @@ func volumeDelete(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "volume ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")

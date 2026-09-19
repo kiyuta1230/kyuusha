@@ -52,6 +52,9 @@ func netifCreate(args []string) {
 	vmID := fs.String("vm", "", "VM ID (required)")
 	subnetID := fs.String("subnet", "", "subnet ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *vmID == "" || *subnetID == "" {
 		fatal("-tenant, -vm, and -subnet are required")
@@ -81,6 +84,9 @@ func netifGet(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "network interface ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -100,6 +106,9 @@ func netifList(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -122,6 +131,9 @@ func netifWatch(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -160,6 +172,9 @@ func netifDelete(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "network interface ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")

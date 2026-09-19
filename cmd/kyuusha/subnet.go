@@ -58,6 +58,9 @@ func subnetCreate(args []string) {
 	meshGroup := fs.String("mesh-group", "", "declares intent to default-allow other Subnets sharing this value (same tenant only); not enforced yet, see docs/specs/network.md")
 	allocatableIPRanges := fs.String("allocatable-ip-ranges", "", "comma-separated \"<start-ip>-<end-ip>\" ranges IPAM may draw from; empty means the whole cidr (minus network/broadcast/gateway-ip)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *zone == "" || *cidr == "" {
 		fatal("-tenant, -zone, and -cidr are required")
@@ -98,6 +101,9 @@ func subnetGet(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "subnet ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -117,6 +123,9 @@ func subnetList(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -139,6 +148,9 @@ func subnetWatch(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -177,6 +189,9 @@ func subnetDelete(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "subnet ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")

@@ -65,6 +65,9 @@ func imageCreate(args []string) {
 	visibility := fs.String("visibility", "private", "private|public (default private)")
 	sharedWith := fs.String("shared-with-tenant-ids", "", "comma-separated tenant IDs allowed to see/reference this Image (private only)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *format == "" {
 		fatal("-tenant and -format are required")
@@ -99,6 +102,9 @@ func imageGet(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "image ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -118,6 +124,9 @@ func imageList(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -140,6 +149,9 @@ func imageWatch(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -184,6 +196,9 @@ func imageShare(args []string) {
 	visibility := fs.String("visibility", "private", "private|public (default private)")
 	sharedWith := fs.String("shared-with-tenant-ids", "", "comma-separated tenant IDs allowed to see/reference this Image (private only); replaces the existing list entirely")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -209,6 +224,9 @@ func imageDelete(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "image ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")

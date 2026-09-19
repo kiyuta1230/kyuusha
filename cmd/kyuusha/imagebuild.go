@@ -61,6 +61,9 @@ func imageBuild(args []string) {
 	visibility := fs.String("visibility", "private", "private|public")
 	sharedWith := fs.String("shared-with-tenant-ids", "", "comma-separated tenant IDs allowed to see/reference this Image (private only)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *registry == "" || *repo == "" || *kernelURL == "" {
 		fatal("-tenant, -registry, -repo, and -kernel-url are required")

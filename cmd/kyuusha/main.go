@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -21,6 +22,7 @@ import (
 	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
+	"github.com/kiyuta1230/kyuusha/internal/authn"
 )
 
 func main() {
@@ -150,6 +152,35 @@ func authedContext(ctx context.Context, token string) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 }
 
+// resolveTenant is the CLI-only convenience `docs/open-questions.md`'s "CLIの
+// -tenantフラグをトークンのクレームからデフォルトすべきか" describes: if
+// -tenant was left unset, decode token (or $KYUUSHA_TOKEN)'s tenant_id claim
+// without verifying its signature (authz still fully verifies+enforces it
+// server-side; this is purely a client-side UX shortcut) and use that as the
+// default. Deliberately returns "" -- leaving the caller's existing
+// "-tenant is required" fatal to fire -- whenever the token carries a
+// cross-tenant Role (admin/storage-admin/network-admin/viewer): for those,
+// tenant_id is wherever the token happened to be minted for, not "the tenant
+// to operate on", so auto-defaulting would silently pick the wrong tenant
+// rather than the caller's actual intent. Never touches wire protocol or the
+// server's authz model.
+func resolveTenant(token string) string {
+	if token == "" {
+		token = os.Getenv("KYUUSHA_TOKEN")
+	}
+	if token == "" {
+		return ""
+	}
+	claims := &authn.Claims{}
+	if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
+		return ""
+	}
+	if claims.Role != "" {
+		return ""
+	}
+	return claims.TenantID
+}
+
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
@@ -170,6 +201,9 @@ func vmCreate(args []string) {
 	userDataFile := fs.String("user-data-file", "", "path to a cloud-init user-data file (NoCloud seed disk; see docs/architecture.md \"UserData注入\"); empty means don't inject anything")
 	wait := fs.Bool("wait", false, "block until the VM reaches Running or Error")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *image == "" {
 		fatal("-tenant and -image are required")
@@ -268,6 +302,9 @@ func vmGet(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "VM ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -288,6 +325,9 @@ func vmDelete(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "VM ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -307,6 +347,9 @@ func vmStop(args []string) {
 	id := fs.String("id", "", "VM ID (required)")
 	force := fs.Bool("force", false, "SIGKILL immediately instead of SIGTERM-then-grace-period-then-SIGKILL")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -327,6 +370,9 @@ func vmStart(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "VM ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -352,6 +398,9 @@ func vmResize(args []string) {
 	vcpu := fs.Int("vcpu", 0, "new vCPU count (required)")
 	memoryMB := fs.Int64("memory-mb", 0, "new memory in MB (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" || *vcpu == 0 || *memoryMB == 0 {
 		fatal("-tenant, -id, -vcpu, and -memory-mb are required")
@@ -380,6 +429,9 @@ func vmAttachVolume(args []string) {
 	volumeID := fs.String("volume-id", "", "Volume ID to attach (required)")
 	deviceHint := fs.String("device-hint", "", "device hint")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" || *volumeID == "" {
 		fatal("-tenant, -id, and -volume-id are required")
@@ -403,6 +455,9 @@ func vmDetachVolume(args []string) {
 	id := fs.String("id", "", "VM ID (required)")
 	volumeID := fs.String("volume-id", "", "Volume ID to detach (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" || *volumeID == "" {
 		fatal("-tenant, -id, and -volume-id are required")
@@ -434,6 +489,9 @@ func vmReboot(args []string, hardForce bool) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "VM ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -484,6 +542,9 @@ func vmList(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -507,6 +568,9 @@ func vmWatch(args []string) {
 	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
 	finalizerName := fs.String("finalizer-name", "", "only watch VMs whose finalizers currently include this name, instead of every VM in the tenant (see docs/specs/external-integration.md)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" {
 		fatal("-tenant is required")
@@ -552,6 +616,9 @@ func vmConsole(args []string) {
 	tailBytes := fs.Int64("tail-bytes", 0, "trailing bytes of existing console output to replay (0: server default ~64KiB; negative: entire log)")
 	follow := fs.Bool("follow", false, "keep streaming new console output after replaying history, like tail -f")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" {
 		fatal("-tenant and -id are required")
@@ -628,6 +695,9 @@ func vmAddFinalizer(args []string) {
 	id := fs.String("id", "", "VM ID (required)")
 	finalizer := fs.String("finalizer", "", "holder name to add, e.g. \"acme.corp/network-acl-cleanup\" (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" || *finalizer == "" {
 		fatal("-tenant, -id, and -finalizer are required")
@@ -661,6 +731,9 @@ func vmRemoveFinalizer(args []string) {
 	id := fs.String("id", "", "VM ID (required)")
 	finalizer := fs.String("finalizer", "", "holder name to remove (required)")
 	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
 
 	if *tenant == "" || *id == "" || *finalizer == "" {
 		fatal("-tenant, -id, and -finalizer are required")
