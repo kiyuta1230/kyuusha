@@ -400,7 +400,7 @@ message NetworkInterfaceStatus {
 
 `tenant_id`(`ObjectMeta`)は`Subnet`単位で持ち、同一テナントのVirtualMachineだけがその`Subnet`の
 `NetworkInterface`を作成できる。異なるテナントのSubnet間の非疎通性は、VLANタグそのものではなく
-**ゲートウェイ側のVRF分離とルートリーク禁止**によって担保する（誤りの訂正含め、詳細は
+**ゲートウェイ側のVRF分離とルートリーク禁止**によって担保する（詳細は
 「ネットワーク分離の実現方式」節）。
 
 **VLAN IDの払い出し**: VLAN IDプールはzoneごとに独立して持つ（同じVLAN番号を別zoneで再利用できる。
@@ -1031,8 +1031,6 @@ JWT署名・OAuth2/OIDCフロー・鍵ローテーションは自前実装が事
   のみで、特定製品を前提にしない。`identity`はkyuusha固有の概念（tenant=KaaSクラスタ、quota）を持つ
   薄いラッパーに留める。api-gateway側の鍵検証方式（固定公開鍵/JWKS）を含む具体的な実装は
   [認証・認可仕様](specs/authn-authz.md)を参照
-  （訂正: 当初はDexまたはORY Hydra限定でKeycloakは運用コストを理由に不採用としていたが、
-  検証側をJWKS対応に汎用化したため製品を問わない要件へ改めた）
 - **KaaS→api-gateway（南北）**: 発行されたJWTをapi-gatewayが公開鍵でローカル検証する（毎リクエストで
   identityへ問い合わせない。「書き込みは同期・高速」の原則と同じ理由）。claimに`tenant_id`を含め、
   以降の認可判定に使う
@@ -1252,7 +1250,7 @@ SCSI Persistent Reservation（SCSI-3 PR）というストレージ側のフェ�
 使える可能性がある——新ハイパーバイザー側が排他予約を奪うと、旧ハイパーバイザー側からの
 書き込みをストレージ自体が拒否するようになる、Pacemaker等の本物のHAクラスタが実際に
 使っている枯れた方式。ただし「厩舎はプロビジョニング/接続を運用者に委ねる」という
-上記「block-storageのバックエンド抽象化」節の訂正後の責務境界とどう整合させるかは
+上記「block-storageのバックエンド抽象化」節の責務境界とどう整合させるかは
 未検討（ストレージ側の機能に依存するため、厩舎から一律に使えるとは限らない）。
 
 **具体的な排他制御**: `VolumeAttachment`は「ある`volume_id`について`Deleting`以外のphaseのものが
@@ -1290,16 +1288,16 @@ VLANはtap→ブリッジの層でタグを打つだけの**タギング**であ
 なお**Regionはスコープ外**とする。1つのkyuushaデプロイ＝1リージョン相当とし、マルチリージョンは
 別デプロイを立てて連携する話であり、kyuusha内部の構造としては扱わない。
 
-### 訂正: テナント間の非疎通性を保証するのはVLANではなくVRF
+### テナント間の非疎通性はVRFで保証する
 
-当初「異なるテナントのSubnet間は別VLANであり物理的に疎通しない」と書いたが、これは誤り。
 VLANはL2のブロードキャストドメインを分けるだけで、VLAN間が疎通するかどうかは完全に
 L3側（ゲートウェイのルーティング/ACL設定）次第である。`SubnetSpec.gateway_ip`を持たせている
 時点で各Subnetにゲートウェイ(ルーター)の存在を前提としており、そのルーターが別テナントの
-Subnetへのルートを持っていれば普通に届いてしまう。
+Subnetへのルートを持っていれば普通に届いてしまう——VLANによる分離だけではテナント間の
+非疎通性は保証できない。
 
-正しくは、各テナントのSubnet(VLAN)をゲートウェイ側で**別々のVRF (Virtual Routing and
-Forwarding)** にマッピングする必要がある。VRFはルーティングテーブルそのものを分離するため、
+そこで、各テナントのSubnet(VLAN)をゲートウェイ側で**別々のVRF (Virtual Routing and
+Forwarding)** にマッピングする。VRFはルーティングテーブルそのものを分離するため、
 明示的なルートリークを設定しない限りテナント間に経路自体が存在しない（L3VPN/マルチテナント
 ネットワーク仮想化の標準的な手法）。
 
@@ -1307,7 +1305,7 @@ Forwarding)** にマッピングする必要がある。VRFはルーティング
 明文化する（kyuushaは自前でVRF設定をオーケストレーションしない）: 「1 AZ内のSubnetごとに
 VRFインスタンスを払い出し、テナント間のデフォルトルートリークは行わない。共有の外向きNATゲートウェイ
 のみ、制御された形で全VRFへリークする」。AZを跨いだ同一テナントの疎通については
-「AZ間ルーティング」節で扱う（当初これを非ゴールとしていたが、範囲が広すぎる誤りだったため訂正済み）。
+「AZ間ルーティング」節で扱う。
 
 **防御層としてのNetworkInterface ACL**: 前節で設計した`NetworkInterfaceSpec.ingress_rules`の
 デフォルト姿勢を「自Subnetの CIDR外からのトラフィックはデフォルト拒否」にしておくことで、
@@ -1347,13 +1345,11 @@ VLANはAZごとに4094個までという上限と、物理スイッチ側のト�
 
 ## AZ間ルーティング
 
-### 訂正: 「非ゴール」の範囲が広すぎた
-
-以前「AZ間ルーティングは明示的にスコープ外の非ゴール」としていたが、これは誤り。
-「マルチAZ冗長性が欲しいテナントは、AZごとに別々のSubnetを作ることで表現する」という
-既存の設計は、**同一テナント自身のAZ間疎通が無いと機能しない**（AZ-A側のSubnetとAZ-B側の
-Subnetが一切疎通しなければ、そもそも1つのKaaSクラスタとして成立しない）。非ゴールにして
-良いのは、もっと狭い範囲（RTに関係なく任意のAZ同士を無条件にメッシュ接続すること）だけである。
+**同一テナント自身のAZ間疎通は自動的にサポートする**——非ゴールなのはもっと狭い範囲
+（RTに関係なく任意のAZ同士を無条件にメッシュ接続すること）だけである。「マルチAZ冗長性が
+欲しいテナントは、AZごとに別々のSubnetを作ることで表現する」という設計は、そもそも
+同一テナント自身のAZ間疎通が無いと機能しない（AZ-A側のSubnetとAZ-B側のSubnetが一切
+疎通しなければ、1つのKaaSクラスタとして成立しない）ため。
 
 ### 設計: テナントごとのRoute Targetで自動的にAZを跨がせる
 
@@ -1630,56 +1626,23 @@ HTTP経由取得時と全く同じパス・digestで保存されることを確�
 **block-storageのバックエンドはどのcompute hypervisorからでもネットワーク越しにattachできる
 ことが必須要件**になる。
 
-### v1のデフォルト（2026-09初版）: 専用ストレージノード + iSCSI/NVMe-oF（ZFSバックエンド）
+### 責務境界: プロビジョニングは運用者側、厩舎は「参照＋接続」のみ
 
-NATS採用時と同じ判断基準（運用コストを最優先）で、Ceph RBDのような重量級の分散ストレージ基盤は
-v1では採用しない。デフォルトは**専用のストレージノード（1台〜数台）がZFSでVolumeを管理し、
-iSCSIまたはNVMe-oFでcompute hypervisorへexportする**方式とする。
+kyuushaは**ブロックデバイス/ファイルのプロビジョニングを一切行わない**。ZFS/Ceph/LVM/DRBD/
+各社SANアプライアンス——「空のブロックデバイスを1個作る」操作はバックエンドごとに全く別物で、
+厩舎がそれら全てのプロビジョニングAPIを実装し続けるのは現実的でない。加えてpet VM用の永続
+Volumeは厩舎にとって副次的な機能で、想定利用数も少ない（同時に生きているアタッチメント数は
+VM数ほど大きくない、[Volume仕様](specs/volume.md)参照）——**日常的にVolumeを大量に作る/消す
+セルフサービスの主戦場ではない**、という前提に立ち、プロビジョニングを厩舎の外（ストレージ
+運用チームの既存ツール・手順）に置く。
 
-**実装したが2026-09-10に削除**（下記「訂正（2026-09-10）」参照——`storage-agent`
-サービス自体、この節が前提にしていた責務ごと不要になった）。実装当時はNVMe-oFでは
-なく**iSCSI**だった: 開発環境のカーネルに`nvmet-tcp`が無く（`nvmet-fc`のみ、実FC
-ハードウェアが要るため選べない）、下記「iSCSI/NVMe-oFの選定」の第一候補は
-実現できなかった。
+（2026-09初版では、専任サービス`storage-agent`＋`StorageBackend`ドライバ抽象化で
+プロビジョニング・export・compute-agent側のiSCSI/NVMe-oFイニシエータ接続まで厩舎自身が
+担う設計で実際に実装した。しかし「利用組織ごとに選びたいストレージバックエンドが全く
+違う」という現実を軽視していたため、2026-09-10にこの責務ごと削除した——`storage-agent`は
+現存しない。）
 
-```go
-type StorageBackend interface {
-    CreateVolume(ctx context.Context, spec VolumeSpec) (*VolumeRef, error)
-    DeleteVolume(ctx context.Context, id string) error
-    ExportVolume(ctx context.Context, id string, targetHypervisor string) (*ExportEndpoint, error) // iSCSI/NVMe-oFターゲット情報を返す
-    UnexportVolume(ctx context.Context, id string, targetHypervisor string) error
-}
-```
-
-- block-storageサービスはCephなど将来の実装差し替えに備え`StorageBackend`をドライバとして抽象化する
-- **compute-agentはVMM制御に加え、iSCSI/NVMe-oFイニシエータとしてストレージノードへ接続し、
-  ローカルブロックデバイスとして生やしてからFirecracker(またはcloud-hypervisor)に
-  virtio-block経由で渡す**役割を持つ想定だった——このイニシエータ接続（ログイン）自体を
-  compute-agentが行う設計は下記「訂正（2026-09-10）」で運用者側の責務に移り、
-  `internal/compute-agent/iscsi`は現存しない。現在の同等コードは
-  `internal/compute-agent/volumeref`（発見して繋ぐだけ、ログインはしない。
-  [Volume仕様](specs/volume.md)「compute-agent側の配線」参照）。当時ライブ検証で
-  見つかった実バグ（実iSCSIログインのカーネルセッション作成はコンテナ自身のnetwork
-  namespaceからは動かずホスト自身の名前空間へ`nsenter --net`が必要、`storage-agent`側の
-  `zpool`/`zfs`/`targetcli`呼び出しにも同種のmount namespace版の実バグ——どちらも
-  「カーネルのストレージ/iSCSIサブシステムはホスト自身の名前空間からしか正しく動かない」
-  という同じ制約）は、この責務がまるごと運用者側へ移ったことで今はkyuusha自身の
-  関心事ではなくなっている
-- ZFSを選ぶことで、スナップショット・シンプロビジョニングは追加実装なしに得られる（運用者が
-  ZFSを選んだ場合の話——上記の通りバックエンド選定自体、厩舎の外の判断になった）
-
-### 訂正（2026-09-10）: 責務の境界を「プロビジョニング＋export」から「参照＋接続」へ縮小
-
-上記の`StorageBackend`（作成・削除・export・unexportをすべて厩舎が担う）は、**利用組織ごとに
-選びたいストレージバックエンドが全く違う**という現実を軽視していた設計だった、という指摘を受けて
-再検討した。ZFS/Ceph/LVM/DRBD/各社SANアプライアンス——「空のブロックデバイスを1個作る」操作は
-バックエンドごとに全く別物で、厩舎がそれら全てのプロビジョニングAPIを実装し続けるのは
-現実的でない。加えてpet VM用の永続Volumeは厩舎にとって副次的な機能で、想定利用数も
-少ない（同時に生きているアタッチメント数はVM数ほど大きくない、[Volume仕様](specs/volume.md)
-参照）——**日常的にVolumeを大量に作る/消すセルフサービスの主戦場ではない**、という前提に立つと、
-プロビジョニングを厩舎の外（ストレージ運用チームの既存ツール・手順）に置く方が筋が良い。
-
-**新しい責務境界**:
+**責務境界**:
 
 - **厩舎の外（運用者側）**:
   - ブロックデバイス/ファイルのプロビジョニング（`zfs create`/`rbd create`/`lvcreate`/
@@ -1707,10 +1670,8 @@ type StorageBackend interface {
 これにより3プロトコルとも「Hypervisor単位の事前接続＋厩舎はその中の1リソースを参照するだけ」
 という統一モデルに収まり、プロトコルごとに別々の`StorageBackend`実装を厩舎が持つ必要が無くなる。
 
-この結果、上記`storage-agent`（`CreateVolume`/`ExportVolume`等を持つ専任サービス）は
-**この新しい境界の下で不要になった**——2026-09-10、実際に削除した。block-storageは
-Volume/VolumeAttachmentのメタデータ管理サービスへ縮小している（具体的なスキーマは
-[Volume仕様](specs/volume.md)参照）。
+block-storageはVolume/VolumeAttachmentのメタデータ管理サービスへ縮小している
+（具体的なスキーマは[Volume仕様](specs/volume.md)参照）。
 
 ### 追記（2026-09-11）: 「参照するだけ」の弱点——作成時の検証をStorageConnectionリソースで埋める
 
@@ -1771,13 +1732,12 @@ compute-agentの間で直接やり取りする専用のNATS stream（`BLOCKSTORA
 定期的な自己チェックへの動的化は将来の検討事項として残している
 （docs/open-questions.md「Hypervisorのストレージ接続自己申告を動的化すべきか」）。
 
-### 正直な弱点（訂正前の記述、歴史的経緯）: ストレージノード自体の冗長化は別問題
+### 正直な弱点: ストレージノード自体の冗長化は別問題
 
-当初はストレージノード冗長化（DRBD想定）とプロトコル選定（NVMe-oF/TCPを第一候補、
-実装はiSCSI——開発環境のカーネルに`nvmet-tcp`が無かったため、上記参照）をkyuusha自身の
-設計対象として書いていたが、責務境界を運用者側へ移した結果（上記「訂正（2026-09-10）」）
-どちらも運用者の判断事項になった——DRBD/Ceph/SANのHA機能のどれを選ぶか、NVMe-oFか
-iSCSIか、厩舎は前提にしない。
+ストレージノード冗長化（DRBD等）とプロトコル選定（NVMe-oF/TCPかiSCSIか——開発環境の
+カーネルに`nvmet-tcp`が無かったため実装はiSCSI、上記参照）は、責務境界を運用者側へ
+移した結果（上記「block-storageのバックエンド抽象化」節）どちらも運用者の判断事項に
+なった——DRBD/Ceph/SANのHA機能のどれを選ぶか、NVMe-oFかiSCSIか、厩舎は前提にしない。
 
 **v1が単一ストレージノードを許容する点は変わらず残る**（開発/PoCでは十分）。明示的な
 `Volume`を本番相当で使い始める時点で、単一ストレージノードはまさにその可用性要求と
@@ -1788,17 +1748,11 @@ iSCSIか、厩舎は前提にしない。
 ## コントロールプレーンサービス自体の可用性
 
 VirtualMachine/Hypervisor側のHA（`SELF_HEAL`、フェンシング）は丁寧に設計したが、`compute`/`network`/
-`block-storage`等のサービス自体が落ちたときの話が抜けていた。設計する。
-
-### 訂正（2026-09-11）: 「状態は全てDBにある」という前提が実は嘘だった
-
-この節はもともと「宣言的spec/status＋reconcileループのおかげで、プロセスが落ちてもDBの
-状態から素直に再開できる」という前提で書かれていた。実際にコードを確認したところ、
-**`internal/resource.Store`は完全にオンメモリのmapで、DB自体がどこにも存在しなかった**
-——つまりcompute/network/identity/image/block-storageのどのサービスも、再起動・
-クラッシュで状態を100%失う設計になっていた。設計書だけが先にあり、実際のバッキング
-ストアに対して作られたことが一度も無い状態が続いていたことになる。この節の残りは
-この訂正を踏まえて書き直す。
+`block-storage`等のサービス自体が落ちたときの話が抜けていた。設計する——なお
+`internal/resource.Store`は2026-09-11まで完全にオンメモリのmapで、DB自体がどこにも
+存在しなかった（compute/network/identity/image/block-storageのどのサービスも、
+再起動・クラッシュで状態を100%失う設計だった）。以下はこれをetcd-backedへ
+置き換えた後の、現在の設計。
 
 ### 採用: バッキングストアに`etcd`を採用する
 
@@ -1852,7 +1806,7 @@ etcdリーダー選出（`concurrency.Election`）ではなく、後述の通り
 設計へ変更する余地もあるが、対象スケールでの絶対的なデータ量・書き込みスループットは
 etcdにとって軽微なので、まずは定期compactionの設定だけで様子を見る。
 
-### 前提として有利な点: 状態が全てetcdにある（訂正後、これは真）
+### 前提として有利な点: 状態が全てetcdにある
 
 宣言的spec/status＋reconcileループという設計のおかげで、サービスプロセスが落ちても
 （etcd自体が生きていれば）データは失われない。プロセス再起動後、etcdの状態から
@@ -1922,8 +1876,8 @@ etcdにとって軽微なので、まずは定期compactionの設定だけで様
 クラスタ構成（奇数台数、ディスクI/O要件等）はkyuushaのアプリケーション層の責務ではなく、
 デプロイ環境側の前提とする（block-storageハイパーバイザーの冗長化を運用チームの前提と
 したのと同じ整理）。ただしetcd自体が3台以上のRaftクラスタとして構成されていれば、
-このクラスタ自体の可用性はetcdの標準機能でカバーされる——「既存のDBの可用性は
-別問題」だった訂正前の整理より、実質的にカバー範囲は広い。
+このクラスタ自体の可用性はetcdの標準機能でカバーされる——オンメモリだった頃の
+「既存のDBの可用性は別問題」という整理より、実質的にカバー範囲は広い。
 
 ## Observability: OpenStack(Ceilometer)を反面教師にする
 
@@ -2000,7 +1954,7 @@ tenant_idラベル付きで即座にメトリクスへ現れる）。
 どちらも別サービス（network-agent/block-storage）を新設する話ではなく、tap配線・Volume解決が
 実際に行われる場所であるcompute-agent自身がそのまま観測する——「network-agentはfoldして
 compute-agentに統合済み」「block-storageはVolumeを提供せず参照するだけ」という既存方針
-（[network仕様](specs/network.md)、「訂正: 責務の境界を...」節）と一致する:
+（本書「block-storageのバックエンド抽象化」節）と一致する:
 
 - **NetworkInterface(ネットワークI/O)**: `internal/compute-agent/netsetup.Stats`が
   tap デバイスの`/sys/class/net/<tap>/statistics/{rx,tx}_bytes`を読む。tap名は
@@ -2183,8 +2137,8 @@ control-planeワークロードで`CLOUD_HYPERVISOR`を明示指定すべきか�
   データ永続化に使う（Volumeを使わないデフォルト運用ではそもそも経由しない）
 - **技術要件**: kyuusha自身はブロックデバイス/ファイルのプロビジョニングを一切行わない
   ——実ストレージ（ZFS/Ceph/LVM/SANアプライアンス等、何でもよい）の用意・export/共有設定は
-  完全に運用者側の責務（「block-storageのバックエンド抽象化」節「訂正（2026-09-10）」
-  参照）。kyuushaが持つのは`Volume`/`VolumeAttachment`という参照メタデータと、
+  完全に運用者側の責務（「block-storageのバックエンド抽象化」節参照）。kyuushaが
+  持つのは`Volume`/`VolumeAttachment`という参照メタデータと、
   iSCSI/NVMe-oF/NFSという対応プロトコルの「発見して繋ぐ」ロジックのみ
 - **到達性**: 全compute hypervisorから到達可能なネットワーク（NATS同様、管理系/ストレージ系の
   専用経路を推奨）。Hypervisor単位のストレージ接続確立（iSCSI/NVMe-oFログイン、NFSマウント）は
@@ -2310,12 +2264,12 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - UI方針（自前のWeb UIは作らずCLI＋Grafanaに任せる。OpenStack Horizonを反面教師に）
 - テナント間VRF分離の実配線ドキュメント化（`docs/network-deployment-guide.md`としてネットワーク運用チーム向けに独立した文書を作成。VLANプール/VRF/ルートリークポリシー/デプロイ前チェックリストを含む）
 - Imageキャッシュのエビクションポリシー（LRU＋参照カウント除外＋サイズ閾値）とpre-staging方針（専用機構は作らずPrometheusで可視化のみ。Dragonflyの判断を先取りしない）
-- AZ間ルーティング（訂正: 全面的な非ゴールは誤りだった。同一テナントはRoute Targetによる自動ルート交換で必ずAZ間疎通できる。RTに関係ない任意AZ間の無条件メッシュ接続のみ非ゴール。`docs/network-deployment-guide.md`にも反映）
+- AZ間ルーティング（同一テナントはRoute Targetによる自動ルート交換で必ずAZ間疎通できる。RTに関係ない任意AZ間の無条件メッシュ接続のみ非ゴール。`docs/network-deployment-guide.md`にも反映）
 - DNS/名前解決を拡張機能化（`SubnetSpec.dns_suffix`の有無自体をON/OFFスイッチにする。既定suffixは用意せずユーザー自由記述。共有リゾルバへのルートリークは物理側で常時オンにし、ソフトウェア側のON/OFFに追従させない）
 - Dragonfly採用（「必要になったら判断」を撤回。バルクVirtualMachine作成×新規Imageというthundering herd問題への必須級対策として、本番運用では推奨構成に確定。軽量ピアフェッチはフォールバックとして残す）
 - イメージ作成体験（Firecrackerのスナップショット機能はwarm boot専用に限定し、Image作成手段としては使わない。Dockerfile/OCIイメージのエコシステムでrootfsの中身を定義し、`kyuusha image build`というCLIの薄いツールでext4変換＋カーネルペアリング＋Create一気通貫を実現）
 - Availability Zone設計（Subnet/Hypervisorにzoneを持たせ、AZを跨ぐVLANストレッチはしない。Regionはスコープ外）
-- block-storageの責務境界（2026-09-10訂正: プロビジョニング/exportは運用者側、kyuusha自身は`Volume`/`VolumeAttachment`という参照メタデータとプロトコル単位の「発見して繋ぐ」ロジックのみ持つ。詳細は「block-storageのバックエンド抽象化」節参照）
+- block-storageの責務境界（プロビジョニング/exportは運用者側、kyuusha自身は`Volume`/`VolumeAttachment`という参照メタデータとプロトコル単位の「発見して繋ぐ」ロジックのみ持つ。詳細は「block-storageのバックエンド抽象化」節参照）
 - ストレージ冗長化への切替タイミング（Volumeが本番相当で使われ始めた時点が目安。具体的な方式はDRBD等含め運用者判断）
 - NATS JetStreamのsubject/stream設計（`ms.<service>.<cmd|evt>.<hypervisor>...`、CMD/EVTストリームの分離）
 - gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）。2026-09-11、ハイパーバイザー専用mTLS証明書の動的発行（本格PKI）は不採用と確定し、bootstrapトークンへの任意`hypervisor_id`クレーム+`HypervisorSpec.revoked`による軽量な個体識別・失効に代替（将来のRegisterを拒否するのみ、既存セッションの強制切断は不可という割り切り込み）
@@ -2323,12 +2277,12 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Watchの再開設計（resource_version + Bookmarkイベント、履歴保持は有限で古すぎたら再List）
 - Firecrackerのjailer/tapデバイス運用方針
 - ネットワークACL（`NetworkInterfaceSpec.ingress_rules`による最小限のホスト側ファイアウォール。SecurityGroupのような別リソースは導入しない）
-- テナント間の非疎通性はVLANではなくVRF+ルートリーク禁止で担保する（訂正済み。ACLのデフォルト拒否を二重防御として追加）
+- テナント間の非疎通性はVLANではなくVRF+ルートリーク禁止で担保する（ACLのデフォルト拒否を二重防御として追加）
 - Image設計（`ImageFormat`: `KERNEL_ROOTFS`(直接カーネルブート系VMM用)/`QCOW2`(QEMU/libvirt/cloud-hypervisor用)、`driver_hint`との対応バリデーション、コンテンツアドレス型blobストア）
 - Flavor/machine_classという固定カタログの廃止（`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
 - UserData/cloud-init注入（NoCloud seed disk方式、HTTPメタデータサービスは不採用）
 - コントロールプレーンサービス自体の可用性（API面はステートレス複製、reconcile面はプロセス分離で単一インスタンス化。詳細は「コントロールプレーンサービス自体の可用性」節参照）
-- バッキングストアにetcdを採用、実装済み（2026-09-11訂正、PostgreSQL/MySQL/NATS JetStream KVとの比較検討含め詳細は「採用: バッキングストアにetcdを採用する」節参照）
+- バッキングストアにetcdを採用、実装済み（PostgreSQL/MySQL/NATS JetStream KVとの比較検討含め詳細は「採用: バッキングストアにetcdを採用する」節参照）
 - Imageのストレージ方針（`ImageArtifact{url, digest}`による外部URL参照のみ。kyuushaはblobを一切保管しない。オブジェクトストレージは任意の外部依存に格下げ）
 - ハイパーバイザー間の軽量ピアフェッチ（heartbeatでのキャッシュ済みdigest報告＋同一zone優先の直接HTTP転送。外部依存ではなくkyuusha自身の組み込み機能）
 - インフラ要件の「必須」「任意」の分類軸（必須: DB/NATS/ブロックストレージノード。任意: privateオブジェクトストレージ/Dragonfly）
