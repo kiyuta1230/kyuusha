@@ -1,12 +1,13 @@
 # kyuusha
 
-KaaS(Kubernetes as a Service)の足回りに特化した小さいIaaS。VMを最終利用者が長期間使う
-「ペット」として扱う前提を捨て、KaaSクラスタへハイパーバイザーを供給することに機能を絞った
-OpenStack(Nova/Neutron/Cinder)の縮小版、というのが基本コンセプト。
+kyuushaは、「OpenStackを導入するには大きすぎる（運用チームを抱えられない）が、ハイパーバイザーが
+数百台規模になるとVMwareのライセンスコストが厳しくなる」という間に落ちる企業向けの、小さな
+IaaS。KaaS(Kubernetes as a Service)クラスタへハイパーバイザーを供給することだけに機能を絞り、
+VMを最終利用者が長期間使う「ペット」として扱う前提を持たない——OpenStack(Nova/Neutron/Cinder)
+の縮小版と言うと早い。
 
-想定ユーザーは「OpenStackを導入するには大きすぎる（運用チームを抱えられない）が、VMwareは
-一定規模からライセンスコストが厳しくなる」という間に落ちる企業。想定スケールはハイパーバイザー
-〜500台・VM〜1〜2万台・テナント(KaaSクラスタ)〜500。**なぜこの設計なのか**は
+想定スケールはハイパーバイザー〜500台・VM〜1〜2万台・テナント(KaaSクラスタ)〜500。
+**なぜこの設計なのか**は
 [docs/why-kyuusha.md](docs/why-kyuusha.md)に、詳しい設計判断の経緯は
 [docs/architecture.md](docs/architecture.md)を参照。
 

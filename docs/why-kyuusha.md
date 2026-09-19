@@ -98,7 +98,8 @@ Flintlockの事例が示すような、組織的な後ろ盾が消えると勢�
 
 OpenStackはハイパーバイザー/物理マシンの上に直接構築され、それを動かすために
 別のオーケストレーション基盤（例えばKubernetes）を必要としない。kyuushaも
-同じ性質を持つ——後述するHarvester/KubeVirtとの比較で最も重要な差別化点になる。
+同じ性質を持つ——なぜこれが単なる好みではなく必須の制約なのかは、後述の
+Harvester/KubeVirtとの比較で詳しく説明する。
 
 ### 3. マイクロサービスであること
 
@@ -107,17 +108,6 @@ OpenStackはハイパーバイザー/物理マシンの上に直接構築され�
 示す通り、**マイクロサービス自体は問題ではなく、その上に手続き型の制御フローを
 乗せたことが問題だった**。kyuushaが「マイクロサービス＋宣言的reconcile」を
 セットで採用しているのは、1番目の弱点への直接的な回答になっている。
-
-## kyuushaの設計判断: 何を引き継ぎ、何を直したか
-
-| OpenStackの性質 | 評価 | kyuushaでの扱い |
-|---|---|---|
-| マイクロサービス分割 | 引き継ぐ（3の強み） | 同様にサービス分割。ただし… |
-| 手続き型ワークフロー | 直す（1の弱点） | …宣言的spec/status＋Watch+`resource_version`によるreconcileループに置き換え（内部通信・外部APIとも） |
-| ベンダープラグインエコシステム | 直す（2の弱点） | Volumeは参照のみ、境界をプロトコルに縮小。ネットワークもテナント単位のL2/L3分離のみに限定 |
-| oslo（自前observability基盤） | 直す（3の弱点） | Prometheus + OpenTelemetryという既製標準にそのまま乗る |
-| コアドメインロジックの独自実装 | 引き継ぐ（1の強み） | VM状態機械・スケジューラ・Quota強制ロジックは自前実装 |
-| 物理インフラ直上で完結 | 引き継ぐ（2の強み） | 同様。KubeVirt/Harvesterのような「動かすためにまずK8sが要る」循環参照を持たない |
 
 ## 対象読者・想定スケール
 
@@ -138,9 +128,8 @@ OpenStackはハイパーバイザー/物理マシンの上に直接構築され�
 | ブロックストレージのバックエンド抽象化 | Cinderは80以上のベンダー固有ドライバがそれぞれボリュームの作成/削除/エクスポートまでフルCRUDを実装——バックエンドが増えるたびに実装コストが増える分裂したエコシステムになっている | ボリュームの作成/削除/host接続の確立は一切しない。「プロトコル（iSCSI/NVMe-oF/NFS）を抽象化の境界に置き、既存のボリュームを参照して"紐つける"だけ」に責務を縮小——実際の作成・接続はオペレータの仕事（ちょうど`/dev/kvm`と同じ、ホスト側の前提条件）。ベンダー固有ドライバが要らないので、Cinder的なドライバエコシステムそのものを持つ必要がない（[architecture.md](architecture.md)「訂正: 責務の境界を『プロビジョニング＋export』から『参照＋接続』へ縮小」、[Volume仕様](specs/volume.md)参照） |
 | テナントネットワーク | Neutronがoverlay per-tenant/router/floating IP/per-tenant security policyまでフル機能を持つ | 最小限。テナント＝KaaSクラスタ単位のL2/L3分離のみ。クラスタ内Pod間の分離はCNI/NetworkPolicy層(KaaS側)の責務（同上） |
 | APIエンドポイント | Keystoneのサービスカタログ方式——各コンポーネントが個別のpublic URLを持ち、クライアントがカタログを見て使い分ける | `api-gateway`という単一の公開エンドポイントに集約。認証・認可の実施点も1箇所（backendは無認証）。K8s API server/BFFパターンと同じ思想（[認証・認可仕様](specs/authn-authz.md)参照） |
-| API設計・制御フロー | REST、命令的CRUD+ポーリング、手続き型のサービス間RPC（`taskflow`のような補助ライブラリが必要になるほど） | 宣言的API（spec/status分離、Watch、resource_versionによる楽観的並行性制御）を内部通信・外部APIの両方に適用。ただしKubernetes CRD/Aggregated API Serverそのものにはしない（[architecture.md](architecture.md)「スコープ縮小の判断」参照） |
-| リソースの固定カタログ | Flavorという料理的比喩の間接層。実装都合の語彙で意味が読み取れない | `VirtualMachineSpec.vcpu`/`memory_mb`を直接指定。固定カタログ自体をQuotaと役割重複と判断し廃止（[architecture.md](architecture.md)「設計原則: 命名はOpenStackを踏襲しない」参照） |
-| リソース命名 | Port（仮想スイッチの差し込み口という実装比喩）等、実装都合由来の用語が多い | 実態を直接表す語を選ぶ（`Port`→`NetworkInterface`等）。ただし`Volume`/`Subnet`のような業界共通語はそのまま使う（同上） |
+| API設計・制御フロー | REST、命令的CRUD+ポーリング、手続き型のサービス間RPC（`taskflow`のような補助ライブラリが必要になるほど） | 宣言的API（spec/status分離、Watch、resource_versionによる楽観的並行性制御）を内部通信・外部APIの両方に適用。ただしKubernetes CRD/Aggregated API Serverそのものにはしない——なぜそれで良いのかは後述のHarvester/KubeVirt比較参照 |
+| リソースの語彙・抽象化 | Flavorという料理的比喩の固定カタログ、Port（仮想スイッチの差し込み口という実装比喩）等、実装都合の比喩・用語が随所にある | 固定カタログは廃止し`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定（Quotaと役割重複と判断）。命名も実態を直接表す語を選ぶ（`Port`→`NetworkInterface`等）。ただし`Volume`/`Subnet`のような業界共通語はそのまま使う（[architecture.md](architecture.md)「設計原則: 命名はOpenStackを踏襲しない」参照） |
 | Web UI | Horizonは長年APIの新機能に追従できず、多くの運用者がCLI/APIを直接叩いている実態がある | 自前Web UIは作らない。CLI（`kubectl`/`terraform`的）+ 既存のPrometheusメトリクスをGrafanaで可視化（[architecture.md](architecture.md)「UI: 自前のWeb UIは作らない。CLIとGrafanaに任せる」参照） |
 | テレメトリ基盤 | Ceilometerは自前基盤を一から作り、MongoDB→Gnocchi→Aodh→Pankoと分裂・作り直しを繰り返した。定期ポーリングが監視対象に負荷をかけ、RabbitMQ通知が制御プレーンの輻輳に直結した | 自前基盤は作らずPrometheus(pull型`/metrics`)+OpenTelemetryという業界標準に乗る。トレーシングは後付けでなく最初から設計に組み込む（[architecture.md](architecture.md)「Observability: OpenStack(Ceilometer)を反面教師にする」参照） |
 | 外部システム連携（通知系） | RabbitMQ notificationは取りこぼしが起き得て、resumeできない | 既存のWatch（`resource_version`からの再開）で対応。取りこぼしても再開できるため専用の仕組みは不要（[architecture.md](architecture.md)「Finalizer: 外部システムによる削除ブロック」参照） |
@@ -178,9 +167,20 @@ OpenStackだけでなく、「軽量なVM/マイクロVMオーケストレーシ
 | プロジェクトの後ろ盾 | 個人（趣味として継続メンテ） | SUSE（企業、継続的リリース） | 旧Weaveworks→コミュニティ（勢い弱） | Red Hat（企業、OpenShift Virtualization） |
 
 技術選定（イメージ管理でcontainerdではなく`oras-go/v2`を採用したこと等）は
-Flintlockの設計から学んだ部分が大きい。一方で「物理インフラ以外の基盤を
-要求しない」という一点は、Harvester/KubeVirtどちらに対してもkyuushaが
-譲らない差別化軸になっている。
+Flintlockの設計から学んだ部分が大きい。
+
+一方で「物理インフラ以外の基盤を要求しない」という一点は、Harvester/KubeVirt
+どちらに対してもkyuushaが譲らない差別化軸になっている。理由は好みではなく
+構造的な制約——kyuushaの役目は「KaaSクラスタ（＝Kubernetes）が乗る
+ハイパーバイザーを供給すること」そのものなので、もしkyuusha自身の制御プレーンが
+本物のKubernetes（CRD/kube-apiserver）に依存していたら、「Kubernetesを
+立てるためにまずKubernetesが要る」という循環に陥る。Harvester/KubeVirtが
+この循環を踏まずに済むのは、両者とも「動かすためのK8sクラスタは既に別の理由で
+存在している」という前提に乗っているからで、kyuushaにはその前提がない。
+だからこそ、宣言的API（spec/status分離・Watch・`resource_version`）という
+Kubernetesの**思想**は借りつつ、CRD/Aggregated API Serverという**実体**は
+実装しない、という判断になっている（[architecture.md](architecture.md)
+「リソースモデル / API規約」参照）。
 
 ## 非ゴール（正直な線引き）
 
