@@ -11,8 +11,7 @@ import (
 )
 
 // TestStorageConnection_ReadyRequiresAllDeclaredZones exercises the strict
-// policy from docs/open-questions.md「Hypervisor↔ストレージバックエンドの
-// 接続確立をkyuusha側で自動化すべきか」: a StorageConnection declaring
+// policy from docs/specs/volume.md「検証フロー」: a StorageConnection declaring
 // multiple zones stays Pending until every one of them is confirmed, not
 // just any one.
 func TestStorageConnection_ReadyRequiresAllDeclaredZones(t *testing.T) {

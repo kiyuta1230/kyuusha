@@ -47,7 +47,12 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
   を報告する（`mac_address`は枯渇に関係なく即座に払い出し済み）
 - 10秒間隔の定期スイープ（`Service.Run`）が全`Pending`のSubnet/NetworkInterfaceに対して
   再度払い出しを試みる（他のSubnet/NetworkInterfaceのDelete自体はPending中のものを
-  再トリガーしないため、VMスケジュールの定期スイープと同じ理由で必要）
+  再トリガーしないため、VMスケジュールの定期スイープと同じ理由で必要）。加えて
+  `watchPendingSubnets`/`watchPendingNetworkInterfaces`（`Service.Run`から起動する
+  別goroutine）が新規作成された`Pending`のSubnet/NetworkInterfaceの`EventAdded`に即座に
+  反応し、10秒の定期スイープを待たず払い出しを試みる——block-storageの
+  `watchPendingVolumeAttachments`/`watchPendingVolumes`（[Volume仕様](volume.md)
+  「排他制御」参照）と同じ形
 - 成功すると同じConditionが`status: false`に更新される（削除はされない）
 - SubnetのDelete/NetworkInterfaceのDeleteは、`Ready`で実際に払い出し済みだった場合のみ
   VLAN ID/IPアドレスをプールへ返却する
@@ -101,9 +106,12 @@ Subnetの組み合わせを自動許可する、という形で参照される�
   オーファンGCパターンは2026-09-13に実装済み（`network.Service.sweepOrphanedNetworkInterfaces`、
   `Service.Run`から10分間隔で起動）。networkはこのためだけにcomputeの
   VirtualMachineServiceへ直接gRPCで問い合わせる`computeClient`を新たに持つ
-  （`cmd/network/main.go`の`-compute-addr`）。VMが存在する限り触らず、`Get`が
-  `NotFound`を返した場合のみ削除する（一時的な疎通不可などその他のエラーは
-  「わからないので消さない」で次回ティックに委ねる）
+  （`-compute-addr`）。ただしこの`Service.Run`（IPAM割り当て・オーファンGCを含む
+  reconcileループ本体）を実際に起動するのは`network`本体（gRPC APIのみ、複数レプリカ可、
+  `computeClient`は`nil`のまま使わない）ではなく、別バイナリ`network-reconciler`
+  （`cmd/network-reconciler/main.go`、常に単一レプリカ）——`-compute-addr`もこちらが持つ。
+  VMが存在する限り触らず、`Get`が`NotFound`を返した場合のみ削除する（一時的な疎通不可
+  などその他のエラーは「わからないので消さない」で次回ティックに委ねる）
 
 ## compute側の統合
 

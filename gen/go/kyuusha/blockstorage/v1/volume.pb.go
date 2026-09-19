@@ -294,9 +294,9 @@ type VolumeStatus struct {
 	// (storageconnection.proto) is itself Ready, and (2) this Volume's own
 	// identifier has been confirmed to exist (with a real observed size) by
 	// some Hypervisor holding that connection -- see docs/open-questions.md
-	// 「Volumeの申告内容...」「Hypervisor↔ストレージバックエンドの接続確立を
-	// kyuusha側で自動化すべきか」. Never Error, by the same strict-but-patient
-	// design as StorageConnection: an unverified Volume just stays Pending.
+	// 「Volumeの申告内容...」and docs/specs/volume.md「検証フロー」. Never Error,
+	// by the same strict-but-patient design as StorageConnection: an
+	// unverified Volume just stays Pending.
 	Phase         string          `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Ready / Deleting
 	Conditions    []*v1.Condition `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
 	unknownFields protoimpl.UnknownFields

@@ -44,9 +44,8 @@ func EvtSubjectHeartbeat(hypervisor string) string {
 // storage_connections. block-storage subscribes to this directly (wildcard
 // hypervisor) to learn, without ever dialing compute's gRPC (which would
 // make today's one-way compute->block-storage dependency bidirectional --
-// see docs/open-questions.md「Hypervisor↔ストレージバックエンドの接続確立を
-// kyuusha側で自動化すべきか」), which zones each declared storage_connection
-// name is actually backed by a Hypervisor in.
+// see docs/specs/volume.md「検証フロー」), which zones each declared
+// storage_connection name is actually backed by a Hypervisor in.
 func EvtSubjectHypervisorStorageConnections(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.evt.%s.storage-connections", hypervisor)
 }

@@ -1,6 +1,5 @@
 // This file implements the async StorageConnection/Volume verification
-// flow from docs/open-questions.md「Hypervisor↔ストレージバックエンドの接続
-// 確立をkyuusha側で自動化すべきか」「具体的な設計」: two independent layers,
+// flow from docs/specs/volume.md「検証フロー」: two independent layers,
 // both driven entirely over NATS (never a new gRPC dependency on compute --
 // see nats.go's doc comments for why), both strict-but-patient (a Volume or
 // StorageConnection that never gets confirmed just stays Pending forever,

@@ -48,17 +48,28 @@ JSON。protobufは使わない（gRPC APIとは異なる領域として意図的
 
 ### 現在の実装（compute、`internal/compute/nats.go`）
 
+実際のフィールドは機能追加のたびに増えている（イメージdigest検証、QCOW2、
+NetworkInterface/UserData/Volume配線など）ので、下記は形を示す抜粋——全フィールドの
+詳細な由来コメントは`internal/compute/nats.go`の`CreateCommand`自体を参照:
+
 ```go
 type CreateCommand struct {
-	VMID       string `json:"vm_id"`
-	TenantID   string `json:"tenant_id"`
-	ImageID    string `json:"image_id"`
-	VCPU       int32  `json:"vcpu"`
-	MemoryMB   int64  `json:"memory_mb"`
-	DriverHint string `json:"driver_hint"`
-	KernelURL  string `json:"kernel_url,omitempty"`
-	RootfsURL  string `json:"rootfs_url,omitempty"`
-	BootArgs   string `json:"boot_args,omitempty"`
+	VMID         string `json:"vm_id"`
+	TenantID     string `json:"tenant_id"`
+	ImageID      string `json:"image_id"`
+	VCPU         int32  `json:"vcpu"`
+	MemoryMB     int64  `json:"memory_mb"`
+	DriverHint   string `json:"driver_hint"`
+	KernelURL    string `json:"kernel_url,omitempty"`
+	RootfsURL    string `json:"rootfs_url,omitempty"`
+	KernelDigest string `json:"kernel_digest,omitempty"` // イメージdigest検証、docs/specs/image.md参照
+	RootfsDigest string `json:"rootfs_digest,omitempty"`
+	DiskURL      string `json:"disk_url,omitempty"` // QCOW2用、KernelURL/RootfsURLと排他
+	DiskDigest   string `json:"disk_digest,omitempty"`
+	BootArgs     string `json:"boot_args,omitempty"`
+	Interfaces []NetworkInterfaceInfo `json:"interfaces,omitempty"` // tap配線用、network.md参照
+	UserData   string                  `json:"user_data,omitempty"`  // cloud-init NoCloud seed disk
+	Volumes    []VolumeAttachInfo      `json:"volumes,omitempty"`    // アタッチ済みVolume、volume.md参照
 }
 
 type CreateResult struct {

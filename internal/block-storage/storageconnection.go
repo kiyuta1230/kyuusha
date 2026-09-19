@@ -10,8 +10,8 @@ import (
 // Availability Zones a storage backend may be connected to from --
 // independent of a Volume's own spec.storage_connection (which merely
 // names one of these by string, see volume.go). See the package doc
-// comment and docs/open-questions.md「Hypervisor↔ストレージバックエンドの
-// 接続確立をkyuusha側で自動化すべきか」「具体的な設計」for the full story.
+// comment and docs/specs/volume.md「StorageConnection」「検証フロー」for the
+// full story.
 type StorageConnectionSpec struct {
 	Zones []string
 	// Annotations is never interpreted by kyuusha itself -- purely a

@@ -3,8 +3,7 @@
 // VolumeAttachment CreateVolumeAttachment leaves Pending, the
 // StorageConnection/Volume verification flow over NATS (see
 // internal/block-storage/verification.go and
-// docs/open-questions.md「Hypervisor↔ストレージバックエンドの接続確立を
-// kyuusha側で自動化すべきか」), and the retry/orphan sweeps. It serves no
+// docs/specs/volume.md「検証フロー」), and the retry/orphan sweeps. It serves no
 // gRPC API at all -- cmd/block-storage is the VolumeService/
 // VolumeAttachmentService/StorageConnectionService gRPC binary, safely run
 // as any number of stateless replicas (see its own package doc comment).

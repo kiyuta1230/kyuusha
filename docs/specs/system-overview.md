@@ -66,7 +66,7 @@ flowchart LR
 
 | サービス | デフォルトアドレス | 提供API |
 |---|---|---|
-| `api-gateway` | `:8080` | `VirtualMachineService`, `HypervisorService`（Get/List/Watch/SetSchedulableのみ）, `TenantService`, `ImageService`, `SubnetService`, `NetworkInterfaceService`, `VolumeService`, `VolumeAttachmentService`, `StorageConnectionService` |
+| `api-gateway` | `:8080` | `VirtualMachineService`, `HypervisorService`（Get/List/Watch/SetSchedulable/SetRevokedのみ）, `TenantService`, `ImageService`, `SubnetService`, `NetworkInterfaceService`, `VolumeService`, `VolumeAttachmentService`, `StorageConnectionService` |
 | `compute` | `:8081` | `VirtualMachineService`, `HypervisorService`（Registerを含む全RPC） |
 | `identity` | `:8082` | `TenantService` |
 | `image` | `:8083` | `ImageService` |

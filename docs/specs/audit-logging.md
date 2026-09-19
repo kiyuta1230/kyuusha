@@ -26,7 +26,7 @@ api-gatewayを通過する全リクエストについて、「誰が・何を・
 | `event` | 上表のいずれか |
 | `rpc_method` | 呼ばれたgRPCフルメソッド名 |
 | `request_tenant_id` | リクエスト自体が持つ`tenant_id`（adminが他テナントを操作する場合、`tenant_id`と異なりうる） |
-| `tenant_id` / `sub` / `role` / `tenant_role` | 呼び出し元のJWT claims。`sub`/`role`/`tenant_role`は[認証・認可仕様](authn-authz.md)参照（`role`の値: `""`/`admin`/`storage-admin`。`tenant_role`の値: `""`/`viewer`） |
+| `tenant_id` / `sub` / `role` / `tenant_role` | 呼び出し元のJWT claims。`sub`/`role`/`tenant_role`は[認証・認可仕様](authn-authz.md)参照（`role`の値: `""`/`admin`/`storage-admin`/`network-admin`/`viewer`。`tenant_role`の値: `""`/`viewer`） |
 | `trace_id` | リクエストのOTelトレースID（有効な場合のみ）。[トレーシング仕様](observability-tracing.md)のtrace/spanと突き合わせられる |
 | `error` | 失敗時のみ。エラーメッセージ |
 

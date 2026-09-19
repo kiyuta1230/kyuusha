@@ -85,7 +85,11 @@ sequenceDiagram
 - network/Subnet・NetworkInterfaceのIPAM枯渇（`VlanPoolExhausted`/`IPPoolExhausted`）と
   全く同じ「Createは拒否せずPendingで受理し、`Run`の`pendingSweepInterval`（10秒）ごとの
   スイープで再試行する」設計。旧VolumeAttachmentが単に通常のDetach処理中なだけかもしれず、
-  即座に拒否するのは不適切なため
+  即座に拒否するのは不適切なため。加えて`watchPendingVolumeAttachments`（`Service.Run`
+  から起動する別goroutine）が新規`Pending`のVolumeAttachmentの`EventAdded`に即座に反応し、
+  10秒の定期スイープを待たず再試行する——network側の`watchPendingSubnets`/
+  `watchPendingNetworkInterfaces`（[network仕様](network.md)「プール枯渇時の挙動」参照）
+  と同じ形。Volume自体の検証（`watchPendingVolumes`）も同様
 - 判定は`hasActiveAttachment`が全テナント横断で`s.attachments`をスキャンして行う
   （Subnet固有のIPプールのような`volume_id`ごとの専用インデックスは持たない。この
   システムの想定スケール——同時に生きているアタッチメント数はVM数ほど大きくない——では
@@ -384,7 +388,12 @@ api-gateway経由でのみ到達可能（[システム構成仕様](system-overv
 `kyuusha volume`/`kyuusha volattach`/`kyuusha storageconn`（`storageconn`はadmin-only、
 [CLI仕様](cli.md)参照）。block-storageが直接ダイヤルする実ストレージサービスは存在しない
 ——実データパス（iSCSI/NVMe-oF/NFS）はすべてHypervisorとストレージバックエンドの間で
-完結し、kyuushaのどのコンポーネントもその経路に乗らない。block-storageはNATSにも
-直接つながる（`-nats-url`）——検証フロー用の`BLOCKSTORAGE_CMD`/`BLOCKSTORAGE_EVT`と、
-computeが発行する`ms.compute.evt.*.storage-connections`のsubscribe用（上記「検証フロー」
-参照）。
+完結し、kyuushaのどのコンポーネントもその経路に乗らない。
+
+**gRPC APIプロセスとreconcileループは別プロセス**（`network`/computeと同じ分割）:
+`block-storage`（`cmd/block-storage`、複数レプリカ可）はgRPC APIのみを提供し、NATSには
+一切つながらない（`-nats-url`フラグ自体を持たない）。実際にNATSへ接続し
+（`Service.Run`）、検証フロー（`BLOCKSTORAGE_CMD`/`BLOCKSTORAGE_EVT`のsubscribe、
+computeが発行する`ms.compute.evt.*.storage-connections`のsubscribe、上記「検証フロー」
+参照）・pendingのsweep・VolumeAttachmentのオーファンGCを担うのは`block-storage-reconciler`
+（`cmd/block-storage-reconciler`）という別バイナリで、常に単一レプリカで動かす。

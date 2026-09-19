@@ -15,8 +15,7 @@ import (
 // pair block-storage's Service and compute-agent exchange directly over
 // NATS to confirm a Volume's identifier actually exists (and get its real
 // size) on some Hypervisor holding its storage_connection -- see
-// docs/open-questions.md「Hypervisor↔ストレージバックエンドの接続確立を
-// kyuusha側で自動化すべきか」「具体的な設計」. Deliberately NOT routed through
+// docs/specs/volume.md「検証フロー」for the full story. Deliberately NOT routed through
 // compute (which already depends on block-storage for Volume validation --
 // routing this the other way would make that dependency bidirectional).
 func CmdSubjectVerifyVolume(hypervisor string) string {

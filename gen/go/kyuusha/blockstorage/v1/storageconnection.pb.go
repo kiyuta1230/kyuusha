@@ -85,8 +85,8 @@ func (StorageConnectionEvent_Type) EnumDescriptor() ([]byte, []int) {
 // (see volume.proto). kyuusha never establishes this connection itself (see
 // docs/architecture.md「訂正: 責務の境界を...」) -- it only tracks, per
 // declared zone, whether some Hypervisor in that zone has actually
-// self-reported having it (see docs/open-questions.md「Hypervisor↔ストレージ
-// バックエンドの接続確立をkyuusha側で自動化すべきか」「具体的な設計」).
+// self-reported having it (see docs/specs/volume.md「StorageConnection」
+// 「検証フロー」).
 //
 // Not tenant-scoped, same as Hypervisor -- an operator-facing resource, not
 // a KaaS-facing one.

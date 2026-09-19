@@ -1524,8 +1524,8 @@ Create時バリデーション・`kyuusha image build`まで波及する広い�
 Track 1を完了・実運用で確認してから、Track 2の要否（Dragonfly級のP2Pが実際に
 必要なスケールに達しているか）を判断する。
 
-未決事項は[docs/open-questions.md](open-questions.md)「イメージのローカル管理を
-containerdへ移行する際の未決事項」へ転記した。
+未決事項は[docs/open-questions.md](open-questions.md)「イメージのローカル管理/
+OCIレジストリ対応」へ転記した。
 
 ### Track 2実装方針（2026-09-14 追記）: 3トラックへ再分割
 
