@@ -60,6 +60,14 @@ func (p *VirtualMachineProxy) Resize(ctx context.Context, req *computev1.ResizeV
 	return p.backend.Resize(ctx, req)
 }
 
+func (p *VirtualMachineProxy) AttachVolume(ctx context.Context, req *computev1.AttachVolumeRequest) (*computev1.VirtualMachine, error) {
+	return p.backend.AttachVolume(ctx, req)
+}
+
+func (p *VirtualMachineProxy) DetachVolume(ctx context.Context, req *computev1.DetachVolumeRequest) (*computev1.VirtualMachine, error) {
+	return p.backend.DetachVolume(ctx, req)
+}
+
 func (p *VirtualMachineProxy) Watch(req *computev1.WatchVirtualMachinesRequest, stream computev1.VirtualMachineService_WatchServer) error {
 	backendStream, err := p.backend.Watch(stream.Context(), req)
 	if err != nil {

@@ -109,6 +109,22 @@ func (s *Server) Resize(ctx context.Context, req *computev1.ResizeVirtualMachine
 	return toVM(*vm), nil
 }
 
+func (s *Server) AttachVolume(ctx context.Context, req *computev1.AttachVolumeRequest) (*computev1.VirtualMachine, error) {
+	vm, err := s.svc.AttachVolume(ctx, req.GetTenantId(), req.GetId(), req.GetVolumeId(), req.GetDeviceHint())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toVM(*vm), nil
+}
+
+func (s *Server) DetachVolume(ctx context.Context, req *computev1.DetachVolumeRequest) (*computev1.VirtualMachine, error) {
+	vm, err := s.svc.DetachVolume(ctx, req.GetTenantId(), req.GetId(), req.GetVolumeId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toVM(*vm), nil
+}
+
 func (s *Server) Watch(req *computev1.WatchVirtualMachinesRequest, stream computev1.VirtualMachineService_WatchServer) error {
 	events, err := s.svc.Watch(stream.Context(), req.GetTenantId(), req.GetSinceResourceVersion(), req.GetFinalizerName())
 	if err != nil {

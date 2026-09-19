@@ -183,6 +183,22 @@ VMのみに許可される（それ以外は`FailedPrecondition`）。`Stop`/`St
   にはこの制約は無い。同じ検証は`Create`にも入っている（`internal/compute/
   virtualmachine.go`の`validateVCPUForDriver`）
 
+## Volume attach/detach（`AttachVolume`/`DetachVolume`、コールドのみ、2026-09-19実装）
+
+`Resize`と全く同じコールドパターン——`Stopped`のVMのみ許可、`resource_version`を
+取らずGet→フェーズチェック→mutate→`store.Update`で完結する。詳細は
+[Volume仕様](volume.md)「Volume attach/detach（コールドのみ）」参照。要点のみ：
+
+- `AttachVolume`は`vm.Spec.Volumes`へ追加するだけ（実際のVolumeAttachmentは次の
+  `Start`まで作らない）。`DetachVolume`は非対称に実体のVolumeAttachmentも即座に削除する
+  （排他ロックを握ったまま放置しないため）
+- quotaチェック・Hypervisor容量予約は無い——既存Volumeのattach/detachはどちらにも
+  影響しない
+- `createVolumeAttachments`（compute/volume.go）の子リソース命名を`volattach-<vm_id>-
+  <index>`（位置ベース）から`volattach-<vm_id>-<volume_id>`（VolumeIDベース）へ変更
+  済み——DetachVolumeで`vm.Spec.Volumes`の途中要素を消しても後続要素のattachmentが
+  重複・孤児化しないようにするため（Volume仕様参照）
+
 ## 削除
 
 VMが削除されると、Reconcilerは（Hypervisor容量の解放と同時に）`DeleteCommand`を
@@ -262,8 +278,8 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
   変更するには、cloud-hypervisorの`--api-socket`導入とホットプラグ対応という
   別途大きめの設計が要る。しかもFirecrackerはvCPUホットプラグ自体が構造的に
   不可能なため、やるとすればcloud-hypervisor限定の機能になる——見送りの
-  経緯・トレードオフは[open-questions.md](../open-questions.md)
-  「リサイズのホットプラグ（ライブ/ホット）対応」参照
+  経緯・トレードオフ・詳細設計は[open-questions.md](../open-questions.md)
+  「cloud-hypervisor限定のライブホットプラグ（vcpu/memory resize + Volume attach）」参照
 - **リサイズ時のHypervisor間移行**: 新サイズが現在のHypervisorの空き容量に
   収まらない場合、別のHypervisorへVMを移動してリサイズを成立させる機能は無い
   （上記「リサイズ」節参照、拒否のみ）
@@ -271,11 +287,12 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
   取得したdigestを際限なく保持し続ける——LRU等の削除ロジックがまだ無い
   （[docs/open-questions.md](../open-questions.md)「イメージのローカル管理」参照）
 
-プロセス隔離もStop/Start（一時停止/再開）もコールドリサイズももう
-「共通の未実装事項」ではない——jailer相当の隔離は`driver_hint=FIRECRACKER`が
-実jailer(chroot+uid/gid drop)、`driver_hint=CLOUD_HYPERVISOR`が静的バイナリ+
-組み込みseccompという別の形で、それぞれ対応済み（上記「cgroupリソース制限」節参照）。
-Stop/Startは2026-09-12実装（上記「停止/起動」節参照）、`Resize`は2026-09-19実装
-（上記「リサイズ」節参照）。ドライバ固有の未実装事項（例: Firecrackerのクロス
+プロセス隔離もStop/Start（一時停止/再開）もコールドリサイズもコールドVolume
+attach/detachももう「共通の未実装事項」ではない——jailer相当の隔離は
+`driver_hint=FIRECRACKER`が実jailer(chroot+uid/gid drop)、`driver_hint=CLOUD_HYPERVISOR`
+が静的バイナリ+組み込みseccompという別の形で、それぞれ対応済み（上記「cgroupリソース
+制限」節参照）。Stop/Startは2026-09-12実装（上記「停止/起動」節参照）、`Resize`と
+`AttachVolume`/`DetachVolume`はどちらも2026-09-19実装（それぞれ上記「リサイズ」
+「Volume attach/detach」節参照）。ドライバ固有の未実装事項（例: Firecrackerのクロス
 hypervisorネットワーク疎通、cloud-hypervisorのPCI passthrough/vhost-user）は
 それぞれの仕様書の「この実装がカバーしないもの」を参照。

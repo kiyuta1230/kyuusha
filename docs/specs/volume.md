@@ -252,9 +252,17 @@ volume.attached`（`blockstorage.VolumeAttachedEvent`、`internal/block-storage/
   他テナント/未Readyなら`ErrValidation`）。排他制御自体はここでは見ない——実際の
   VolumeAttachment Create時（下記）にしか正しく判定できないため（network統合の
   ゾーン再解決と同じ理由）
-- **`Scheduled`→`Provisioning`遷移時**（`createVolumeAttachments`）:
-  リクエストされたVolumeごとに、決定的な名前（`volattach-<vm_id>-<index>`、
-  `docs/architecture.md`「子リソースIDの決定的生成ルール」）でVolumeAttachmentを作る。
+- **`Scheduled`/`Starting`→`Provisioning`遷移時**（`createVolumeAttachments`）:
+  リクエストされたVolumeごとに、決定的な名前でVolumeAttachmentを作る（`docs/architecture.md`
+  「子リソースIDの決定的生成ルール」）。この関数は新規Create直後だけでなく、`Stop`後の
+  `Start`のたびに`vm.Spec.Volumes`から毎回再構築される（下記「Volume attach/detach
+  （コールドのみ、2026-09-19実装）」参照）ため、名前は**VolumeIDベース**
+  （`volattach-<vm_id>-<volume_id>`）——`vm.Spec.Volumes`の途中要素がDetachVolumeで
+  削除されて後続要素のindexがずれても、既存attachmentの名前は変わらない。
+  2026-09-19より前に作られた`volattach-<vm_id>-<index>`（位置ベース）named attachmentは、
+  一度もDetachVolumeされていないVMに対しては引き続きそのまま解決・再利用される
+  （新旧どちらの名前でも一致すれば再利用し、リネームはしない——移行ジョブ不要、
+  DetachVolumeが実際に呼ばれた時点からそのVMの残りのattachmentだけ自然に新方式へ移る）。
   実際に`Attached`まで到達したものだけ、そのVolume自身を`volumeClient.Get`で取得し直して
   `protocol`/`storage_connection`/`identifier`を`CreateCommand.volumes`
   （compute-agentが使う）に載せる——`Pending`（排他制御待ち）のままのものは、この
@@ -263,8 +271,35 @@ volume.attached`（`blockstorage.VolumeAttachedEvent`、`internal/block-storage/
   `VirtualMachineStatus.VolumeAttachmentRefs`へ記録する（下記「VM削除時のVolumeAttachment
   後始末」用）
 - **アタッチ済みディスクのみ、VM起動時のみ**（後述「この実装がカバーしないもの」）:
-  すでに`Running`なVMに後からVolumeを追加する経路（ホットプラグ）は無い。VM作成時に
-  一度だけ解決される
+  実際にゲストへ配線されるのはVM起動時（Create/Start）のみ。`Running`なVMへ後から
+  Volumeを追加する経路（ライブホットプラグ）はまだ無い——ただし`Stopped`なVMに対する
+  attach/detach自体は`Resize`と同じコールドパターンで実装済み（下記参照）
+
+### Volume attach/detach（コールドのみ、`AttachVolume`/`DetachVolume`、2026-09-19実装）
+
+`VirtualMachineService.AttachVolume(tenant_id, id, volume_id, device_hint)`/
+`DetachVolume(tenant_id, id, volume_id)`は`Stopped`のVMのみに許可される
+（[VirtualMachine仕様](virtual-machine.md)「リサイズ」で確立したコールドパターンと
+全く同じ理由・同じ形——`Stop`/`Start`/`Resize`同様`resource_version`は取らない）。
+
+- **AttachVolume**: `spec.volumes`が既に対象`volume_id`を含んでいれば無変更で返す
+  （冪等no-op）。それ以外は`validateVolumes`（Create時と同じ検証: 存在/同テナント/Ready）
+  を通し、`spec.volumes`へ追加して`store.Update`するだけ——**実際のVolumeAttachmentは
+  ここでは作らない**。次の`Start`が`createVolumeAttachments`を再実行する際に自然に
+  作られる（上記「compute側の統合」参照）。quotaチェック・Hypervisor容量予約は一切ない
+  （既存Volumeのattach/detachはquotaに影響しない——`max_volume_gb`はVolume作成時に
+  一度だけ課金され、attach/detachでは変動しない）
+- **DetachVolume**: `spec.volumes`から対象`volume_id`が見つからなければ無変更で返す
+  （冪等no-op）。見つかった場合、AttachVolumeと非対称に**即座に実体のVolumeAttachmentも
+  削除する**——`status.volume_attachment_refs`の中から該当するものを`Get`で解決して
+  `Delete`する。これはResizeには無い一手間だが必要：VolumeAttachmentは排他制御の
+  ロックを握っている実リソースなので、spec側だけ書き換えて次のStartまで放置すると、
+  そのVolumeが他所へアタッチできないまま塞がり続けてしまう（`createVolumeAttachments`
+  は無いものを作る一方通行のロジックで、specから消えたエントリに対応する
+  attachmentを消す処理は持たない）
+- 両方とも`Running`のVM（cloud-hypervisorであっても）には使えず`FailedPrecondition`。
+  ライブホットプラグは未実装（上記「この実装がカバーしないもの」、
+  [docs/open-questions.md](../open-questions.md)参照）
 
 ### VM削除時のVolumeAttachment後始末
 
@@ -295,10 +330,14 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
 
 ## この実装がカバーしないもの
 
-- **ホットプラグ**: すでに`Running`なVMへ後からVolumeをアタッチしても、実際には
-  何も起こらない（VolumeAttachmentの制御プレーン状態自体は`Attached`になりうるが、
-  compute-agentへは伝わらない——上記「compute側の統合」参照）。VM作成時に
-  `-volumes`で指定したものだけが実際に接続される
+- **ライブホットプラグ**: `Stopped`のVMに対するコールドattach/detach（`AttachVolume`/
+  `DetachVolume`、上記参照）は実装済み。実行中(`Running`)のVMへダウンタイム無しで
+  Volumeを追加/削除する経路はまだ無い——cloud-hypervisorの`--api-socket`導入という
+  別途大きめの設計が要る（[docs/open-questions.md](../open-questions.md)
+  「cloud-hypervisor限定のライブホットプラグ（vcpu/memory resize + Volume attach）」
+  参照）。`kyuusha volattach create`をcomputeを経由せず
+  block-storageへ直接発行した場合は今も変わらず、VolumeAttachmentの制御プレーン状態
+  自体は`Attached`になりうるがcompute-agentへは伝わらない（上記「compute側の統合」参照）
 - **ストレージ接続自体のアクセス制御**: どのHypervisorがどのiSCSIターゲット/NVMe-oF
   サブシステム/NFSエクスポートへ接続してよいかは、完全にオペレータ側（実ストレージ
   バックエンド）の管理範囲——kyuusha自身はそこに一切関与しない。したがって

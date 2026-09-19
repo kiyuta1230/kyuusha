@@ -9,7 +9,7 @@
 - `-token`: bearerトークン（省略時は環境変数`$KYUUSHA_TOKEN`）。両方空なら実行時エラー
 - 認証・認可の詳細は[認証・認可仕様](authn-authz.md)を参照
 
-## `kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|reboot|hard-reboot|add-finalizer|remove-finalizer>`
+## `kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|attach-volume|detach-volume|reboot|hard-reboot|add-finalizer|remove-finalizer>`
 
 | サブコマンド | フラグ |
 |---|---|
@@ -22,6 +22,8 @@
 | `stop` | `-tenant`(必須) `-id`(必須) `-force`(既定false。trueなら即SIGKILL、falseならSIGTERM→猶予期間→SIGKILL)。`Running`のみ許可。ディスクは保持される |
 | `start` | `-tenant`(必須) `-id`(必須)。`Stopped`のみ許可。`stop`で保持されたディスクを再利用する（[VirtualMachine仕様](virtual-machine.md)/docs/architecture.md「VirtualMachineのライフサイクル状態機械」参照） |
 | `resize` | `-tenant`(必須) `-id`(必須) `-vcpu`(必須、新しいvCPU数) `-memory-mb`(必須、新しいメモリ量MB)。`Stopped`のみ許可（コールドリサイズのみ、[VirtualMachine仕様](virtual-machine.md)「リサイズ」参照）。`start`/`stop`同様`resource_version`フラグは無い |
+| `attach-volume` | `-tenant`(必須) `-id`(必須) `-volume-id`(必須) `-device-hint`(任意)。`Stopped`のみ許可（コールドのみ、[VirtualMachine仕様](virtual-machine.md)「Volume attach/detach」参照） |
+| `detach-volume` | `-tenant`(必須) `-id`(必須) `-volume-id`(必須)。`Stopped`のみ許可（同上） |
 | `reboot` | `-tenant`(必須) `-id`(必須)。サーバー側に専用RPC/状態は無い、CLI側で`stop`→`Stopped`になるまでポーリング→`start`を発行するだけの組み合わせ |
 | `hard-reboot` | `reboot`と同じだが`stop`に`force=true`を渡す |
 | `add-finalizer` | `-tenant`(必須) `-id`(必須) `-finalizer`(必須、例`acme.corp/network-acl-cleanup`) |
@@ -174,6 +176,12 @@ block-storage向け（[Volume仕様](volume.md)参照）。`VolumeAttachmentServ
 そのVolumeを使う実VMが一度でも起動していれば、compute-agentが見つけた実パスと起動先
 Hypervisorが入る（[Volume仕様](volume.md)「device_path/hypervisorの報告」参照）。
 まだどのVMも起動していなければ空。
+
+`volattach create`はblock-storageへ直接発行され、computeを一切経由しない低レベルな
+プリミティブ——`-vm`が指すVMの`spec.volumes`には一切触れないため、対象VMが`Stopped`
+であってもその次の`Start`では反映されない（`createVolumeAttachments`が
+`vm.Spec.Volumes`からしか組み立てないため）。VMへVolumeを実際に届けたい場合は
+`kyuusha vm attach-volume`/`detach-volume`（上記「vm」参照）を使うこと。
 
 | サブコマンド | フラグ |
 |---|---|

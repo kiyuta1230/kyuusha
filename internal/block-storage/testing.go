@@ -114,6 +114,14 @@ func (f *FakeVirtualMachineClient) Resize(context.Context, *computev1.ResizeVirt
 	panic("FakeVirtualMachineClient: Resize not implemented; blockstorage.Service never calls it")
 }
 
+func (f *FakeVirtualMachineClient) AttachVolume(context.Context, *computev1.AttachVolumeRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	panic("FakeVirtualMachineClient: AttachVolume not implemented; blockstorage.Service never calls it")
+}
+
+func (f *FakeVirtualMachineClient) DetachVolume(context.Context, *computev1.DetachVolumeRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	panic("FakeVirtualMachineClient: DetachVolume not implemented; blockstorage.Service never calls it")
+}
+
 func (f *FakeVirtualMachineClient) Watch(context.Context, *computev1.WatchVirtualMachinesRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[computev1.VirtualMachineEvent], error) {
 	panic("FakeVirtualMachineClient: Watch not implemented; blockstorage.Service never calls it")
 }

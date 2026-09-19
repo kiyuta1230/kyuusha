@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/kiyuta1230/kyuusha/internal/authn"
 	"github.com/kiyuta1230/kyuusha/internal/resource"
@@ -487,6 +489,114 @@ func (s *Service) Resize(ctx context.Context, tenantID, id string, vcpu int32, m
 	usage.MemoryMB += deltaMemoryMB
 	s.usage[tenantID] = usage
 
+	return &out, nil
+}
+
+// AttachVolume attaches an already-Ready Volume to a Stopped VM: mutates
+// spec.volumes and takes effect on the next Start, exactly mirroring
+// Resize's cold pattern -- provisionAndPublish (reconciler.go) re-derives
+// VolumeAttachments from vm.Spec.Volumes on every Start via
+// createVolumeAttachments (volume.go), so no VMM-driver/reconciler changes
+// are needed here. Live/hot attach to a Running CLOUD_HYPERVISOR VM is
+// planned future work (requires adopting cloud-hypervisor's --api-socket,
+// not yet done -- see docs/open-questions.md "cloud-hypervisor限定のライブ
+// ホットプラグ（vcpu/memory resize + Volume attach）").
+//
+// Unlike Resize, there is no quota check at all: an already-created
+// Volume's size_gb was already charged once, at Volume-Create time, in
+// block-storage's own tenant_usage -- compute's tenant_usage has no
+// volume_gb field to begin with (see internal/compute/quota.go), and
+// attaching/detaching an existing Volume never changes what's already
+// charged. There is also no Hypervisor-capacity accounting to touch:
+// storage isn't a Hypervisor-scheduled resource the way vcpu/memory_mb are.
+func (s *Service) AttachVolume(ctx context.Context, tenantID, id, volumeID, deviceHint string) (*VirtualMachine, error) {
+	if volumeID == "" {
+		return nil, fmt.Errorf("%w: volume_id is required", ErrValidation)
+	}
+
+	vm, err := s.store.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, v := range vm.Spec.Volumes {
+		if v.VolumeID == volumeID {
+			return &vm, nil // idempotent no-op, same shape as Resize's same-size short-circuit
+		}
+	}
+
+	if vm.Status.Phase != PhaseStopped {
+		return nil, fmt.Errorf("%w: vm must be Stopped to AttachVolume (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
+	}
+	if err := validateVolumes(ctx, s.volumeClient, tenantID, []VolumeRequest{{VolumeID: volumeID, DeviceHint: deviceHint}}); err != nil {
+		return nil, err
+	}
+
+	vm.Spec.Volumes = append(vm.Spec.Volumes, VolumeRequest{VolumeID: volumeID, DeviceHint: deviceHint})
+	out, err := s.store.Update(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DetachVolume removes a Volume from a Stopped VM's spec.volumes.
+//
+// Unlike AttachVolume (and unlike Resize entirely), this eagerly deletes
+// the underlying VolumeAttachment right now rather than leaving it for the
+// next Start to notice is gone: a VolumeAttachment holds block-storage's
+// exclusive-attach lock on that volume_id (see docs/specs/volume.md「排他
+// 制御」) for as long as it exists, and createVolumeAttachments only ever
+// creates attachments it finds missing -- it has no logic to delete one
+// whose corresponding spec entry disappeared. Leaving the stale attachment
+// in place until a later Start would keep the Volume locked and
+// unattachable elsewhere for however long this VM happens to stay Stopped,
+// defeating the point of calling Detach at all.
+func (s *Service) DetachVolume(ctx context.Context, tenantID, id, volumeID string) (*VirtualMachine, error) {
+	vm, err := s.store.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+
+	idx := -1
+	for i, v := range vm.Spec.Volumes {
+		if v.VolumeID == volumeID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return &vm, nil // idempotent no-op
+	}
+
+	if vm.Status.Phase != PhaseStopped {
+		return nil, fmt.Errorf("%w: vm must be Stopped to DetachVolume (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
+	}
+
+	var remainingRefs []string
+	for _, attachmentID := range vm.Status.VolumeAttachmentRefs {
+		a, err := s.volumeAttachmentClient.Get(ctx, &blockstoragev1.GetVolumeAttachmentRequest{TenantId: tenantID, Id: attachmentID})
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				continue // already gone (e.g. orphan-GC'd) -- nothing to delete, don't keep the stale ref either
+			}
+			return nil, err
+		}
+		if a.GetSpec().GetVolumeId() == volumeID {
+			if _, err := s.volumeAttachmentClient.Delete(ctx, &blockstoragev1.DeleteVolumeAttachmentRequest{TenantId: tenantID, Id: attachmentID}); err != nil {
+				return nil, err
+			}
+			continue // drop it from VolumeAttachmentRefs
+		}
+		remainingRefs = append(remainingRefs, attachmentID)
+	}
+	vm.Status.VolumeAttachmentRefs = remainingRefs
+
+	vm.Spec.Volumes = append(vm.Spec.Volumes[:idx], vm.Spec.Volumes[idx+1:]...)
+	out, err := s.store.Update(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 

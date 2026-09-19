@@ -43,6 +43,15 @@ func volattachCmd(args []string) {
 	}
 }
 
+// volattachCreate talks to block-storage directly (see dialVolumeAttachments)
+// and never touches compute: it can reach VolumeAttachmentStatus.Phase
+// Attached without ever attaching anything on the actual VMM if -vm names a
+// VM that's already booted, or -- for one that's Stopped -- without the
+// attachment ever taking effect on a later Start, since it doesn't touch
+// that VM's spec.volumes either (see docs/specs/volume.md「compute側の統合」).
+// Prefer `kyuusha vm attach-volume`/`detach-volume` (vm.go) for attaching a
+// Volume to a VM you actually want it to reach; this command remains as the
+// low-level primitive createVolumeAttachments itself uses internally.
 func volattachCreate(args []string) {
 	fs := flag.NewFlagSet("volattach create", flag.ExitOnError)
 	addr := fs.String("addr", "localhost:8080", "api-gateway address")

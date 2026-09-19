@@ -57,7 +57,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|reboot|hard-reboot|add-finalizer|remove-finalizer> [flags]
+  kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|attach-volume|detach-volume|reboot|hard-reboot|add-finalizer|remove-finalizer> [flags]
   kyuusha tenant <create|get|list|watch|update|delete> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
   kyuusha hypervisor bootstrap-token create -zone=... [flags]   (dev-only, local signing; see internal/bootstraptoken)
@@ -95,6 +95,10 @@ func vmCmd(args []string) {
 		vmStart(args[1:])
 	case "resize":
 		vmResize(args[1:])
+	case "attach-volume":
+		vmAttachVolume(args[1:])
+	case "detach-volume":
+		vmDetachVolume(args[1:])
 	case "reboot":
 		vmReboot(args[1:], false)
 	case "hard-reboot":
@@ -359,6 +363,57 @@ func vmResize(args []string) {
 	})
 	if err != nil {
 		fatal("resize: %v", err)
+	}
+	printVM(vm)
+}
+
+// vmAttachVolume/vmDetachVolume attach/detach a Volume to/from a Stopped VM
+// (cold only -- see docs/specs/virtual-machine.md). No resource_version
+// flag: like vmResize, this does its own Get-then-mutate-then-Update
+// server-side.
+func vmAttachVolume(args []string) {
+	fs := flag.NewFlagSet("vm attach-volume", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	volumeID := fs.String("volume-id", "", "Volume ID to attach (required)")
+	deviceHint := fs.String("device-hint", "", "device hint")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" || *volumeID == "" {
+		fatal("-tenant, -id, and -volume-id are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+	vm, err := client.AttachVolume(ctx, &computev1.AttachVolumeRequest{
+		TenantId: *tenant, Id: *id, VolumeId: *volumeID, DeviceHint: *deviceHint,
+	})
+	if err != nil {
+		fatal("attach-volume: %v", err)
+	}
+	printVM(vm)
+}
+
+func vmDetachVolume(args []string) {
+	fs := flag.NewFlagSet("vm detach-volume", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	volumeID := fs.String("volume-id", "", "Volume ID to detach (required)")
+	fs.Parse(args)
+
+	if *tenant == "" || *id == "" || *volumeID == "" {
+		fatal("-tenant, -id, and -volume-id are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+	vm, err := client.DetachVolume(ctx, &computev1.DetachVolumeRequest{
+		TenantId: *tenant, Id: *id, VolumeId: *volumeID,
+	})
+	if err != nil {
+		fatal("detach-volume: %v", err)
 	}
 	printVM(vm)
 }

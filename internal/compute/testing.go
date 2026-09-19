@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"math"
+	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -301,45 +302,83 @@ func (f *FakeVolumeClient) Watch(context.Context, *blockstoragev1.WatchVolumesRe
 	panic("FakeVolumeClient: Watch not implemented; compute.Service never calls it")
 }
 
-// FakeVolumeAttachmentClient is a minimal
-// blockstoragev1.VolumeAttachmentServiceClient for tests: Create always
-// succeeds Attached (so createVolumeAttachments' full VolumeAttachInfo path
-// -- which now fetches the Volume itself via FakeVolumeClient for its
-// protocol/connection/identifier, VolumeAttachmentStatus no longer carrying
-// any of that -- is exercised, not just the Pending short-circuit); every
-// other method panics since compute.Service never calls them.
+// FakeVolumeAttachmentClient is a minimal, stateful
+// blockstoragev1.VolumeAttachmentServiceClient for tests: Create is
+// idempotent-by-(tenant_id,name) and succeeds Attached by default (so
+// createVolumeAttachments' full VolumeAttachInfo path -- which fetches the
+// Volume itself via FakeVolumeClient for its protocol/connection/identifier
+// -- is exercised, not just the Pending short-circuit). Get/List/Delete
+// operate against the same in-memory store Create populates -- needed since
+// AttachVolume/DetachVolume (service.go) and createVolumeAttachments'
+// naming-scheme lookup (volume.go) now call them too. Watch still panics;
+// compute.Service never calls it.
 type FakeVolumeAttachmentClient struct {
 	// Pending, if true, simulates the exclusive-attach constraint blocking
-	// this attachment (see docs/architecture.md「具体的な排他制御」): Create
-	// still succeeds, but the returned VolumeAttachment stays Pending.
+	// every new attachment (see docs/architecture.md「具体的な排他制御」):
+	// Create still succeeds, but the returned VolumeAttachment stays
+	// Pending.
 	Pending bool
+
+	mu    sync.Mutex
+	items map[string]*blockstoragev1.VolumeAttachment // keyed by id
 }
 
 func (f *FakeVolumeAttachmentClient) Create(ctx context.Context, req *blockstoragev1.CreateVolumeAttachmentRequest, opts ...grpc.CallOption) (*blockstoragev1.VolumeAttachment, error) {
-	if f.Pending {
-		return &blockstoragev1.VolumeAttachment{
-			Meta:   &resourcev1.ObjectMeta{Id: "volattach-" + req.GetName(), TenantId: req.GetTenantId()},
-			Spec:   req.GetSpec(),
-			Status: &blockstoragev1.VolumeAttachmentStatus{Phase: "Pending"},
-		}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.items {
+		if a.GetMeta().GetTenantId() == req.GetTenantId() && a.GetMeta().GetName() == req.GetName() {
+			return a, nil // idempotent-by-name, mirroring block-storage's real CreateVolumeAttachment
+		}
 	}
-	return &blockstoragev1.VolumeAttachment{
-		Meta:   &resourcev1.ObjectMeta{Id: "volattach-" + req.GetName(), TenantId: req.GetTenantId()},
+	phase := "Attached"
+	if f.Pending {
+		phase = "Pending"
+	}
+	id := "volattach-" + req.GetName()
+	a := &blockstoragev1.VolumeAttachment{
+		Meta:   &resourcev1.ObjectMeta{Id: id, Name: req.GetName(), TenantId: req.GetTenantId()},
 		Spec:   req.GetSpec(),
-		Status: &blockstoragev1.VolumeAttachmentStatus{Phase: "Attached"},
-	}, nil
+		Status: &blockstoragev1.VolumeAttachmentStatus{Phase: phase},
+	}
+	if f.items == nil {
+		f.items = make(map[string]*blockstoragev1.VolumeAttachment)
+	}
+	f.items[id] = a
+	return a, nil
 }
 
-func (f *FakeVolumeAttachmentClient) Get(context.Context, *blockstoragev1.GetVolumeAttachmentRequest, ...grpc.CallOption) (*blockstoragev1.VolumeAttachment, error) {
-	panic("FakeVolumeAttachmentClient: Get not implemented; compute.Service never calls it")
+func (f *FakeVolumeAttachmentClient) Get(ctx context.Context, req *blockstoragev1.GetVolumeAttachmentRequest, opts ...grpc.CallOption) (*blockstoragev1.VolumeAttachment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.items[req.GetId()]
+	if !ok || a.GetMeta().GetTenantId() != req.GetTenantId() {
+		return nil, status.Error(codes.NotFound, "volumeattachment: not found")
+	}
+	return a, nil
 }
 
-func (f *FakeVolumeAttachmentClient) List(context.Context, *blockstoragev1.ListVolumeAttachmentsRequest, ...grpc.CallOption) (*blockstoragev1.ListVolumeAttachmentsResponse, error) {
-	panic("FakeVolumeAttachmentClient: List not implemented; compute.Service never calls it")
+func (f *FakeVolumeAttachmentClient) List(ctx context.Context, req *blockstoragev1.ListVolumeAttachmentsRequest, opts ...grpc.CallOption) (*blockstoragev1.ListVolumeAttachmentsResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var items []*blockstoragev1.VolumeAttachment
+	for _, a := range f.items {
+		if a.GetMeta().GetTenantId() == req.GetTenantId() {
+			items = append(items, a)
+		}
+	}
+	return &blockstoragev1.ListVolumeAttachmentsResponse{Items: items}, nil
 }
 
-func (f *FakeVolumeAttachmentClient) Delete(context.Context, *blockstoragev1.DeleteVolumeAttachmentRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
-	panic("FakeVolumeAttachmentClient: Delete not implemented; compute.Service never calls it")
+func (f *FakeVolumeAttachmentClient) Delete(ctx context.Context, req *blockstoragev1.DeleteVolumeAttachmentRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.items[req.GetId()]
+	if !ok || a.GetMeta().GetTenantId() != req.GetTenantId() {
+		return nil, status.Error(codes.NotFound, "volumeattachment: not found")
+	}
+	delete(f.items, req.GetId())
+	return &emptypb.Empty{}, nil
 }
 
 func (f *FakeVolumeAttachmentClient) Watch(context.Context, *blockstoragev1.WatchVolumeAttachmentsRequest, ...grpc.CallOption) (blockstoragev1.VolumeAttachmentService_WatchClient, error) {
