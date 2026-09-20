@@ -1,8 +1,10 @@
 # kyuusha アーキテクチャ設計（ドラフト v0.2）
 
 > ステータス: 実装は進行中（現状は[specs/](specs/README.md)、なぜこの設計かの
-> 要約は[why-kyuusha.md](why-kyuusha.md)を参照）。本ドキュメントは
-> 設計判断の経緯・議論・トレードオフの記録であり、更新は都度ではなく折に触れて行う。
+> 要約は[why-kyuusha.md](why-kyuusha.md)、日付付きの変更履歴は
+> [release-notes.md](release-notes.md)を参照）。本ドキュメントは
+> 設計判断の経緯・議論・トレードオフの記録であり、更新は都度ではなく折に触れて行う
+> （「いつ実装したか」のような日付は持たない——それはrelease-notes.mdの役割）。
 > 目的: OpenStack同様のマイクロサービス分割によるIaaSの全体像を、他プロジェクト調査目的でまず固める。
 
 ## コンセプト
@@ -160,7 +162,7 @@ message VolumeRequest {
 enum VmmDriver {
   VMM_DRIVER_UNSPECIFIED = 0; // FIRECRACKERとして扱う
   VMM_DRIVER_FIRECRACKER = 1;
-  VMM_DRIVER_CLOUD_HYPERVISOR = 2; // 2026-09-12までQEMU。実装の変遷はdocs/specs/cloud-hypervisor-boot.md参照
+  VMM_DRIVER_CLOUD_HYPERVISOR = 2; // 旧QEMU実装からの変遷はdocs/specs/cloud-hypervisor-boot.md参照
 }
 
 message PciDeviceRequest {
@@ -175,7 +177,7 @@ message VirtualMachineSpec {
   int64  memory_mb = 3;
   repeated NetworkAttachment network_interfaces = 4; // 1台のVirtualMachineに複数インターフェースを許容
   repeated VolumeRequest volumes = 5;  // データボリューム。ルートディスクは常にephemeral（下記「pet/cattleの区別を廃止」参照）
-  // 6, 7: 2026-09-12に削除（recovery_policy, persistent_root_disk）。
+  // 6, 7: 削除済み（recovery_policy, persistent_root_disk）。
   // 「pet/cattleの区別を廃止」節参照
   string user_data = 8;               // cloud-init user-data(YAML)。空なら注入しない。実用上64KB程度が目安の上限
   VmmDriver driver_hint = 9;          // 未指定ならFIRECRACKER。I/O性能やPCIパススルーが要るならCLOUD_HYPERVISORを明示指定
@@ -184,7 +186,7 @@ message VirtualMachineSpec {
 ```
 
 フィールド6・7が空いているのは、当初あった`recovery_policy`/`persistent_root_disk`という
-「VMをペットとしてセルフヒールさせるか」を選ばせるフィールドを2026-09-12に削除したため——
+「VMをペットとしてセルフヒールさせるか」を選ばせるフィールドを削除したため——
 ハイパーバイザー喪失時の自動リカバリはkyuusha自身の責務ではなくKaaS層/オペレータに委ねる、
 という判断（本物のフェンシングを欠いた自動リカバリはデータ破損リスクを伴う、等）の結果。
 経緯・議論の全文は「pet/cattleの区別を廃止」節参照。
@@ -194,7 +196,7 @@ message VirtualMachineStatus {
   string phase = 1;           // Pending / Scheduled / Provisioning / Running / Stopping / Stopped / Starting / Deleting / Error
   repeated Condition conditions = 2;
   string hypervisor = 3;            // 配置先ハイパーバイザー
-  // 4: 2026-09-12に削除（root_volume_ref）
+  // 4: 削除済み（root_volume_ref）
   repeated string interface_refs = 5; // spec.network_interfacesと同順のNetworkInterfaceへの参照
   repeated string volume_attachment_refs = 6; // spec.volumesと同順のVolumeAttachmentへの参照
 }
@@ -447,7 +449,7 @@ message VolumeAttachmentStatus {
 （`spec.volumes`のindex基準）、ルートディスクは`volattach-<vm-id>-root`。
 
 ルートディスクを`Volume`/`VolumeAttachment`で表現する(`persistent_root_disk`)案も検討したが、
-2026-09-12に見送った（下記「pet/cattleの区別を廃止」参照）——ルートディスクは常に
+見送った（下記「pet/cattleの区別を廃止」参照）——ルートディスクは常に
 block-storageを経由せず、compute-agentがVMMドライバ経由でイメージから直接ephemeralな
 ディスクを作る。
 
@@ -856,7 +858,7 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
 
 ### 補足
 
-- **実装（2026-09-12、`Stop`/`Start` RPC）**: `VirtualMachineService.Stop(vm_id, force)`/`Start(vm_id)`の
+- **実装済み（`Stop`/`Start` RPC）**: `VirtualMachineService.Stop(vm_id, force)`/`Start(vm_id)`の
   2 RPCのみ追加。`reboot`/`hard-reboot`はサーバー側に対応するRPCや状態を一切持たない、CLIだけの
   組み合わせ（`kyuusha vm reboot` = `Stop`→`Stopped`になるまでポーリング→`Start`、
   `hard-reboot`は`Stop(force=true)`版）。
@@ -884,7 +886,7 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
 - **Deleteは根本ディスクを含めて完全に破棄する**: Stopとは非対称に、VMMドライバの`Destroy(vmID)`
   （`Stop`とは別の新規メソッド）が、プロセス停止に加えてjail/runディレクトリそのものを
   `os.RemoveAll`する。以前はどのコードパスもこのディレクトリを削除しておらず、Delete後も
-  ディスクの実体が永久にリークし続ける実バグがあった（2026-09-12発見・修正、`handleDelete`が
+  ディスクの実体が永久にリークし続ける実バグがあった（発見・修正済み、`handleDelete`が
   呼ぶメソッドを`Stop`から`Destroy`へ変更）
 - **NetworkInterfaceとVolumeで削除方針が非対称**: `Deleting`時、NetworkInterfaceはVirtualMachine専用に作られた
   リソースなので完全削除する。一方Volumeは VirtualMachineより長生きしうる独立リソースなので、
@@ -894,7 +896,7 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
   イメージ不存在・スケジューリング不能・agentからの恒久的失敗報告など、有限回数以内に
   自然回復しないと判断される失敗のみ`Error`にする（quota超過はCreate時の同期バリデーションで
   拒否するため、VirtualMachineが生成されてから`Error`になることはない。「Quota設計」節を参照）
-- **ハイパーバイザー喪失時、VMには一切手を触れない(2026-09-12決定)**——`Running`のまま
+- **ハイパーバイザー喪失時、VMには一切手を触れない**——`Running`のまま
   固まり、復旧はKaaS層/オペレータに委ねる。理由・経緯は「ハイパーバイザー死活監視と
   リカバリ」/「pet/cattleの区別を廃止」節参照
 
@@ -1047,7 +1049,7 @@ JWT署名・OAuth2/OIDCフロー・鍵ローテーションは自前実装が事
   kyuushaサービスであること」だけ——直後の「内部サービス間の最小権限」がまだ無いのと同じ理由で、
   現状の被害範囲限定効果は「外部ネットワークからの盗聴・なりすましを防ぐ」までに留まる。
 
-  **2026-09-11、ハイパーバイザーについては上記の本格PKIを不採用と確定**（運用コストの重い
+  **ハイパーバイザーについては上記の本格PKIを不採用と確定した**（運用コストの重い
   自前実装を避けるkyuusha全体の路線と合わないため）。代わりにbootstrapトークン
   （`internal/bootstraptoken`）だけを軽く拡張し、個体識別・失効を実現した——ただし将来の
   `Register`を拒否するだけで、既存セッションの強制切断はできない。詳細は
@@ -1080,8 +1082,8 @@ OPA採用によりこの「今は粗く、後で細かく」という判断は�
 「後で細かく」する際の具体的な設計方針（テナント内ロール・リソース単位の所有権・
 サービス種別スコープのadmin・グローバルread-onlyという4つの軸、それぞれの実装場所と
 トレードオフ）は[認証・認可仕様](specs/authn-authz.md)「将来の拡張」節にまとめてある。
-2026-09-11に軸1（`tenant_role=viewer`）と軸3（`role=storage-admin`、block-storageサービス
-のみにscopeしたadmin相当）を実装。2026-09-13には軸3を`role=network-admin`
+軸1（`tenant_role=viewer`）と軸3（`role=storage-admin`、block-storageサービス
+のみにscopeしたadmin相当）を実装済み。軸3はさらに`role=network-admin`
 （同じ形でnetworkサービスにscope）へ拡張し、新しい軸4として`role=viewer`
 （全テナント・全サービス横断のread-only、"監査役"ロール）を追加した——テナント内admin
 （`tenant_role`に3値目を足す案）は、既定のテナントメンバーと区別する具体的な追加権限が
@@ -1183,7 +1185,7 @@ type MostAvailableFirst struct{}
 設計の型を用意しただけで、実装は当面のTODOとする（GPUワークロードの具体的な需要が
 出てから着手すれば良い）。
 
-## ハイパーバイザー死活監視とリカバリ、およびpet/cattleの区別の廃止（2026-09-12）
+## ハイパーバイザー死活監視とリカバリ、およびpet/cattleの区別の廃止
 
 ハイパーバイザーの死活監視自体は実装済み（`sweepHypervisorHealth`、
 `internal/compute/hypervisor_service.go`）:
@@ -1383,7 +1385,7 @@ RTに関係なく任意のAZ同士を無条件でメッシュ接続すること�
 以下は当初の設計時点の構想（`InstanceSpec`/`Instance`等、実際には存在しない型を含む
 擬似コード）。実装は結局これより薄い形に落ち着いた——compute-agent側の実際のGoインタフェースは
 `internal/compute-agent/vmm.VMM`（`Boot`/`Stop`/`ConsoleLogPath`の3メソッドのみ）で、
-Volume添付のような、まだ要求のない操作は持たせていない（Start/Stopは2026-09-12実装済み
+Volume添付のような、まだ要求のない操作は持たせていない（Start/Stopは実装済み
 ——「VirtualMachineのライフサイクル状態機械」節参照）
 （[Firecracker起動仕様](specs/firecracker-boot.md)/[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)参照）。
 
@@ -1402,7 +1404,7 @@ type HypervisorDriver interface {
 - ライブマイグレーション不要という方針上、**Firecrackerを第一候補**とする（軽量・高速起動、KaaSハイパーバイザーの使い捨て運用に合う）
 - `libvirt`ドライバは将来的な選択肢として抽象化のみ残す（実装は後回し。実装したのは
   libvirt経由ではなくcloud-hypervisorを直接execする素朴な形——下記参照。当初は
-  同様に直接execする`qemu-system-x86_64`だったが、2026-09-12にcloud-hypervisorへ
+  同様に直接execする`qemu-system-x86_64`だったが、cloud-hypervisorへ
   置き換えた）
 
 ### `spec.driver_hint`によるドライバ切り替え
@@ -1420,7 +1422,7 @@ FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが
   両方が実際にVMを起動する。どちらも同じ`KERNEL_ROOTFS`形式のImage（カーネル+生rootfs、
   ブートローダーなし）を、それぞれの直接カーネルブート機構で起動できる
   （[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)「起動方式1」参照）
-- **2026-09-15追記**: 「ブートローダー内蔵の自己完結ディスク」（`QCOW2`）経由の
+- 「ブートローダー内蔵の自己完結ディスク」（`QCOW2`）経由の
   起動も、`chvmm`にUEFIブート（edk2の`CLOUDHV.fd`ファームウェア）を足す形で
   実装した——[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)「起動方式2:
   UEFIブート」参照。Windows等の非Linuxゲストサポートが動機だったため、Alpine
@@ -1437,7 +1439,7 @@ FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが
 対応）とも完了。Track 3（Dragonfly/Spegel等のP2P配信導入）は未着手
 （[docs/open-questions.md](open-questions.md)参照）。以下は各トラックの経緯。
 
-### 現状の実装（2026-09-14当時）
+### Track 1着手前のベースライン実装
 
 実際のコード（`internal/compute-agent/fcvmm/manager.go`・`chvmm/manager.go`）を
 確認したところ、digestを検証しないURL文字列ハッシュキーのキャッシュ、fcvmm/chvmm
@@ -1456,7 +1458,7 @@ FirecrackerはvirtIO-blockの実装が素朴で、etcdのような同期fsyncが
 **Track 1（今回対象。低リスク）**: ローカルの取得・保存・展開ロジックを、fcvmm/chvmm
 共有の1パッケージへ統合する。
 
-### 追記（2026-09-14、実装時に判明）: containerd自体は輸入せず、自前の小さなパッケージにした
+### containerdは輸入せず、自前の小さなパッケージにした
 
 当初「containerdの`content.Store`/`snapshots`パッケージへ置き換える」という方針で
 書いたが、実装に入る前に`github.com/containerd/containerd/content/local`を実際に
@@ -1519,7 +1521,7 @@ Create時バリデーション・`kyuusha image build`まで波及する広い�
 Track 1を完了・実運用で確認してから、Track 2の要否（Dragonfly級のP2Pが実際に
 必要なスケールに達しているか）を判断する。
 
-### Track 2実装方針（2026-09-14 追記）: 3トラックへ再分割
+### Track 2実装方針: 3トラックへ再分割
 
 Track 1の実運用確認（playgroundでの実VM起動、digest検証・不一致拒否とも確認済み）が
 完了したため、Track 2に着手する。着手にあたり、Track 2自体をさらに2つに分ける
@@ -1565,7 +1567,7 @@ HTTP HEAD）が、`url`のスキームに応じてOCIレジストリのマニフ
 **`kyuusha image build`の変更**: 「OCIレイヤーをext4にフラット化してURLとして
 公開する」という当初構想から、「フラット化した後、`oras-go/v2`で実際に
 レジストリへpushし、`oci://`参照を`Image`リソースのCreateに渡す」という形に
-変わる（2026-09-15実装完了、下記追記参照）。
+変わる（実装完了、後述「`kyuusha image build`の実装」参照）。
 
 **playgroundへの追加**: `registry:2`（Docker/CNCF公式のリファレンス実装、
 distribution）を新しいdocker-composeサービスとして追加し、`image-assets`の
@@ -1578,7 +1580,7 @@ distribution）を新しいdocker-composeサービスとして追加し、`image
 別途「Dragonfly級のP2Pが必要なスケールに達したか」の判断を待つ
 （[docs/open-questions.md](open-questions.md)参照）。
 
-**実装・検証結果（2026-09-14）**: 上記方針通り実装し、playgroundで実VM起動まで
+**実装・検証結果**: 上記方針通り実装し、playgroundで実VM起動まで
 確認した。`internal/compute-agent/imagestore`が`oci://`/`oci+http://`スキームを
 `oras-go/v2`経由で解決するだけで、digest検証・content-addressedキャッシュ
 （`blobs/sha256/<hex>`）を含むTrack 1のローカル層はそのまま再利用でき、変更は
@@ -1592,7 +1594,7 @@ HTTP経由取得時と全く同じパス・digestで保存されることを確�
 ローカル管理/OCIレジストリ対応」参照（エビクション未実装、Track 3着手基準は
 引き続き未定義）。
 
-### 追記（2026-09-15）: `kyuusha image build`実装完了
+### `kyuusha image build`の実装
 
 `playground/ocitool`のscaffolding止まりだった`kyuusha image build`本体を
 `cmd/kyuusha/imagebuild.go`として実装した（[Image仕様](specs/image.md)
@@ -1636,11 +1638,11 @@ VM数ほど大きくない、[Volume仕様](specs/volume.md)参照）——**日
 セルフサービスの主戦場ではない**、という前提に立ち、プロビジョニングを厩舎の外（ストレージ
 運用チームの既存ツール・手順）に置く。
 
-（2026-09初版では、専任サービス`storage-agent`＋`StorageBackend`ドライバ抽象化で
-プロビジョニング・export・compute-agent側のiSCSI/NVMe-oFイニシエータ接続まで厩舎自身が
-担う設計で実際に実装した。しかし「利用組織ごとに選びたいストレージバックエンドが全く
-違う」という現実を軽視していたため、2026-09-10にこの責務ごと削除した——`storage-agent`は
-現存しない。）
+（かつては専任サービス`storage-agent`＋`StorageBackend`ドライバ抽象化で、プロビジョニング・
+export・compute-agent側のiSCSI/NVMe-oFイニシエータ接続まで厩舎自身が担っていたが、
+「利用組織ごとに選びたいストレージバックエンドが全く違う」という現実を軽視した設計だった
+ため、この責務ごと削除した——`storage-agent`は現存しない。詳細な経緯は
+[リリースノート](release-notes.md)参照。）
 
 **責務境界**:
 
@@ -1673,7 +1675,7 @@ VM数ほど大きくない、[Volume仕様](specs/volume.md)参照）——**日
 block-storageはVolume/VolumeAttachmentのメタデータ管理サービスへ縮小している
 （具体的なスキーマは[Volume仕様](specs/volume.md)参照）。
 
-### 追記（2026-09-11）: 「参照するだけ」の弱点——作成時の検証をStorageConnectionリソースで埋める
+### 「参照するだけ」の弱点をStorageConnectionリソースで埋める
 
 上記の縮小の直接の帰結として、当初の実装は`CreateVolume`が`protocol`/`storage_connection`/
 `identifier`の形式チェックのみで即座に受理していた——実在するファイル/デバイスかどうか、
@@ -1749,10 +1751,10 @@ compute-agentの間で直接やり取りする専用のNATS stream（`BLOCKSTORA
 
 VirtualMachine/Hypervisor側のHA（`SELF_HEAL`、フェンシング）は丁寧に設計したが、`compute`/`network`/
 `block-storage`等のサービス自体が落ちたときの話が抜けていた。設計する——なお
-`internal/resource.Store`は2026-09-11まで完全にオンメモリのmapで、DB自体がどこにも
+`internal/resource.Store`はかつて完全にオンメモリのmapで、DB自体がどこにも
 存在しなかった（compute/network/identity/image/block-storageのどのサービスも、
 再起動・クラッシュで状態を100%失う設計だった）。以下はこれをetcd-backedへ
-置き換えた後の、現在の設計。
+置き換えた後の、現在の設計（詳細な経緯は[リリースノート](release-notes.md)参照）。
 
 ### 採用: バッキングストアに`etcd`を採用する
 
@@ -1782,7 +1784,7 @@ Kubernetesの`apiserver`+`etcd`の設計をそのまま踏襲したもの（[why
 `resource_version`の意味が壊れる点が決め手になった。運用面では、ユーザー自身が
 etcdクラスタ運用の実経験を持っていることも、この選択の後押しになっている。
 
-**実装済み（2026-09-11）**: `internal/resource.Store`をetcd-backedに書き換え、
+**実装済み**: `internal/resource.Store`をetcd-backedに書き換え、
 compute/identity/image/network/block-storageの5サービス全てが`-etcd-endpoints`
 経由でetcdへ接続するよう`NewService`/各`cmd/*/main.go`を更新した。キー設計・
 `resource_version`↔`mod_revision`対応・`Create`の冪等性チェック（Txn CAS）・
@@ -1821,7 +1823,7 @@ etcdにとって軽微なので、まずは定期compactionの設定だけで様
 持たないため、複数レプリカをロードバランサ配下に並べるだけでHAを達成できる。api-gatewayは
 純粋なステートレスプロキシ＋JWT検証なので同様。特別な設計は不要。
 
-### Reconcile面: プロセス分割による単一化（当初案のリーダー選出から変更、2026-09-13）
+### Reconcile面: プロセス分割による単一化（当初案のリーダー選出から変更）
 
 複数レプリカがそれぞれ独自にreconcileループ（`Pending`のVirtualMachineを見つけてスケジューリングする等）
 を回すと、二重処理・レースが発生する（`resource_version`の楽観的並行性制御で最悪の破損は
@@ -1829,7 +1831,7 @@ etcdにとって軽微なので、まずは定期compactionの設定だけで様
 
 当初案はk8sのcontroller-managerと同じ**etcdベースのリーダー選出**
 （`go.etcd.io/etcd/client/v3/concurrency`の`Session`+`Election`、複数レプリカ中1つだけが
-アクティブで他はホットスタンバイ）だったが、2026-09-13、compute について実装前に再検討し、
+アクティブで他はホットスタンバイ）だったが、compute について実装前に再検討し、
 **reconcileループをgRPC API本体から別プロセスに切り出し、そちらは常に単一インスタンスで
 デプロイする**という、より単純な代替案を採用した:
 
@@ -1848,7 +1850,7 @@ etcdにとって軽微なので、まずは定期compactionの設定だけで様
   ため、複数プロセス間で処理が引き継げる」という性質はここでも同じ形で効いている——
   `compute-reconciler`が再起動しても、etcdに書いた`Pending`/stuck-phaseなVMの状態と、
   JetStreamに溜まったコマンドの両方から素直に再開できる
-- **2026-09-13、`network`/`block-storage`にも同じ分離を適用した**（`cmd/network`/
+- **`network`/`block-storage`にも同じ分離を適用した**（`cmd/network`/
   `cmd/network-reconciler`、`cmd/block-storage`/`cmd/block-storage-reconciler`）。
   どちらも当初、`CreateSubnet`/`CreateNetworkInterface`（VLAN/IPプール）や
   `CreateVolumeAttachment`（排他制御用ミューテックス`attachMu`）の実際の割り当て判断が
@@ -1935,10 +1937,10 @@ Prometheus本体・Grafana・Jaeger/Tempo・Lokiのような**集約基盤は動
 
 | リソース | メトリクス源 | 取得元 | 状態 |
 |---|---|---|---|
-| VirtualMachine(CPU/メモリ) | jailerが使うcgroup統計 | compute-agent | 実装済み（2026-09-13） |
-| VirtualMachine(ディスクI/O、Volumeバックエンド非依存) | VMMプロセスの`/proc/<pid>/io` | compute-agent | 実装済み（2026-09-13） |
-| NetworkInterface(ネットワークI/O) | tapデバイスのホスト側統計 | compute-agent | 実装済み（2026-09-13） |
-| VolumeAttachment(IOPS/スループット、ブロックデバイスのみ) | バックエンドのブロックデバイスのsysfs統計 | compute-agent | 実装済み（2026-09-13。NFSは対象外、下記参照） |
+| VirtualMachine(CPU/メモリ) | jailerが使うcgroup統計 | compute-agent | 実装済み |
+| VirtualMachine(ディスクI/O、Volumeバックエンド非依存) | VMMプロセスの`/proc/<pid>/io` | compute-agent | 実装済み |
+| NetworkInterface(ネットワークI/O) | tapデバイスのホスト側統計 | compute-agent | 実装済み |
+| VolumeAttachment(IOPS/スループット、ブロックデバイスのみ) | バックエンドのブロックデバイスのsysfs統計 | compute-agent | 実装済み（NFSは対象外、下記参照） |
 
 VirtualMachineのCPU/メモリは`internal/compute-agent/resourcemetrics.Collector`として実装済み
 （`kyuusha_vm_cpu_usage_seconds_total`/`kyuusha_vm_memory_usage_bytes`/
@@ -1950,7 +1952,7 @@ adoptしたものの両方を含む）を追加し、`vmm.BootSpec`/`vmm.BootRec
 実現した（`BootRecord`側への永続化により、compute-agent再起動後に`Reconcile`がadoptしたVMも
 tenant_idラベル付きで即座にメトリクスへ現れる）。
 
-**NetworkInterface/Volumeも同日中に実装**（「未決事項」節で残っていた最後の実行タスク）。
+**NetworkInterface/Volumeも実装済み**（「未決事項」節で残っていた最後の実行タスク）。
 どちらも別サービス（network-agent/block-storage）を新設する話ではなく、tap配線・Volume解決が
 実際に行われる場所であるcompute-agent自身がそのまま観測する——「network-agentはfoldして
 compute-agentに統合済み」「block-storageはVolumeを提供せず参照するだけ」という既存方針
@@ -2231,14 +2233,14 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 
 ### 解決済み（参考: 決定の経緯は各セクション本文を参照）
 
-- `vm create -subnets=`がtap配線されないまま起動するバグ（2026-09-13発見・同日修正、
+- `vm create -subnets=`がtap配線されないまま起動するバグ（発見・修正済み、
   原因はNetworkInterfaceの非同期IP割り当てをcompute側が待たずにbootへ進んでいたこと、
   `createNetworkInterfaces`に短時間ポーリングを追加して解消——詳細は
   `internal/compute/network.go`の`waitForAllocation`のコード自体を参照）
 - 各サービスのspec/statusフィールド詳細（Tenant/Subnet/NetworkInterface/Volume/VolumeAttachment）
 - Quota設計（`Tenant.spec.quota`が上限を持ち、各リソース所有サービスが`tenant_usage`をHypervisor容量予約と同じ原子的トランザクションで強制。Create時の同期バリデーションとして拒否、Error化しない）
 - Observability方針（Prometheus/OpenTelemetry/構造化ログという業界標準に乗る。詳細は「Observability」節参照）
-- 払い出したリソース自身のメトリクス（VirtualMachine/NetworkInterface/Volume、2026-09-13に全種実装済み。詳細は「払い出したリソース自身のメトリクス」節参照）
+- 払い出したリソース自身のメトリクス（VirtualMachine/NetworkInterface/Volume、全種実装済み。詳細は「払い出したリソース自身のメトリクス」節参照）
 - IP設定（DHCPは使わず、既存のNoCloud seed diskに`network-config`として相乗り）
 - Subnet内のDNS/名前解決（networkサービスがNetworkInterfaceのデータから権威DNSを兼ねる。軽量DNSレスポンダを自作、リゾルバの到達性は共有NATゲートウェイと同じルートリークに相乗り）
 - API消費者の多様化への備え（Createのべき等キー、dry_run、Condition形式での構造化エラー、gRPC Server Reflection。Terraformプロバイダ/MCPサーバー自体は今書かず、基盤の改善のみ先行）
@@ -2246,21 +2248,21 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - 技術選定の一貫した基準（難しい分散システムの問題は既製品(CNCF濃度の高いOSS)に乗り、kyuusha固有のドメインロジックのみ自作する）
 - マルチハイパーバイザー前提（単一ホストは特別扱いしない、N=1の場合として同じコードパス）
 - 子リソースIDの決定的生成ルール（`iface-<vm-id>-<index>`。`volattach`は当初`<vm-id>-<index>`
-  という位置ベースだったが、2026-09-19にVolumeID ベース（`<vm-id>-<volume-id>`）へ変更
+  という位置ベースだったが、VolumeIDベース（`<vm-id>-<volume-id>`）へ変更
   ——`AttachVolume`/`DetachVolume`実装時、途中要素の削除で後続のindexがずれ既存
   attachmentが孤児化するバグを避けるため。[Volume仕様](specs/volume.md)「compute側の
   統合」参照。`volattach-<vm-id>-root`/`rootvol-<vm-id>`は`persistent_root_disk`専用に
   検討していた命名で、同フィールド削除（「pet/cattleの区別の廃止」節）に伴い実装されない
   まま消えた）
 - 孤児リソースGC（親への`Get`が`NotFound`なら自分を消す、10分間隔の定期スイープ）は
-  2026-09-13、NetworkInterface/VolumeAttachmentの両方について実装済み（能動的削除の
+  NetworkInterface/VolumeAttachmentの両方について実装済み（能動的削除の
   取りこぼしに対するバックストップという位置付け。他のリソース種別へは未展開）
 - NetworkInterface/Volume/VolumeAttachmentのライフサイクルphase
 - Volume/NetworkInterfaceの排他制御・フェンシング問題への対処方針
 - VLAN IDの割り当て方式（networkサービスが設定済みプールから同期・排他で払い出し）
 - スケジューラ設計（フィルタ5種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む）
 - PCIデバイス(GPU等)パススルーの設計の型（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターン。実装は当面TODO——`HypervisorStatus.available_devices`という受け皿フィールド自体は存在するが、`RegisterHypervisorRequest`側にそれを申告するフィールドが無く、compute-agentがそもそも自己申告する手段が無い。スケジューラの`filterSchedulable`も`spec.pci_devices`を一切読まない。設計の型だけがあり、実装は本当にゼロから）
-- pet/cattleの区別（`recovery_policy`/`persistent_root_disk`/`root_volume_ref`）を廃止（2026-09-12。実質未使用だったフィールドを削除し、ハイパーバイザー喪失時の自動リカバリはKaaS層/オペレータに委ねる判断。「pet/cattleの区別を廃止」節参照）
+- pet/cattleの区別（`recovery_policy`/`persistent_root_disk`/`root_volume_ref`）を廃止（実質未使用だったフィールドを削除し、ハイパーバイザー喪失時の自動リカバリはKaaS層/オペレータに委ねる判断。「pet/cattleの区別を廃止」節参照）
 - UI方針（自前のWeb UIは作らずCLI＋Grafanaに任せる。OpenStack Horizonを反面教師に）
 - テナント間VRF分離の実配線ドキュメント化（`docs/network-deployment-guide.md`としてネットワーク運用チーム向けに独立した文書を作成。VLANプール/VRF/ルートリークポリシー/デプロイ前チェックリストを含む）
 - Imageキャッシュのエビクションポリシー（LRU＋参照カウント除外＋サイズ閾値）とpre-staging方針（専用機構は作らずPrometheusで可視化のみ。Dragonflyの判断を先取りしない）
@@ -2272,8 +2274,8 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - block-storageの責務境界（プロビジョニング/exportは運用者側、kyuusha自身は`Volume`/`VolumeAttachment`という参照メタデータとプロトコル単位の「発見して繋ぐ」ロジックのみ持つ。詳細は「block-storageのバックエンド抽象化」節参照）
 - ストレージ冗長化への切替タイミング（Volumeが本番相当で使われ始めた時点が目安。具体的な方式はDRBD等含め運用者判断）
 - NATS JetStreamのsubject/stream設計（`ms.<service>.<cmd|evt>.<hypervisor>...`、CMD/EVTストリームの分離）
-- gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）。2026-09-11、ハイパーバイザー専用mTLS証明書の動的発行（本格PKI）は不採用と確定し、bootstrapトークンへの任意`hypervisor_id`クレーム+`HypervisorSpec.revoked`による軽量な個体識別・失効に代替（将来のRegisterを拒否するのみ、既存セッションの強制切断は不可という割り切り込み）
-- 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）。2026-09-11、`tenant_role=viewer`（テナント内read-only）と`role=storage-admin`（block-storageサービスのみにscopeしたadmin相当）を実装。2026-09-13、`role=network-admin`（同形、networkサービスにscope）と`role=viewer`（全テナント・全サービス横断read-only）を追加——静的な列挙のみで、動的カスタムロール定義は見送り
+- gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）。ハイパーバイザー専用mTLS証明書の動的発行（本格PKI）は不採用と確定し、bootstrapトークンへの任意`hypervisor_id`クレーム+`HypervisorSpec.revoked`による軽量な個体識別・失効に代替（将来のRegisterを拒否するのみ、既存セッションの強制切断は不可という割り切り込み）
+- 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）。`tenant_role=viewer`（テナント内read-only）と`role=storage-admin`（block-storageサービスのみにscopeしたadmin相当）、`role=network-admin`（同形、networkサービスにscope）、`role=viewer`（全テナント・全サービス横断read-only）を実装——静的な列挙のみで、動的カスタムロール定義は見送り
 - Watchの再開設計（resource_version + Bookmarkイベント、履歴保持は有限で古すぎたら再List）
 - Firecrackerのjailer/tapデバイス運用方針
 - ネットワークACL（`NetworkInterfaceSpec.ingress_rules`による最小限のホスト側ファイアウォール。SecurityGroupのような別リソースは導入しない）
