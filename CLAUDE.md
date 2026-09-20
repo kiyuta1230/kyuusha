@@ -25,6 +25,23 @@ kyuushaで作業するAIエージェント向けのルール。
 - 実装を変更したらdocs/specs/の対応する仕様書を都度追従して更新する（architecture.mdは
   都度ではなく折に触れて更新すれば良い、というのは既存の合意通り）
 
+## 変更を入れるときに必須のこと
+
+- **playgroundでの統合テスト**: compute-agent/VMM(fcvmm/chvmm)/NATS配線/reconciler等、
+  実際にVMやリソースが動く経路に関わる変更は、`playground/docker-compose.yml`で該当
+  サービスを再ビルドし、実際に動かして確認する（単体テストのpassだけで完了とみなさない）。
+  reconcileループを持つ機能はAPI-servingバイナリだけでなく対応する`*-reconciler`
+  バイナリの再ビルドも忘れない
+  - **例外**: ドキュメントのみの変更、明らかに実行経路に影響しない変更（コメント修正、
+    未使用コードの削除等）は省略してよい。厳密な全数適用ルールではなく、
+    「影響があるかもしれない変更は必ず実地確認する」という基準で判断する
+- **ドキュメントの追従**: 実装を変更したら、影響する範囲で
+  [docs/specs/](docs/specs/README.md)（現状の仕様）・[docs/architecture.md](docs/architecture.md)
+  （設計判断が変わった場合のみ）・[docs/release-notes.md](docs/release-notes.md)
+  （日付付きの変更履歴）を同じPR/コミットの中で更新する。「後で書く」を許さない
+  ——コードとドキュメントの乖離は都度の小さな追従コストの方が、まとめて再監査するより
+  常に安い
+
 ## その他
 
 - `buf generate`前後の手順、playground検証の要否等は各specファイル・`playground/README.md`を参照

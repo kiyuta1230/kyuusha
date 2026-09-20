@@ -146,17 +146,16 @@ Volume検証と独立にVM起動のたびに実際のアタッチ経路で発生
 （[Firecracker起動仕様](specs/firecracker-boot.md)「jailer」）。jailer自体はFirecracker
 専用ツールでQEMUをラップできないため、`driver_hint=QEMU`にはまだ同等の隔離が無い、
 という問題が長らく残っていた——一度は「別プロジェクトとして本格的な汎用jailerを
-立ち上げる」方針（[QEMU jailerハンドオフ](qemu-jailer-handoff.md)）、次に「既製の
-minijail/nsjailをkyuusha本体へ直接統合する」方針（[QEMU jailer設計](specs/qemu-jailer.md)）
-と2度方針転換したが、**2026-09-12、そもそも実QEMUを使うのをやめてcloud-hypervisorへ
+立ち上げる」方針、次に「既製のminijail/nsjailをkyuusha本体へ直接統合する」方針と
+2度方針転換したが、**2026-09-12、そもそも実QEMUを使うのをやめてcloud-hypervisorへ
 置き換えたことで、この問題自体が解消した**: cloud-hypervisorは静的バイナリ
 （共有ライブラリのchroot問題が発生しない）で、seccompを内蔵しており、外部jailerが
 実質不要になった。
 
 詳細な経緯（QEMUの動的ライブラリ依存の発見、libvirt/自前jailer/別プロジェクト/
 既製jailer統合という検討の変遷）は[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
-「QEMUからcloud-hypervisorへの置き換え」、および上記2つの旧ドキュメント（どちらも
-冒頭に撤回済みの注記あり、経緯の記録として残している）を参照。
+「QEMUからcloud-hypervisorへの置き換え」を参照（別プロジェクト化/minijail統合を
+検討していた当時の2つのドラフト文書は、この問題自体の解消に伴い削除した）。
 
 ## イメージのローカル管理/OCIレジストリ対応: Track 1・2実装済み、残る未決事項（2026-09-14）
 
