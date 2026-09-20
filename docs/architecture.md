@@ -1,10 +1,7 @@
 # kyuusha アーキテクチャ設計（ドラフト v0.2）
 
-> ステータス: 実装は進行中（現状は[specs/](specs/README.md)、なぜこの設計かの
-> 要約は[why-kyuusha.md](why-kyuusha.md)、日付付きの変更履歴は
-> [release-notes.md](release-notes.md)を参照）。本ドキュメントは
-> 設計判断の経緯・議論・トレードオフの記録であり、更新は都度ではなく折に触れて行う。
-> 目的: OpenStack同様のマイクロサービス分割によるIaaSの全体像を、他プロジェクト調査目的でまず固める。
+> ステータス: 実装は進行中。現状の仕様は[specs/](specs/README.md)、なぜこの設計かの要約は
+> [why-kyuusha.md](why-kyuusha.md)、日付付きの変更履歴は[release-notes.md](release-notes.md)を参照。
 
 ## コンセプト
 

@@ -9,7 +9,7 @@ kyuushaで作業するAIエージェント向けのルール。
 | ドキュメント | 役割 | 書かないもの |
 |---|---|---|
 | [docs/specs/](docs/specs/README.md) | 完成した機能単位の**現状の仕様**のみ | 過去の経緯・理由・日付 |
-| [docs/architecture.md](docs/architecture.md) | 設計判断の**「なぜ」**の記録（経緯・議論・トレードオフ）。**設計レベルの**未決事項もここの「未決事項」節に置く | 日付（「いつ実装したか」等）。実装フェーズの細かい迷い事項（下記open-questions.md参照） |
+| [docs/architecture.md](docs/architecture.md) | 設計判断の**「なぜ」**の記録（経緯・議論・トレードオフ）。OpenStack同様のマイクロサービス分割によるIaaSの全体像を、他プロジェクト調査目的でまず固めるのが目的。**設計レベルの**未決事項もここの「未決事項」節に置く | 日付（「いつ実装したか」等）。実装フェーズの細かい迷い事項（下記open-questions.md参照） |
 | [docs/open-questions.md](docs/open-questions.md) | **実装を進める中で出てきた**、まだ判断を保留している細かい話のメモ。随時追加・解決済みなら随時消し込む作業ノート | 設計レベルの論点（architecture.mdへ格上げする） |
 | [docs/release-notes.md](docs/release-notes.md) | **「いつ何が変わったか」**の日付付き変更履歴 | 設計の理由の深掘り（architecture.mdへリンクするだけ） |
 
