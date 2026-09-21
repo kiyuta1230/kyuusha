@@ -147,8 +147,11 @@ Linuxカーネル起動→`vda2`（qcow2内の実パーティション）から�
      Firecracker用の`defaultBootArgs`とほぼ同じだが、Firecrackerの
      `is_root_device`自動注入相当が無いため`root=/dev/vda rw`を明示する
      (下記参照) |
-   | `--cpus boot=<vcpu>` `--memory size=<memory_mb>M` | `spec.vcpu`/
-     `spec.memory_mb`をそのまま |
+   | `--cpus boot=<vcpu>,max=<...>` `--memory size=<memory_mb>M,hotplug_size=<...>` | `spec.vcpu`/
+     `spec.memory_mb`が起点。`max=`/`hotplug_size=`は全CLOUD_HYPERVISOR VMに
+     無条件で付与するライブリサイズ用の余地（下記「`--api-socket`」参照） |
+   | `--api-socket <path>` | 同じくライブホットプラグ用（下記参照）。全CLOUD_HYPERVISOR
+     VMに無条件で付与 |
    | `--disk path=...` | rootディスク(`rootfs.raw`、virtio-blk、`/dev/vda`)。
      seed diskがあれば2枚目を`readonly=on`で追加、Volumeがあれば3枚目以降 |
    | `--net tap=<name>,mac=<addr>` | `internal/compute-agent/netsetup`が実際に
@@ -185,6 +188,47 @@ console=ttyS0 reboot=k panic=1 root=/dev/vda rw init=/init
 `spec.boot_args`を明示指定しない限り、それぞれのドライバが自分に必要な形へ
 自動的に補ってくれる。
 
+## `--api-socket`（ライブホットプラグ、`Running`+`CLOUD_HYPERVISOR`限定）
+
+全CLOUD_HYPERVISOR VMは起動時に無条件で`--api-socket <ch-run-dir>/<vm_id>/api.sock`
+を渡される（`ConsoleLogPath`と同じ、`vm_id`の純粋関数——`runningVM`に新しい
+フィールドは要らない）。`VirtualMachineService.Resize`/`AttachVolume`/`DetachVolume`
+が`Running`+`CLOUD_HYPERVISOR`のVMに対して呼ばれたときのライブ経路
+（[VirtualMachine仕様](virtual-machine.md)「リサイズ」「Volume attach/detach」参照）
+専用で、それ以外の用途では一切参照しない。
+
+**`internal/compute-agent/chapi`**（新規、標準ライブラリのみ）がこのソケットへ
+HTTP(Unixドメインソケット経由)でPUTする、使用する3エンドポイントのみ:
+
+| エンドポイント | 用途 | リクエストボディ |
+|---|---|---|
+| `PUT vm.resize` | vcpu/memory変更 | `{desired_vcpus, desired_ram(bytes)}` |
+| `PUT vm.add-disk` | ディスクhotplug | `{path, id}`（`id`は呼び出し元指定——
+  応答の`PciDeviceInfo`ではなく、常にVolumeAttachmentの`Meta.ID`をそのまま渡す） |
+| `PUT vm.remove-device` | ディスク取り外し | `{id}`（`add-disk`に渡したのと同じid） |
+
+`internal/compute-agent/chvmm`が`vmm.Hotplugger`インターフェース
+（`LiveResize`/`LiveAddDisk`/`LiveRemoveDevice`）としてこれを実装する。
+`fcvmm`は実装しない（Firecrackerは構造的にホットプラグ不可能、
+[Firecracker起動仕様](firecracker-boot.md)「spec.vcpuの制約」参照）——
+compute-agent側は`a.Drivers[driver_hint]`を`vmm.Hotplugger`へ型アサートして
+判定するだけで、非対応ドライバに空実装を足す必要はない。
+
+**`max=`/`hotplug_size=`のポリシー**: boot時vcpu/memoryの**2倍**（絶対上限
+32vCPU/256GiB）に固定している（`internal/compute-agent/chvmm`の
+`hotplugMaxVCPU`/`hotplugMemoryCeilingMB`）。「どうせ無条件で付与するなら
+大きいほど良い」わけではない——cloud-hypervisorのACPI hotplugは実RAMこそ
+実際にhot-addするまで消費しないが、ゲストのGPA/E820レンジとKVMメモリスロット
+（virtio-blk/net等のデバイスBARと共有する有限リソース）は起動時点で確保する。
+このため倍率は運用実績を見て見直す前提の暫定値。
+
+**ライブ操作のNATS往復**（`internal/compute/liveops.go`）: `COMPUTE_CMD`
+（`StopCommand`と同じat-least-once/ack-on-receipt）へ`HotplugCommand`を送り、
+結果はper-request reply-subject（`StreamConsole`の`ConsoleRequest`と同じ
+パターン、`COMPUTE_EVT`は使わない——このRPCを待っているのは呼び出し元1人
+だけなので永続化不要）で同期的に受け取る。往復は10秒でタイムアウトし
+`Unavailable`。
+
 ## UserData注入・cgroupリソース制限・Stop/Start・削除・シリアルコンソール
 
 すべて[VirtualMachine仕様](virtual-machine.md)の該当節と同じ仕組みを共有する
@@ -213,8 +257,8 @@ CLOUD_HYPERVISOR`のVMはスケジュール不能になる)等、ドライバを
   実証済み——上記「起動方式2: UEFIブート」参照）
 - PCI passthrough (VFIO)・vhost-user networking: 上記「なぜcloud-hypervisorも
   要るのか」で挙げた本来の動機そのものは、まだどちらも未実装
-- cloud-hypervisor APIソケット(`--api-socket`)経由の制御(ライブマイグレーション、
-  ホットプラグ等): 使っていない(起動時にCLIフラグを一括で渡すだけ)
+- `--api-socket`経由のライブマイグレーションは未実装（vcpu/memory resize・
+  Volume attach/detachのホットプラグは実装済み、上記「`--api-socket`」参照）
 - 外部jailerによるchroot/namespace/uid-gid drop: 静的バイナリ+組み込み
   seccompで足りると判断し、意図的に導入していない(上記「QEMUからの置き換え」
   参照)。Landlockによるファイルシステムアクセス制限の追加も同様に未着手

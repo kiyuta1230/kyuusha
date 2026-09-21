@@ -135,11 +135,16 @@ message StartVirtualMachineRequest {
   string id = 2;
 }
 
-// ResizeVirtualMachineRequest: Stopped -> Stopped only (cold resize -- see
-// docs/specs/virtual-machine.md). No resource_version field: like Stop/Start,
-// this does its own Get-then-mutate-then-Update internally and relies on
-// resource.Store.Update's own compare-and-swap, rather than asking the
-// caller to supply one.
+// ResizeVirtualMachineRequest: a Stopped VM does a cold resize (spec-only,
+// takes effect on the next Start); a Running VM whose driver_hint is
+// CLOUD_HYPERVISOR does a live resize instead, via cloud-hypervisor's
+// --api-socket, no downtime -- any other phase/driver combination (Running+
+// FIRECRACKER included) is rejected with FailedPrecondition, since live
+// resize is structurally impossible on Firecracker (see docs/specs/
+// virtual-machine.md「リサイズ」). No resource_version field: like Stop/
+// Start, this does its own Get-then-mutate-then-Update internally and
+// relies on resource.Store.Update's own compare-and-swap, rather than
+// asking the caller to supply one.
 message ResizeVirtualMachineRequest {
   string tenant_id = 1;
   string id = 2;
@@ -147,9 +152,11 @@ message ResizeVirtualMachineRequest {
   int64 memory_mb = 4;
 }
 
-// AttachVolumeRequest/DetachVolumeRequest: Stopped -> Stopped only (cold
-// attach/detach -- see docs/specs/virtual-machine.md). No resource_version
-// field, same reasoning as ResizeVirtualMachineRequest above.
+// AttachVolumeRequest/DetachVolumeRequest: same cold/live branching as
+// ResizeVirtualMachineRequest above (Stopped = cold, Running+
+// CLOUD_HYPERVISOR = live via cloud-hypervisor's --api-socket -- see
+// docs/specs/volume.md「Volume attach/detach」). No resource_version field,
+// same reasoning as ResizeVirtualMachineRequest above.
 message AttachVolumeRequest {
   string tenant_id = 1;
   string id = 2; // vm id
@@ -209,14 +216,18 @@ service VirtualMachineService {
   // (Running for Stop, Stopped for Start).
   rpc Stop(StopVirtualMachineRequest) returns (VirtualMachine);
   rpc Start(StartVirtualMachineRequest) returns (VirtualMachine);
-  // Resize changes vcpu/memory_mb of a Stopped VM in place: FailedPrecondition
-  // if the VM isn't Stopped, ResourceExhausted if the new size would exceed
-  // tenant quota or the current Hypervisor's free capacity (no
-  // cross-hypervisor migration -- see docs/specs/vm-scheduling.md).
+  // Resize changes vcpu/memory_mb of a Stopped VM in place (cold), or of a
+  // Running+CLOUD_HYPERVISOR VM live with no downtime (see
+  // ResizeVirtualMachineRequest above): FailedPrecondition for any other
+  // phase/driver combination, ResourceExhausted if the new size would
+  // exceed tenant quota or the current Hypervisor's free capacity (no
+  // cross-hypervisor migration -- see docs/specs/vm-scheduling.md),
+  // Unavailable if a live resize's compute-agent round trip times out.
   rpc Resize(ResizeVirtualMachineRequest) returns (VirtualMachine);
-  // AttachVolume/DetachVolume: cold-only (Stopped VM), same FailedPrecondition
-  // contract as Resize. Live/hot attach-detach on a Running VM is not
-  // implemented yet -- see docs/open-questions.md.
+  // AttachVolume/DetachVolume: cold (Stopped VM) or live (Running+
+  // CLOUD_HYPERVISOR, no downtime) -- see AttachVolumeRequest above. Same
+  // FailedPrecondition/Unavailable contract as Resize for any other
+  // phase/driver combination or a timed-out live round trip.
   rpc AttachVolume(AttachVolumeRequest) returns (VirtualMachine);
   rpc DetachVolume(DetachVolumeRequest) returns (VirtualMachine);
   rpc Watch(WatchVirtualMachinesRequest) returns (stream VirtualMachineEvent);

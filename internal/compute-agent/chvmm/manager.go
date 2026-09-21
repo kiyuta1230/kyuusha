@@ -439,8 +439,21 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 
 	args := append([]string{}, bootMethodArgs...)
 	args = append(args,
-		"--cpus", fmt.Sprintf("boot=%d", spec.VCPU),
-		"--memory", fmt.Sprintf("size=%dM", spec.MemoryMB),
+		// max=/hotplug_size= give every CLOUD_HYPERVISOR VM live-resize
+		// headroom unconditionally (see hotplug.go) -- unlike a Firecracker
+		// VM, this costs no real host RAM (cloud-hypervisor doesn't back the
+		// hotplug region with memory until an actual resize hot-adds it),
+		// but it does reserve real guest physical address space and a KVM
+		// memory-slot/ACPI-bookkeeping entry, which is why the ceiling is a
+		// bounded multiplier rather than an arbitrarily large "why not"
+		// value -- see docs/specs/cloud-hypervisor-boot.md「--api-socket」.
+		"--cpus", fmt.Sprintf("boot=%d,max=%d", spec.VCPU, hotplugMaxVCPU(spec.VCPU)),
+		"--memory", fmt.Sprintf("size=%dM,hotplug_size=%dM", spec.MemoryMB, hotplugMemoryCeilingMB(spec.MemoryMB)),
+		// --api-socket: also unconditional, for the same live-hotplug path
+		// (LiveResize/LiveAddDisk/LiveRemoveDevice, hotplug.go). A pure
+		// function of spec.VMID, same pattern as ConsoleLogPath -- no
+		// runningVM field needed to recover it later.
+		"--api-socket", m.apiSocketPath(spec.VMID),
 		// tty: writes straight to this process's own stdout/stderr (below),
 		// same "console.log doubles as both the guest serial console and
 		// wherever cloud-hypervisor's own startup errors land" contract as

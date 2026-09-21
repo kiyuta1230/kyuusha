@@ -64,6 +64,33 @@ type VMM interface {
 	Running() []RunningVM
 }
 
+// Hotplugger is implemented by a VMM driver whose control surface supports
+// changing a Running VM's resources without a reboot -- see
+// docs/specs/cloud-hypervisor-boot.md「--api-socket」. Only chvmm.Manager
+// implements it: fcvmm is structurally incapable (Firecracker fixes vCPU
+// count at boot, virtio-balloon can't exceed its boot-time ceiling, and
+// drive PATCH can't add a new slot -- see docs/open-questions.md「cloud-
+// hypervisor限定のライブホットプラグ」), so agent.go (see hotplug.go) type-
+// asserts a Drivers entry against this rather than every VMM implementation
+// needing a no-op stub for it.
+type Hotplugger interface {
+	// LiveResize changes vmID's vcpu/memory live, up to whatever ceiling
+	// Boot declared for it (see chvmm's hotplugMaxVCPU/
+	// hotplugMemoryCeilingMB) -- the driver's own control surface is
+	// authoritative for whether the requested size actually fits; this
+	// does not pre-validate it.
+	LiveResize(ctx context.Context, vmID string, vcpu int32, memoryMB int64) error
+	// LiveAddDisk hotplugs a new read-write drive at path, tagged with id
+	// (the caller's own choice -- see internal/compute/liveops.go -- not
+	// whatever id the driver's control surface might generate itself).
+	LiveAddDisk(ctx context.Context, vmID, id, path string) error
+	// LiveRemoveDevice unplugs the device previously added under id.
+	// Returns nil, not an error, if the driver reports id no longer exists
+	// -- a retried DetachVolume (internal/compute/liveops.go) must be safe
+	// to call twice.
+	LiveRemoveDevice(ctx context.Context, vmID, id string) error
+}
+
 // RunningVM is one VM a VMM driver reports via Running.
 type RunningVM struct {
 	VMID     string
@@ -142,7 +169,7 @@ type BootSpec struct {
 // protocol/connection/identifier a Volume's spec carries, letting
 // internal/compute-agent/volumeref find the already-visible device/file on
 // this host without kyuusha itself ever logging in, mounting, or
-// exporting anything (see docs/architecture.md「訂正: 責務の境界を...」).
+// exporting anything (see docs/architecture.md「block-storageのバックエンド抽象化」).
 // agent.go builds these from compute.CreateCommand.Volumes.
 type VolumeAttachInfo struct {
 	AttachmentID string
@@ -156,7 +183,7 @@ type VolumeAttachInfo struct {
 	Identifier        string
 	// SizeGB is the Volume's own spec.size_gb, self-reported and
 	// unverifiable at Create time (kyuusha never provisions -- see
-	// docs/architecture.md「訂正: 責務の境界を...」). Used only by
+	// docs/architecture.md「block-storageのバックエンド抽象化」). Used only by
 	// WarnIfSizeMismatch below, the one point where a real size is ever
 	// actually observed.
 	SizeGB int64

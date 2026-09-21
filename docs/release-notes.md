@@ -5,6 +5,19 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-09-20
+
+- `VirtualMachineService.Resize`/`AttachVolume`/`DetachVolume`にライブ経路を追加。
+  `Running`+`driver_hint=CLOUD_HYPERVISOR`のVMに対し、cloud-hypervisorの
+  `--api-socket`経由でダウンタイム無しのvcpu/memoryリサイズ・Volume着脱ができる
+  ようになった（コールド経路と同じRPCでphase/driver分岐、`Stopped`のVMは従来通り
+  コールド動作）。Firecrackerは構造的にホットプラグ不可能なため対象外。
+  新規`internal/compute-agent/chapi`（cloud-hypervisor api-socketクライアント）・
+  `internal/compute/liveops.go`（`Reconciler`側の実装）を追加
+  （[VirtualMachine仕様](specs/virtual-machine.md)「リサイズ」「Volume
+  attach/detach」、[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)
+  「`--api-socket`」参照）
+
 ## 2026-09-19
 
 - `VolumeAttachment`の命名スキームを位置ベース（`volattach-<vm-id>-<index>`）から

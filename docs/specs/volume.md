@@ -267,12 +267,12 @@ volume.attached`（`blockstorage.VolumeAttachedEvent`、`internal/block-storage/
 - **`Scheduled`/`Starting`→`Provisioning`遷移時**（`createVolumeAttachments`）:
   リクエストされたVolumeごとに、決定的な名前でVolumeAttachmentを作る（`docs/architecture.md`
   「子リソースIDの決定的生成ルール」）。この関数は新規Create直後だけでなく、`Stop`後の
-  `Start`のたびに`vm.Spec.Volumes`から毎回再構築される（下記「Volume attach/detach
-  （コールドのみ、2026-09-19実装）」参照）ため、名前は**VolumeIDベース**
-  （`volattach-<vm_id>-<volume_id>`）——`vm.Spec.Volumes`の途中要素がDetachVolumeで
-  削除されて後続要素のindexがずれても、既存attachmentの名前は変わらない。
-  2026-09-19より前に作られた`volattach-<vm_id>-<index>`（位置ベース）named attachmentは、
-  一度もDetachVolumeされていないVMに対しては引き続きそのまま解決・再利用される
+  `Start`のたび、およびライブattach（下記「Volume attach/detach」参照）のたびに
+  `vm.Spec.Volumes`から毎回再構築される（ライブ経路は単一のVolumeを都度渡すだけの
+  同じ呼び出し）ため、名前は**VolumeIDベース**（`volattach-<vm_id>-<volume_id>`）——
+  `vm.Spec.Volumes`の途中要素がDetachVolumeで削除されて後続要素のindexがずれても、
+  既存attachmentの名前は変わらない。旧`volattach-<vm_id>-<index>`（位置ベース）named
+  attachmentは、一度もDetachVolumeされていないVMに対しては引き続きそのまま解決・再利用される
   （新旧どちらの名前でも一致すれば再利用し、リネームはしない——移行ジョブ不要、
   DetachVolumeが実際に呼ばれた時点からそのVMの残りのattachmentだけ自然に新方式へ移る）。
   実際に`Attached`まで到達したものだけ、そのVolume自身を`volumeClient.Get`で取得し直して
@@ -287,31 +287,60 @@ volume.attached`（`blockstorage.VolumeAttachedEvent`、`internal/block-storage/
   Volumeを追加する経路（ライブホットプラグ）はまだ無い——ただし`Stopped`なVMに対する
   attach/detach自体は`Resize`と同じコールドパターンで実装済み（下記参照）
 
-### Volume attach/detach（コールドのみ、`AttachVolume`/`DetachVolume`、2026-09-19実装）
+### Volume attach/detach（`AttachVolume`/`DetachVolume`、コールド/ライブ両対応）
 
 `VirtualMachineService.AttachVolume(tenant_id, id, volume_id, device_hint)`/
-`DetachVolume(tenant_id, id, volume_id)`は`Stopped`のVMのみに許可される
-（[VirtualMachine仕様](virtual-machine.md)「リサイズ」で確立したコールドパターンと
+`DetachVolume(tenant_id, id, volume_id)`は単一のRPCで2つの経路に分岐する:
+`Stopped`のVMはコールド、`Running`かつ`driver_hint=CLOUD_HYPERVISOR`のVMは
+ライブ、それ以外は`FailedPrecondition`
+（[VirtualMachine仕様](virtual-machine.md)「リサイズ」で確立した分岐パターンと
 全く同じ理由・同じ形——`Stop`/`Start`/`Resize`同様`resource_version`は取らない）。
+
+**コールド経路**:
 
 - **AttachVolume**: `spec.volumes`が既に対象`volume_id`を含んでいれば無変更で返す
   （冪等no-op）。それ以外は`validateVolumes`（Create時と同じ検証: 存在/同テナント/Ready）
   を通し、`spec.volumes`へ追加して`store.Update`するだけ——**実際のVolumeAttachmentは
   ここでは作らない**。次の`Start`が`createVolumeAttachments`を再実行する際に自然に
-  作られる（上記「compute側の統合」参照）。quotaチェック・Hypervisor容量予約は一切ない
-  （既存Volumeのattach/detachはquotaに影響しない——`max_volume_gb`はVolume作成時に
-  一度だけ課金され、attach/detachでは変動しない）
+  作られる（上記「compute側の統合」参照）
 - **DetachVolume**: `spec.volumes`から対象`volume_id`が見つからなければ無変更で返す
   （冪等no-op）。見つかった場合、AttachVolumeと非対称に**即座に実体のVolumeAttachmentも
   削除する**——`status.volume_attachment_refs`の中から該当するものを`Get`で解決して
-  `Delete`する。これはResizeには無い一手間だが必要：VolumeAttachmentは排他制御の
-  ロックを握っている実リソースなので、spec側だけ書き換えて次のStartまで放置すると、
-  そのVolumeが他所へアタッチできないまま塞がり続けてしまう（`createVolumeAttachments`
-  は無いものを作る一方通行のロジックで、specから消えたエントリに対応する
-  attachmentを消す処理は持たない）
-- 両方とも`Running`のVM（cloud-hypervisorであっても）には使えず`FailedPrecondition`。
-  ライブホットプラグは未実装（上記「この実装がカバーしないもの」、
-  [docs/open-questions.md](../open-questions.md)参照）
+  `Delete`する。VolumeAttachmentは排他制御のロックを握っている実リソースなので、
+  spec側だけ書き換えて次のStartまで放置すると、そのVolumeが他所へアタッチできないまま
+  塞がり続けてしまう（`createVolumeAttachments`は無いものを作る一方通行のロジックで、
+  specから消えたエントリに対応するattachmentを消す処理は持たない）
+
+**ライブ経路**（`internal/compute/liveops.go`の`Reconciler.LiveAttachVolume`/
+`LiveDetachVolume`）:
+
+- **LiveAttachVolume**: 冪等no-opチェック・`validateVolumes`はコールド経路と同じ。
+  違いはその先——`createVolumeAttachments`でVolumeAttachmentを（冪等に）作成し、
+  block-storage側が非同期に`Attached`へ進めるのを最大5秒ポーリングで待ってから、
+  compute-agentへホットプラグコマンド（`PUT vm.add-disk`、下記「NATS往復」参照）を
+  送る。**先にロックを取ってから実機に繋ぐ**順序——逆順だと、block-storageの排他
+  ロックが立つ前に別VMが同じVolumeへ同時attachできてしまう。ホットプラグが失敗したら
+  作成したVolumeAttachmentをベストエフォートで削除し、孤児ロックを残さない
+- **LiveDetachVolume**: 逆に**先に`PUT vm.remove-device`でゲストから外してから**
+  VolumeAttachmentを削除する——ロックを握ったまま先に外すと、まだゲストが使っている
+  デバイスを他VMが同時attachしうる（データ破損）。ホットプラグが失敗した時点で
+  何も変更されていないため、呼び出し元はそのままリトライできる
+- **NATS往復**: どちらも`CmdSubjectHotplug(hypervisor)`（`COMPUTE_CMD`、`StopCommand`と
+  同じat-least-once/ack-on-receipt）へ`HotplugCommand{Op: ADD_DISK|REMOVE_DEVICE,
+  DeviceID, Protocol, StorageConnection, Identifier, ...}`を送り、結果は
+  per-request reply-subject（`StreamConsole`の`ConsoleRequest`と同じパターン、
+  `COMPUTE_EVT`は使わない）で同期的に受け取る。`DeviceID`は常に対象
+  VolumeAttachmentの`Meta.ID`——cloud-hypervisor側の`DiskConfig.id`にもそのまま
+  渡すため、後の`vm.remove-device`呼び出しで別途IDを覚えておく必要がない
+  （[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)「`--api-socket`」参照）
+- compute-agent側は`internal/compute-agent/volumeref.Resolve`で実デバイスパスを
+  解決してからホットプラグする——起動時attachと全く同じ発見ロジック。成功後は
+  既存の`reportAttachedVolumes`/`VolumeAttachedEvent`をそのまま再利用して
+  `status.device_path`/`status.hypervisor`を報告する（下記「device_path/hypervisorの
+  報告」参照、起動時attachと同一の経路）
+- quotaチェック・Hypervisor容量予約はコールド・ライブとも一切ない（既存Volumeの
+  attach/detachはquotaに影響しない——`max_volume_gb`はVolume作成時に一度だけ課金され、
+  attach/detachでは変動しない）
 
 ### VM削除時のVolumeAttachment後始末
 
@@ -342,20 +371,15 @@ tap/cgroup後始末と同じeventual-consistency）。これをしないと、�
 
 ## この実装がカバーしないもの
 
-- **ライブホットプラグ**: `Stopped`のVMに対するコールドattach/detach（`AttachVolume`/
-  `DetachVolume`、上記参照）は実装済み。実行中(`Running`)のVMへダウンタイム無しで
-  Volumeを追加/削除する経路はまだ無い——cloud-hypervisorの`--api-socket`導入という
-  別途大きめの設計が要る（[docs/open-questions.md](../open-questions.md)
-  「cloud-hypervisor限定のライブホットプラグ（vcpu/memory resize + Volume attach）」
-  参照）。`kyuusha volattach create`をcomputeを経由せず
-  block-storageへ直接発行した場合は今も変わらず、VolumeAttachmentの制御プレーン状態
-  自体は`Attached`になりうるがcompute-agentへは伝わらない（上記「compute側の統合」参照）
+- **`kyuusha volattach create`の直接発行**: computeを経由せずblock-storageへ直接
+  発行した場合、VolumeAttachmentの制御プレーン状態自体は`Attached`になりうるが
+  compute-agentへは伝わらない（上記「compute側の統合」参照）。`VirtualMachineService.
+  AttachVolume`/`DetachVolume`（上記、コールド/ライブとも）を使う限りこの問題は無い
 - **ストレージ接続自体のアクセス制御**: どのHypervisorがどのiSCSIターゲット/NVMe-oF
   サブシステム/NFSエクスポートへ接続してよいかは、完全にオペレータ側（実ストレージ
   バックエンド）の管理範囲——kyuusha自身はそこに一切関与しない。したがって
   `docs/architecture.md`が元々挙げていた「LIOのper-initiator ACLが無い」という
-  弱点自体、kyuusha自身の責務ではなくなった（`docs/architecture.md`「正直な弱点」の
-  訂正注記参照）
+  弱点自体、kyuusha自身の責務ではなくなった（`docs/architecture.md`「正直な弱点」参照）
 - **VolumeAttachmentのオーファンGC**: `docs/architecture.md`が決めている「子リソースが
   親の存在を10分毎にGetで確認し、NotFoundなら自分を消す」パターンは2026-09-13に
   実装済み（`blockstorage.Service.sweepOrphanedVolumeAttachments`、`Service.Run`から

@@ -26,6 +26,17 @@ func CmdSubjectStop(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.cmd.%s.vm.stop", hypervisor)
 }
 
+// CmdSubjectHotplug is where a live Resize/AttachVolume/DetachVolume's
+// cloud-hypervisor api-socket call travels (see liveops.go). Unlike
+// ConsoleRequestSubject, this DOES sit under ms.compute.cmd.> (captured by
+// COMPUTE_CMD, same at-least-once/ack-on-receipt durability contract as
+// StopCommand): a live hotplug command must not be silently dropped if
+// compute-agent is briefly unreachable. Its reply, unlike StopResult, does
+// NOT travel via COMPUTE_EVT -- see HotplugResult.
+func CmdSubjectHotplug(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.cmd.%s.vm.hotplug", hypervisor)
+}
+
 func EvtSubjectCreateResult(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.evt.%s.vm.create-result", hypervisor)
 }
@@ -134,7 +145,7 @@ type CreateCommand struct {
 	// client of its own, so what internal/compute-agent/volumeref needs to
 	// find the already-visible device/file on this host (kyuusha never
 	// logs in, mounts, or exports anything -- see docs/architecture.md
-	// 「訂正: 責務の境界を...」) travels here.
+	// 「block-storageのバックエンド抽象化」) travels here.
 	Volumes []VolumeAttachInfo `json:"volumes,omitempty"`
 }
 
@@ -151,7 +162,7 @@ type VolumeAttachInfo struct {
 	Identifier        string `json:"identifier"`
 	// SizeGB is the Volume's own spec.size_gb, self-reported and
 	// unverifiable at Create time (kyuusha never provisions -- see
-	// docs/architecture.md「訂正: 責務の境界を...」). Carried this far only
+	// docs/architecture.md「block-storageのバックエンド抽象化」). Carried this far only
 	// so compute-agent can log a warning if the real size it observes at
 	// boot time diverges from it (see docs/open-questions.md「Volumeの
 	// 申告内容...」) -- not used for anything else.
@@ -210,6 +221,62 @@ type StopCommand struct {
 
 type StopResult struct {
 	VMID    string `json:"vm_id"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// HotplugOp discriminates HotplugCommand's operation. One struct with a
+// discriminator rather than three separate command types -- mirrors
+// CreateCommand's own "several optional field groups, only the relevant one
+// populated per case" convention, and keeps compute-agent's wiring to one
+// durable consumer/one handler instead of three.
+type HotplugOp string
+
+const (
+	HotplugOpResize       HotplugOp = "RESIZE"
+	HotplugOpAddDisk      HotplugOp = "ADD_DISK"
+	HotplugOpRemoveDevice HotplugOp = "REMOVE_DEVICE"
+)
+
+// HotplugCommand is published to CmdSubjectHotplug(hypervisor) by
+// Reconciler.LiveResize/LiveAttachVolume/LiveDetachVolume (liveops.go) for a
+// Running+CLOUD_HYPERVISOR VM. Carries its own ReplySubject (a fresh
+// nc.NewInbox()), exactly like ConsoleRequest: the result comes back over
+// that inbox via plain core NATS (HotplugResult), not COMPUTE_EVT, since
+// only the one blocked RPC caller ever cares about it.
+type HotplugCommand struct {
+	VMID         string    `json:"vm_id"`
+	TenantID     string    `json:"tenant_id"`
+	DriverHint   string    `json:"driver_hint"`
+	Op           HotplugOp `json:"op"`
+	ReplySubject string    `json:"reply_subject"`
+
+	// VCPU/MemoryMB are set when Op == HotplugOpResize.
+	VCPU     int32 `json:"vcpu,omitempty"`
+	MemoryMB int64 `json:"memory_mb,omitempty"`
+
+	// DeviceID is set when Op == HotplugOpAddDisk / HotplugOpRemoveDevice:
+	// the caller-chosen id passed straight through to cloud-hypervisor's
+	// DiskConfig.id / VmRemoveDevice.id -- always the owning
+	// VolumeAttachment's own Meta.ID (see liveops.go), so a later
+	// REMOVE_DEVICE never needs a separately-persisted "which
+	// cloud-hypervisor id did ADD_DISK return" mapping.
+	DeviceID string `json:"device_id,omitempty"`
+
+	// Protocol/StorageConnection/Identifier/SizeGB are set when Op ==
+	// HotplugOpAddDisk: compute-agent resolves the real device path itself
+	// via volumeref.Resolve, same as CreateCommand.Volumes -- compute never
+	// learns a real device path.
+	Protocol          string `json:"protocol,omitempty"`
+	StorageConnection string `json:"storage_connection,omitempty"`
+	Identifier        string `json:"identifier,omitempty"`
+	SizeGB            int64  `json:"size_gb,omitempty"`
+}
+
+// HotplugResult is published to a HotplugCommand's own ReplySubject (plain
+// core NATS, not COMPUTE_EVT) once compute-agent has attempted the
+// operation.
+type HotplugResult struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
 }

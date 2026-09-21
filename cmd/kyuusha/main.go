@@ -386,7 +386,8 @@ func vmStart(args []string) {
 	printVM(vm)
 }
 
-// vmResize changes vcpu/memory_mb of a Stopped VM (cold resize only -- see
+// vmResize changes vcpu/memory_mb of a VM -- cold (Stopped) or live
+// (Running+CLOUD_HYPERVISOR, no downtime), server-side branching (see
 // docs/specs/virtual-machine.md). No resource_version flag: like vmStop/
 // vmStart, Resize does its own Get-then-mutate-then-Update server-side.
 func vmResize(args []string) {
@@ -416,10 +417,11 @@ func vmResize(args []string) {
 	printVM(vm)
 }
 
-// vmAttachVolume/vmDetachVolume attach/detach a Volume to/from a Stopped VM
-// (cold only -- see docs/specs/virtual-machine.md). No resource_version
-// flag: like vmResize, this does its own Get-then-mutate-then-Update
-// server-side.
+// vmAttachVolume/vmDetachVolume attach/detach a Volume to/from a VM --
+// cold (Stopped) or live (Running+CLOUD_HYPERVISOR, no downtime), same
+// server-side branching as vmResize (see docs/specs/virtual-machine.md).
+// No resource_version flag: like vmResize, this does its own
+// Get-then-mutate-then-Update server-side.
 func vmAttachVolume(args []string) {
 	fs := flag.NewFlagSet("vm attach-volume", flag.ExitOnError)
 	addr := fs.String("addr", "localhost:8080", "api-gateway address")

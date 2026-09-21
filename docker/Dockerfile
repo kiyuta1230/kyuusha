@@ -60,11 +60,19 @@ FROM ubuntu:24.04 AS compute-agent
 #
 # cloud-hypervisor-static -- real driver_hint=CLOUD_HYPERVISOR VM boot, see
 # internal/compute-agent/chvmm and docs/specs/cloud-hypervisor-boot.md.
-# "-static": a real qemu-system-x86_64 (this driver's predecessor until
-# 2026-09-12) turned out to need ~30 shared libraries staged into any jail;
-# cloud-hypervisor's static build has none (confirmed: `ldd` reports
-# "statically linked"), and needs no external jailer at all -- its own
-# built-in seccomp is on by default.
+# "-static": a real qemu-system-x86_64 (this driver's predecessor) turned
+# out to need ~30 shared libraries staged into any jail; cloud-hypervisor's
+# static build has none (confirmed: `ldd` reports "statically linked"), and
+# needs no external jailer at all -- its own built-in seccomp is on by
+# default.
+#
+# ch-remote-static -- cloud-hypervisor's own debug/inspection CLI against a
+# running VM's --api-socket (docs/specs/cloud-hypervisor-boot.md
+# 「--api-socket」). Not used by kyuusha's own code at all (chapi talks to
+# the socket directly); included only so a human/playground test can
+# independently confirm a live resize/hotplug actually changed something
+# (`ch-remote --api-socket <path> info`), via a tool with no shared code
+# path with kyuusha's own claim that it worked.
 #
 # CLOUDHV.fd -- the edk2-based UEFI firmware chvmm passes via --firmware
 # when booting a QCOW2 Image (docs/specs/cloud-hypervisor-boot.md
@@ -90,6 +98,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
        "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VERSION}/${CH_ASSET}" \
     && chmod +x /usr/local/bin/cloud-hypervisor \
     && case "$ARCH" in \
+         x86_64) CH_REMOTE_ASSET=ch-remote-static ;; \
+         aarch64) CH_REMOTE_ASSET=ch-remote-static-aarch64 ;; \
+         *) echo "unsupported arch for ch-remote: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /usr/local/bin/ch-remote \
+       "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VERSION}/${CH_REMOTE_ASSET}" \
+    && chmod +x /usr/local/bin/ch-remote \
+    && case "$ARCH" in \
          x86_64) CLOUDHV_ASSET=CLOUDHV.fd ;; \
          aarch64) CLOUDHV_ASSET=CLOUDHV_EFI.fd ;; \
          *) echo "unsupported arch for CLOUDHV firmware: $ARCH" >&2; exit 1 ;; \
@@ -107,10 +123,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # unlike Alpine, Ubuntu's minimal base doesn't carry this by default.
 #
 # No iSCSI package here anymore: kyuusha never logs in to anything itself
-# (see internal/compute-agent/volumeref and docs/architecture.md「訂正: 責務
-# の境界を...」) -- establishing an iSCSI/NVMe-oF session or an NFS mount is
-# entirely the operator's own doing, a host-level prerequisite this
-# container doesn't need any tooling for.
+# (see internal/compute-agent/volumeref and docs/architecture.md
+# 「block-storageのバックエンド抽象化」) -- establishing an iSCSI/NVMe-oF
+# session or an NFS mount is entirely the operator's own doing, a host-level
+# prerequisite this container doesn't need any tooling for.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       e2fsprogs iproute2 \
     && rm -rf /var/lib/apt/lists/*

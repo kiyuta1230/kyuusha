@@ -1001,11 +1001,16 @@ func (x *StartVirtualMachineRequest) GetId() string {
 	return ""
 }
 
-// ResizeVirtualMachineRequest: Stopped -> Stopped only (cold resize -- see
-// docs/specs/virtual-machine.md). No resource_version field: like Stop/Start,
-// this does its own Get-then-mutate-then-Update internally and relies on
-// resource.Store.Update's own compare-and-swap, rather than asking the
-// caller to supply one.
+// ResizeVirtualMachineRequest: a Stopped VM does a cold resize (spec-only,
+// takes effect on the next Start); a Running VM whose driver_hint is
+// CLOUD_HYPERVISOR does a live resize instead, via cloud-hypervisor's
+// --api-socket, no downtime -- any other phase/driver combination (Running+
+// FIRECRACKER included) is rejected with FailedPrecondition, since live
+// resize is structurally impossible on Firecracker (see docs/specs/
+// virtual-machine.md「リサイズ」). No resource_version field: like Stop/
+// Start, this does its own Get-then-mutate-then-Update internally and
+// relies on resource.Store.Update's own compare-and-swap, rather than
+// asking the caller to supply one.
 type ResizeVirtualMachineRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -1074,9 +1079,11 @@ func (x *ResizeVirtualMachineRequest) GetMemoryMb() int64 {
 	return 0
 }
 
-// AttachVolumeRequest/DetachVolumeRequest: Stopped -> Stopped only (cold
-// attach/detach -- see docs/specs/virtual-machine.md). No resource_version
-// field, same reasoning as ResizeVirtualMachineRequest above.
+// AttachVolumeRequest/DetachVolumeRequest: same cold/live branching as
+// ResizeVirtualMachineRequest above (Stopped = cold, Running+
+// CLOUD_HYPERVISOR = live via cloud-hypervisor's --api-socket -- see
+// docs/specs/volume.md「Volume attach/detach」). No resource_version field,
+// same reasoning as ResizeVirtualMachineRequest above.
 type AttachVolumeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`

@@ -100,8 +100,8 @@ func existingVolumeAttachmentsByName(ctx context.Context, client blockstoragev1.
 //
 // The protocol/connection/identifier compute-agent's volumeref needs don't
 // live on the attachment itself (VolumeAttachmentStatus only carries
-// phase/device_path/hypervisor -- see docs/architecture.md「訂正: 責務の境界
-// を...」) but on the Volume it points at, so this also fetches that Volume
+// phase/device_path/hypervisor -- see docs/architecture.md「block-storageの
+// バックエンド抽象化」) but on the Volume it points at, so this also fetches that Volume
 // via volumeClient. validateVolumes already confirmed it exists and is
 // Ready moments ago at Create time, but re-fetching here (rather than
 // threading that earlier result through) matches this function's own

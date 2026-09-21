@@ -57,7 +57,7 @@ type Agent struct {
 	// StorageConnections declares which storage connections this host
 	// already has established (an iSCSI/NVMe-oF session already logged in,
 	// or an NFS export already mounted -- see internal/compute-agent/
-	// volumeref and docs/architecture.md「訂正: 責務の境界を...」), sent at
+	// volumeref and docs/architecture.md「block-storageのバックエンド抽象化」), sent at
 	// self-registration so compute can eventually use it as a scheduling
 	// constraint (not yet implemented -- see docs/open-questions.md).
 	// cmd/compute-agent/main.go builds this from the same -storage-
@@ -157,6 +157,20 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopConsumeCtx.Stop()
+
+	hotplugCons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "compute-agent-" + a.Hypervisor + "-hotplug",
+		FilterSubject: compute.CmdSubjectHotplug(a.Hypervisor),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	hotplugConsumeCtx, err := hotplugCons.Consume(a.handleHotplug)
+	if err != nil {
+		return err
+	}
+	defer hotplugConsumeCtx.Stop()
 
 	// block-storage's verify-volume command (internal/block-storage/
 	// verification.go) -- a separate stream block-storage owns/creates,

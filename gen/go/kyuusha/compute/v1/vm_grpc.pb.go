@@ -48,14 +48,18 @@ type VirtualMachineServiceClient interface {
 	// (Running for Stop, Stopped for Start).
 	Stop(ctx context.Context, in *StopVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	Start(ctx context.Context, in *StartVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
-	// Resize changes vcpu/memory_mb of a Stopped VM in place: FailedPrecondition
-	// if the VM isn't Stopped, ResourceExhausted if the new size would exceed
-	// tenant quota or the current Hypervisor's free capacity (no
-	// cross-hypervisor migration -- see docs/specs/vm-scheduling.md).
+	// Resize changes vcpu/memory_mb of a Stopped VM in place (cold), or of a
+	// Running+CLOUD_HYPERVISOR VM live with no downtime (see
+	// ResizeVirtualMachineRequest above): FailedPrecondition for any other
+	// phase/driver combination, ResourceExhausted if the new size would
+	// exceed tenant quota or the current Hypervisor's free capacity (no
+	// cross-hypervisor migration -- see docs/specs/vm-scheduling.md),
+	// Unavailable if a live resize's compute-agent round trip times out.
 	Resize(ctx context.Context, in *ResizeVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
-	// AttachVolume/DetachVolume: cold-only (Stopped VM), same FailedPrecondition
-	// contract as Resize. Live/hot attach-detach on a Running VM is not
-	// implemented yet -- see docs/open-questions.md.
+	// AttachVolume/DetachVolume: cold (Stopped VM) or live (Running+
+	// CLOUD_HYPERVISOR, no downtime) -- see AttachVolumeRequest above. Same
+	// FailedPrecondition/Unavailable contract as Resize for any other
+	// phase/driver combination or a timed-out live round trip.
 	AttachVolume(ctx context.Context, in *AttachVolumeRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	DetachVolume(ctx context.Context, in *DetachVolumeRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	Watch(ctx context.Context, in *WatchVirtualMachinesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VirtualMachineEvent], error)
@@ -225,14 +229,18 @@ type VirtualMachineServiceServer interface {
 	// (Running for Stop, Stopped for Start).
 	Stop(context.Context, *StopVirtualMachineRequest) (*VirtualMachine, error)
 	Start(context.Context, *StartVirtualMachineRequest) (*VirtualMachine, error)
-	// Resize changes vcpu/memory_mb of a Stopped VM in place: FailedPrecondition
-	// if the VM isn't Stopped, ResourceExhausted if the new size would exceed
-	// tenant quota or the current Hypervisor's free capacity (no
-	// cross-hypervisor migration -- see docs/specs/vm-scheduling.md).
+	// Resize changes vcpu/memory_mb of a Stopped VM in place (cold), or of a
+	// Running+CLOUD_HYPERVISOR VM live with no downtime (see
+	// ResizeVirtualMachineRequest above): FailedPrecondition for any other
+	// phase/driver combination, ResourceExhausted if the new size would
+	// exceed tenant quota or the current Hypervisor's free capacity (no
+	// cross-hypervisor migration -- see docs/specs/vm-scheduling.md),
+	// Unavailable if a live resize's compute-agent round trip times out.
 	Resize(context.Context, *ResizeVirtualMachineRequest) (*VirtualMachine, error)
-	// AttachVolume/DetachVolume: cold-only (Stopped VM), same FailedPrecondition
-	// contract as Resize. Live/hot attach-detach on a Running VM is not
-	// implemented yet -- see docs/open-questions.md.
+	// AttachVolume/DetachVolume: cold (Stopped VM) or live (Running+
+	// CLOUD_HYPERVISOR, no downtime) -- see AttachVolumeRequest above. Same
+	// FailedPrecondition/Unavailable contract as Resize for any other
+	// phase/driver combination or a timed-out live round trip.
 	AttachVolume(context.Context, *AttachVolumeRequest) (*VirtualMachine, error)
 	DetachVolume(context.Context, *DetachVolumeRequest) (*VirtualMachine, error)
 	Watch(*WatchVirtualMachinesRequest, grpc.ServerStreamingServer[VirtualMachineEvent]) error

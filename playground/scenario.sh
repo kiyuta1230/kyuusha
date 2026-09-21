@@ -509,7 +509,7 @@ else
 fi
 go run ./cmd/kyuusha vm delete -addr=localhost:8080 -tenant="$tenant" -id="$cloudinit_vm_id" # frees its quota slot for the persistence test below
 
-echo "==> playing the 'operator' role: creating the real backing file a Volume will reference, directly in the playground-nfs fixture (kyuusha itself never provisions this -- see docs/architecture.md「訂正: 責務の境界を...」)"
+echo "==> playing the 'operator' role: creating the real backing file a Volume will reference, directly in the playground-nfs fixture (kyuusha itself never provisions this -- see docs/architecture.md「block-storageのバックエンド抽象化」)"
 persist_identifier="scenario-persist-volume.img"
 # rm first, not just truncate -s: a stale marker left over by an earlier
 # run of this same script would otherwise still be sitting in the first

@@ -22,14 +22,33 @@ import (
 type Server struct {
 	computev1.UnimplementedVirtualMachineServiceServer
 	svc *compute.Service
-	// console is only used by StreamConsole: the NATS request/relay it
-	// needs already lives on Reconciler (which owns the NATS connection),
-	// so this just reuses it rather than duplicating that plumbing here.
-	console *compute.Reconciler
+	// live backs StreamConsole and the live branch of Resize/AttachVolume/
+	// DetachVolume: the NATS request/relay these need already lives on
+	// Reconciler (which owns the NATS connection), so this reuses it rather
+	// than duplicating that plumbing here or growing Service to hold one.
+	live *compute.Reconciler
 }
 
-func New(svc *compute.Service, console *compute.Reconciler) *Server {
-	return &Server{svc: svc, console: console}
+func New(svc *compute.Service, live *compute.Reconciler) *Server {
+	return &Server{svc: svc, live: live}
+}
+
+// isLive fetches vm once and reports whether Resize/AttachVolume/
+// DetachVolume should take the live branch (Running+CLOUD_HYPERVISOR) or
+// the cold one (everything else, including any other Running+driver
+// combination -- those still reach the cold Service method below, which
+// rejects them with ErrInvalidPhase/FailedPrecondition exactly as before
+// this feature existed). This Get is intentionally separate from the one
+// each Service/Reconciler method still performs internally -- same
+// double-fetch tolerance this codebase already accepts elsewhere (e.g.
+// createVolumeAttachments re-fetching a Volume already validated moments
+// earlier).
+func (s *Server) isLive(ctx context.Context, tenantID, id string) (bool, error) {
+	vm, err := s.svc.Get(ctx, tenantID, id)
+	if err != nil {
+		return false, err
+	}
+	return vm.Status.Phase == compute.PhaseRunning && vm.Spec.DriverHint == compute.VmmDriverCloudHypervisor, nil
 }
 
 func (s *Server) Create(ctx context.Context, req *computev1.CreateVirtualMachineRequest) (*computev1.VirtualMachine, error) {
@@ -102,7 +121,16 @@ func (s *Server) Start(ctx context.Context, req *computev1.StartVirtualMachineRe
 }
 
 func (s *Server) Resize(ctx context.Context, req *computev1.ResizeVirtualMachineRequest) (*computev1.VirtualMachine, error) {
-	vm, err := s.svc.Resize(ctx, req.GetTenantId(), req.GetId(), req.GetVcpu(), req.GetMemoryMb())
+	live, err := s.isLive(ctx, req.GetTenantId(), req.GetId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	var vm *compute.VirtualMachine
+	if live {
+		vm, err = s.live.LiveResize(ctx, req.GetTenantId(), req.GetId(), req.GetVcpu(), req.GetMemoryMb())
+	} else {
+		vm, err = s.svc.Resize(ctx, req.GetTenantId(), req.GetId(), req.GetVcpu(), req.GetMemoryMb())
+	}
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -110,7 +138,16 @@ func (s *Server) Resize(ctx context.Context, req *computev1.ResizeVirtualMachine
 }
 
 func (s *Server) AttachVolume(ctx context.Context, req *computev1.AttachVolumeRequest) (*computev1.VirtualMachine, error) {
-	vm, err := s.svc.AttachVolume(ctx, req.GetTenantId(), req.GetId(), req.GetVolumeId(), req.GetDeviceHint())
+	live, err := s.isLive(ctx, req.GetTenantId(), req.GetId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	var vm *compute.VirtualMachine
+	if live {
+		vm, err = s.live.LiveAttachVolume(ctx, req.GetTenantId(), req.GetId(), req.GetVolumeId(), req.GetDeviceHint())
+	} else {
+		vm, err = s.svc.AttachVolume(ctx, req.GetTenantId(), req.GetId(), req.GetVolumeId(), req.GetDeviceHint())
+	}
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -118,7 +155,16 @@ func (s *Server) AttachVolume(ctx context.Context, req *computev1.AttachVolumeRe
 }
 
 func (s *Server) DetachVolume(ctx context.Context, req *computev1.DetachVolumeRequest) (*computev1.VirtualMachine, error) {
-	vm, err := s.svc.DetachVolume(ctx, req.GetTenantId(), req.GetId(), req.GetVolumeId())
+	live, err := s.isLive(ctx, req.GetTenantId(), req.GetId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	var vm *compute.VirtualMachine
+	if live {
+		vm, err = s.live.LiveDetachVolume(ctx, req.GetTenantId(), req.GetId(), req.GetVolumeId())
+	} else {
+		vm, err = s.svc.DetachVolume(ctx, req.GetTenantId(), req.GetId(), req.GetVolumeId())
+	}
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -142,7 +188,7 @@ func (s *Server) StreamConsole(req *computev1.StreamConsoleRequest, stream compu
 	if req.GetTenantId() == "" {
 		return status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	chunks, err := s.console.StreamConsole(stream.Context(), req.GetTenantId(), req.GetId(), req.GetTailBytes(), req.GetFollow())
+	chunks, err := s.live.StreamConsole(stream.Context(), req.GetTenantId(), req.GetId(), req.GetTailBytes(), req.GetFollow())
 	if err != nil {
 		return toStatus(err)
 	}
@@ -168,6 +214,8 @@ func toStatus(err error) error {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, compute.ErrHypervisorCapacityExceeded):
 		return status.Error(codes.ResourceExhausted, err.Error())
+	case errors.Is(err, compute.ErrLiveOpUnavailable):
+		return status.Error(codes.Unavailable, err.Error())
 	}
 	if status.Code(err) != codes.Unknown {
 		return err

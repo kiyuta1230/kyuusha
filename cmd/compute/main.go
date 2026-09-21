@@ -1,20 +1,21 @@
 // Command compute runs the compute control-plane's gRPC API:
 // VirtualMachineService and HypervisorService. Genuinely stateless -- every
-// handler here is a direct etcd read/write via compute.Service, with one
-// exception (StreamConsole, which relays a live NATS request/reply -- see
-// internal/compute/console.go -- and needs no shared state across
-// requests, so it's just as safe at any replica count). Safe to run any
-// number of replicas behind a load balancer.
+// handler here is a direct etcd read/write via compute.Service, with two
+// exceptions that instead relay a live NATS request/reply from within this
+// same process (StreamConsole, internal/compute/console.go; and live
+// Resize/AttachVolume/DetachVolume, internal/compute/liveops.go) -- neither
+// needs shared state across requests, so both are just as safe at any
+// replica count.
 //
 // All of compute's actual reconciliation (scheduling, NATS commands to
 // compute-agent, retry sweeps, health sweeps) now lives in the separate
 // cmd/compute-reconciler binary instead -- see its own package doc comment
 // for why this was split out and the single-replica deployment invariant
-// that binary depends on (2026-09-13, docs/architecture.md
+// that binary depends on (docs/architecture.md
 // "コントロールプレーンサービス自体の可用性" "Reconcile面": chosen instead of
 // etcd-based leader election). This binary constructs a compute.Reconciler
-// value purely to reuse its StreamConsole method -- it never calls Run(),
-// so it does no scheduling or NATS command work itself.
+// value purely to reuse its StreamConsole/live-hotplug methods -- it never
+// calls Run(), so it does no scheduling work itself.
 package main
 
 import (
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -103,16 +105,31 @@ func main() {
 	}
 	defer etcdClient.Close()
 
-	// Only for StreamConsole's direct NATS request/reply relay (see
-	// internal/compute/console.go) -- this binary does no JetStream command
-	// publishing itself (that's cmd/compute-reconciler's job), so unlike
-	// there, no jetstream.JetStream context is created here.
+	// Used for StreamConsole's direct NATS request/reply relay (see
+	// internal/compute/console.go) and for the live-hotplug path's
+	// COMPUTE_CMD publish + per-request reply-subject round trip (see
+	// internal/compute/liveops.go) -- both run synchronously inside this
+	// gRPC-serving process itself, without needing cmd/compute-reconciler
+	// (the single-replica scheduling/NATS-command binary) in the loop.
 	nc, err := nats.Connect(*natsURL)
 	if err != nil {
 		slog.Error("connect to nats", "err", err)
 		os.Exit(1)
 	}
 	defer nc.Close()
+
+	js, err := jetstream.New(nc)
+	if err != nil {
+		slog.Error("jetstream", "err", err)
+		os.Exit(1)
+	}
+	// Idempotent; defensive in case cmd/compute-reconciler hasn't created
+	// COMPUTE_CMD/COMPUTE_EVT yet (either binary may start first under
+	// docker-compose).
+	if err := compute.EnsureStreams(ctx, js); err != nil {
+		slog.Error("ensure nats streams", "err", err)
+		os.Exit(1)
+	}
 
 	clientCreds, err := mtls.ClientCredentials(*tlsCert, *tlsKey, *tlsCA)
 	if err != nil {
@@ -173,10 +190,12 @@ func main() {
 		os.Exit(1)
 	}
 	// recon.Run is deliberately never called here -- see this package's doc
-	// comment. This value exists only so grpcserver.New below can call its
-	// StreamConsole method; js is left nil since nothing this binary calls
-	// on recon ever touches it.
-	recon := compute.NewReconciler(svc, nc, nil)
+	// comment. This value exists so grpcserver.New below can call its
+	// StreamConsole and live-hotplug (LiveResize/LiveAttachVolume/
+	// LiveDetachVolume) methods, both of which only ever do a direct NATS
+	// round trip from within this process -- never anything that requires
+	// the single-replica reconcile loop itself.
+	recon := compute.NewReconciler(svc, nc, js)
 
 	serverCreds, err := mtls.ServerCredentials(*tlsCert, *tlsKey, *tlsCA)
 	if err != nil {

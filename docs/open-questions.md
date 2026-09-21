@@ -203,76 +203,29 @@ docs/architecture.mdでは「主要な外部クライアントはKaaSコント�
 全リソース種別を管理する必要があるため分割の実利が薄い」として意図的に据え置いていた
 （OPA採用によりいつでも先送りできる、という前提込みで）。判断保留中。
 
-## cloud-hypervisor限定のライブホットプラグ（vcpu/memory resize + Volume attach）（見送り中、詳細設計は確定済み）
+## cloud-hypervisor限定のライブホットプラグ（vcpu/memory resize + Volume attach）（解決済み・実装済み）
 
-`VirtualMachineService.Resize`（2026-09-19実装）も`AttachVolume`/`DetachVolume`
-（同じく2026-09-19実装）も、どちらも`Stopped`のVMに対するコールド操作のみ——
-実行中VMのvcpu/memory_mbやアタッチ済みVolumeをダウンタイム無しで変更する手段は
-まだ無い（[VirtualMachine仕様](specs/virtual-machine.md)「リサイズ」「Volume
-attach/detach」、[Volume仕様](specs/volume.md)「Volume attach/detach」参照）。
-当面このままにする、という判断（見送り、まだ着手しない）。
+`VirtualMachineService.Resize`/`AttachVolume`/`DetachVolume`は、`Running`+
+`driver_hint=CLOUD_HYPERVISOR`のVMに対してcloud-hypervisorの`--api-socket`
+経由でダウンタイム無しのライブ操作を行えるようになった（コールド経路と同じ
+RPCでphase/driver分岐、詳細は[VirtualMachine仕様](specs/virtual-machine.md)
+「リサイズ」「Volume attach/detach」、[cloud-hypervisor起動仕様]
+(specs/cloud-hypervisor-boot.md)「`--api-socket`」、実装は
+`internal/compute-agent/chapi`・`internal/compute-agent/chvmm/hotplug.go`・
+`internal/compute/liveops.go`参照）。Firecrackerは構造的にホットプラグ不可能
+なため引き続きコールドのみ。
 
-### ドライバごとの実現可能性（両方とも同じ非対称性）
+**まだ見直しの余地がある2点**（実装時に判断した暫定値、実運用の様子を見て
+再検討する）:
 
-- **cloud-hypervisor**: vcpu/memoryは元々「boot-vcpus/max-vcpus」の分離設計を持ち、
-  本物のvcpuホットプラグ＋`virtio-mem`によるメモリホットプラグに対応した
-  `--api-socket`経由のresize API（`PUT /api/v1/vm.resize`）を備えている。ディスクは
-  さらに単純で、`PUT /api/v1/vm.add-disk`/`vm.remove-device`が事前にスロットを
-  宣言する必要すら無い完全動的なPCIホットプラグに対応している。このリポジトリは
-  現状APIソケットを一切使わずCLIフラグで起動時に一括設定するだけなので
-  （[cloud-hypervisor起動仕様](specs/cloud-hypervisor-boot.md)参照）、やるとすれば
-  APIソケット導入がまず必要（vcpu/memoryリサイズだけは起動時に`--cpus boot=N,max=M`
-  等のホットプラグ余地宣言も要る——ディスクhotplugはこれが不要）
-- **Firecracker**: vCPUホットプラグは構造的に不可能——vCPUスレッドはブート時に
-  `/machine-config`で1回設定され、以降VMのライフタイム中1:1で固定
-  （[Firecracker起動仕様](specs/firecracker-boot.md)「spec.vcpuの制約」参照）。
-  `virtio-balloon`によるメモリの縮小/再拡大は実行中でも可能だが、ブート時に設定した
-  `mem_size_mib`という上限を超えて増やすことはできず、真の意味でのメモリリサイズ
-  ではない。ディスクも同様に、Firecrackerの`PATCH /drives/{id}`は事前宣言済みの
-  スロットのbacking fileを後から差し替えるだけで、新しいスロットを動的追加する
-  経路自体が無い（cloud-hypervisorのadd-diskと違い、上限個数を起動時に決め打ちする
-  必要がある）
-
-やるとしたらどちらもcloud-hypervisor限定の機能になる。ダウンタイムを許容できない
-ワークロードが実際に出てくるまでは、コールドリサイズ/コールドattach・detachで
-大半のユースケースはカバーできる、という判断で見送っている。
-
-### 詳細設計（2026-09-19、着手時にゼロから再設計しなくて済むよう記録）
-
-大きな判断はユーザー確認済み：
-- Resize/AttachVolume/DetachVolumeとも**単一RPCでphase分岐**（コールド=Stopped、
-  ライブ=Running+CLOUD_HYPERVISOR）——別RPCに分けない
-- ホットプラグ対応起動引数（`--cpus boot=N,max=M`、memory hotplug region）は
-  **全CLOUD_HYPERVISOR VMに無条件で付与**（コスト実質ゼロ、spec変更不要）
-
-設計の骨子：
-- `internal/compute-agent/chapi`（新規）: cloud-hypervisorの`--api-socket`に対する
-  Unixソケット越しHTTPクライアント（`add-disk`/`remove-device`/`vm.resize`の3メソッド
-  のみ、標準ライブラリのみで十分——go.mod未使用のサードパーティ依存は無し）
-- `internal/compute-agent/vmm.Hotplugger`という**オプショナル**interfaceをchvmmだけが
-  実装（fcvmmはスタブ不要）。`chvmm.Manager`の`runningVM`にAPIソケットパスを持たせる
-  必要は無い——`ConsoleLogPath`と同じく`vmID`の純粋関数として毎回計算できる
-  （`BootRecord`のスキーマ変更も不要）
-- `compute.Service`は`LiveOps`という小さなinterfaceを持ち、`*Reconciler`がその実装を
-  担う（`StreamConsole`が`*Reconciler`メソッドとしてNATS inbox往復している既存パターンと
-  同じ——`Service`自体はNATSハンドル(`nc`/`js`)を持たないため）
-- ライブ操作はJetStream経由でコマンドを送り（`COMPUTE_CMD`、`StopCommand`と同じ
-  at-least-once/ack-on-receipt契約）、結果は`StreamConsole`と同じくper-request inbox
-  （コマンド自体が`reply_subject`を持つ）で同期的に受け取る——`COMPUTE_EVT`は使わない
-  （結果に興味がある相手はRPC呼び出し元1人だけなので、durable/replayableである必要が
-  無い）。RPCは呼び出し元でブロックし、成功/失敗を直接gRPCエラーとして返す
-  （Create/Stopのような非同期poll型にはしない）
-- ライブResizeのHypervisor容量予約は既存の`resizeHypervisorCapacity`/
-  `releaseHypervisorCapacity`をそのまま再利用——NATS往復が容量予約とspec更新の間に
-  挟まる分、ロールバック分岐が1つ増えるだけ
-- ホスト側cgroup更新は`internal/compute-agent/cgroup.Apply`をそのまま再利用
-  （既に冪等——`cpu.max`/`memory.max`を書き換えて同じpidを`cgroup.procs`へ再登録
-  するだけ）
-- block-storageの`tryAttach`（`internal/block-storage/service.go`）は変更しない——
-  ライブ配線は`Attached`到達後にcomputeが上乗せする別ステップとして設計し、
-  block-storageにVMM知識を持ち込まない。VolumeAttachmentへの`device_path`報告も
-  既存の`VolumeAttachedEvent`/`handleVolumeAttached`（fire-and-forget）をそのまま
-  流用できる——起動時attachとライブattachで同じ経路
-- playground検証には`ch-remote`のcompute-agentイメージへの追加が要る（実際にPCI
-  デバイスが増えたこと/vcpuが変わったことを、kyuusha自身のコードとは独立したツールで
-  確認するため）
+- **`--cpus max=`/`--memory hotplug_size=`の倍率**: boot値の2倍・絶対上限
+  32vCPU/256GiBに固定している（`chvmm.hotplugMaxVCPU`/
+  `hotplugMemoryCeilingMB`）。cloud-hypervisorのACPI hotplugは実RAMこそ
+  hot-addするまで消費しないが、ゲストのGPA/E820レンジとKVMメモリスロットは
+  起動時点で確保するため、無条件に大きくすれば良いわけではない
+- **`LiveAttachVolume`の`store.Update`失敗時の再送**: ホットプラグ（`vm.add-disk`）
+  成功後に`store.Update`が失敗すると、リトライが同じ`DeviceID`で`vm.add-disk`を
+  再送する。`chvmm.Manager.LiveRemoveDevice`は「not found」相当のエラーを
+  成功として飲み込むのと対称的に、`LiveAddDisk`側も「既に存在するid」エラーを
+  許容すべきだが、cloud-hypervisorのOpenAPI仕様がこのケース用の構造化エラー
+  コードを提供していないため未対応（文字列パターンマッチで対応する余地はある）

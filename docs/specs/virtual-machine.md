@@ -119,7 +119,7 @@ fcvmm/chvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`�
   (既定で有効)という別の形で相応の防御を持つ——
   [cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照
 
-## 停止/起動（`Stop`/`Start`、2026-09-12実装）
+## 停止/起動（`Stop`/`Start`）
 
 `VirtualMachineService.Stop(vm_id, force)`/`Start(vm_id)`の2 RPCのみ追加。
 `reboot`/`hard-reboot`はサーバー側に対応するRPCや状態を一切持たない、CLIだけの
@@ -149,30 +149,44 @@ fcvmm/chvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`�
   `EEXIST`で失敗する）ため、rootfsだけを外へ退避してchroot全体を作り直し、
   rootfsだけ元へ戻す、という一手間が要る。
 
-## リサイズ（`Resize`、コールドリサイズのみ、2026-09-19実装）
+## リサイズ（`Resize`、コールド/ライブ両対応）
 
-`VirtualMachineService.Resize(tenant_id, id, vcpu, memory_mb)`は`Stopped`の
-VMのみに許可される（それ以外は`FailedPrecondition`）。`Stop`/`Start`同様
-`resource_version`は取らず、Get→フェーズチェック→mutate→`store.Update`を
-サービス内で完結させ、`resource.Store.Update`自身のcompare-and-swapに
-任せる。
+`VirtualMachineService.Resize(tenant_id, id, vcpu, memory_mb)`は単一のRPCで
+2つの経路に分岐する:`Stopped`のVMはコールドリサイズ、`Running`かつ
+`driver_hint=CLOUD_HYPERVISOR`のVMはライブリサイズ。それ以外の組み合わせ
+（`Running`＋`FIRECRACKER`を含む）は`FailedPrecondition`で拒否される。
+`Stop`/`Start`同様`resource_version`は取らず、Get→フェーズ/driver判定→
+mutate→`store.Update`をサービス内で完結させる。
 
-- **コールドオンリー**: ライブ/ホットリサイズは存在しない。cloud-hypervisorは
-  `--api-socket`を使わずCLIフラグで起動時に一括設定するだけ
-  （[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照）で、実行中プロセスへの
-  ホットプラグ経路が無いため。`Stopped`中に`spec.vcpu`/`memory_mb`を書き換えておけば、
-  次の`Start`が`provisionAndPublish`経由で`vm.Spec`から`CreateCommand`を
-  再構築する際に新サイズで起動する——VMMドライバ・Reconciler・NATSコマンド、
-  いずれも変更不要（新しいphaseも追加していない: `Resize`はStopped→Stoppedのまま
-  同期的に完了する）
-- **Hypervisor容量**: VMが既に割り当て済みのHypervisorに対してのみ、
-  `allocated_vcpu`/`allocated_memory_mb`のデルタ調整を行う
-  （[VMスケジュール仕様](vm-scheduling.md)「リサイズ時の容量調整」参照）。
+- **コールド経路**（`Stopped`）: `Stopped`中に`spec.vcpu`/`memory_mb`を
+  書き換えておけば、次の`Start`が`provisionAndPublish`経由で`vm.Spec`から
+  `CreateCommand`を再構築する際に新サイズで起動する——VMMドライバ・
+  Reconciler・NATSコマンド、いずれも変更不要
+- **ライブ経路**（`Running`＋`CLOUD_HYPERVISOR`）: cloud-hypervisorの
+  `--api-socket`（[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)
+  「`--api-socket`」参照）経由で`PUT vm.resize`を呼び、ダウンタイム無しで
+  即座に反映する。`internal/compute/liveops.go`の`Reconciler.LiveResize`が
+  実装——NATS(`COMPUTE_CMD`、`CmdSubjectHotplug`)でcompute-agentへ
+  コマンドを送り、per-request reply-subject（`StreamConsole`と同じ
+  パターン）で結果を同期的に受け取ってからgRPCの応答を返す。往復が
+  タイムアウト（10秒）すると`Unavailable`
+- **Firecrackerがライブ経路を持たない理由**: vCPUスレッドはブート時の
+  `/machine-config`で1回固定され、以降VMのライフタイム中変更不可という
+  構造的制約（[Firecracker起動仕様](firecracker-boot.md)「spec.vcpuの制約」
+  参照）。ライブリサイズは今後もcloud-hypervisor限定のまま
+- **Hypervisor容量**: コールド・ライブどちらも、VMが既に割り当て済みの
+  Hypervisorに対してのみ`allocated_vcpu`/`allocated_memory_mb`のデルタ調整を
+  行う（[VMスケジュール仕様](vm-scheduling.md)「リサイズ時の容量調整」参照）。
   収まらない場合は別のHypervisorへ再スケジュールせず、そのまま
-  `ResourceExhausted`で拒否する——ユーザーはVMを作り直す以外の手段がない
-- **Quota**: 成長方向（vcpu/memory_mbのいずれかが増える）のみ判定する。
-  縮小のみのリサイズはquotaを絶対に超過しえないため、identityへの問い合わせ自体を
-  スキップする（[Quota仕様](quota.md)「強制フロー（VM Resize時）」参照）
+  `ResourceExhausted`で拒否する——ユーザーはVMを作り直す以外の手段がない。
+  ライブ経路でホットプラグ呼び出し自体が失敗した場合は容量予約を解放し、
+  `store.Update`が失敗した場合はベストエフォートで旧サイズへの
+  補償的resize-backを試みる（失敗時はログのみ、ゲストと永続化済みspecが
+  不整合になりうる既知のギャップ）
+- **Quota**: コールド・ライブとも成長方向（vcpu/memory_mbのいずれかが
+  増える）のみ判定する。縮小のみのリサイズはquotaを絶対に超過しえないため、
+  identityへの問い合わせ自体をスキップする（[Quota仕様](quota.md)
+  「強制フロー（VM Resize時）」参照）
 - 同一サイズへのResizeは`store.Update`すら呼ばない真のno-op（`resource_version`は
   変化しない）
 - **vcpu制約はドライバ依存**: `driver_hint=FIRECRACKER`のVMは、要求されたvcpuが
@@ -183,21 +197,28 @@ VMのみに許可される（それ以外は`FailedPrecondition`）。`Stop`/`St
   にはこの制約は無い。同じ検証は`Create`にも入っている（`internal/compute/
   virtualmachine.go`の`validateVCPUForDriver`）
 
-## Volume attach/detach（`AttachVolume`/`DetachVolume`、コールドのみ、2026-09-19実装）
+## Volume attach/detach（`AttachVolume`/`DetachVolume`、コールド/ライブ両対応）
 
-`Resize`と全く同じコールドパターン——`Stopped`のVMのみ許可、`resource_version`を
-取らずGet→フェーズチェック→mutate→`store.Update`で完結する。詳細は
-[Volume仕様](volume.md)「Volume attach/detach（コールドのみ）」参照。要点のみ：
+`Resize`と全く同じ分岐パターン——`Stopped`のVMはコールド、`Running`＋
+`CLOUD_HYPERVISOR`のVMはライブ、それ以外は`FailedPrecondition`。詳細は
+[Volume仕様](volume.md)「Volume attach/detach」参照。要点のみ：
 
-- `AttachVolume`は`vm.Spec.Volumes`へ追加するだけ（実際のVolumeAttachmentは次の
-  `Start`まで作らない）。`DetachVolume`は非対称に実体のVolumeAttachmentも即座に削除する
-  （排他ロックを握ったまま放置しないため）
+- **コールド経路**: `AttachVolume`は`vm.Spec.Volumes`へ追加するだけ（実際の
+  VolumeAttachmentは次の`Start`まで作らない）。`DetachVolume`は非対称に
+  実体のVolumeAttachmentも即座に削除する（排他ロックを握ったまま放置しないため）
+- **ライブ経路**: `internal/compute/liveops.go`の`Reconciler.LiveAttachVolume`/
+  `LiveDetachVolume`が実装。Attach側は**先にVolumeAttachmentを作成し
+  Attachedになるまでポーリングしてから**cloud-hypervisorへ`PUT vm.add-disk`
+  （順序が逆だと、block-storageの排他ロックが無いまま別VMが同じVolumeへ
+  同時attachしうる）。Detach側は逆に**先に`PUT vm.remove-device`でゲストから
+  外してから**VolumeAttachmentを削除する（ロックを握ったまま外すとデータ破損
+  リスクがあるため）。どちらもNATS往復は`Resize`と同じ`CmdSubjectHotplug`/
+  reply-subjectパターンを共有する
 - quotaチェック・Hypervisor容量予約は無い——既存Volumeのattach/detachはどちらにも
   影響しない
-- `createVolumeAttachments`（compute/volume.go）の子リソース命名を`volattach-<vm_id>-
-  <index>`（位置ベース）から`volattach-<vm_id>-<volume_id>`（VolumeIDベース）へ変更
-  済み——DetachVolumeで`vm.Spec.Volumes`の途中要素を消しても後続要素のattachmentが
-  重複・孤児化しないようにするため（Volume仕様参照）
+- `createVolumeAttachments`（compute/volume.go）の子リソース命名は
+  `volattach-<vm_id>-<volume_id>`（VolumeIDベース）——ライブ経路もこの同じ
+  ヘルパーを再利用する（Volume仕様参照）
 
 ## 削除
 
@@ -273,13 +294,6 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
   `docs/architecture.md`「UserData注入」の「機密情報の扱いに関する注記」参照）
 - 本物のcloud-initを動かすゲストでの動作確認（playgroundの最小Alpineゲストには
   cloud-init自体が入っていないため、seed diskが正しく届くことまでしか確認していない）
-- **ライブ/ホットリサイズ**: `Resize`はStoppedのVMに対するコールドリサイズのみ
-  （上記「リサイズ」節参照）。実行中VMのvcpu/memory_mbをダウンタイム無しで
-  変更するには、cloud-hypervisorの`--api-socket`導入とホットプラグ対応という
-  別途大きめの設計が要る。しかもFirecrackerはvCPUホットプラグ自体が構造的に
-  不可能なため、やるとすればcloud-hypervisor限定の機能になる——見送りの
-  経緯・トレードオフ・詳細設計は[open-questions.md](../open-questions.md)
-  「cloud-hypervisor限定のライブホットプラグ（vcpu/memory resize + Volume attach）」参照
 - **リサイズ時のHypervisor間移行**: 新サイズが現在のHypervisorの空き容量に
   収まらない場合、別のHypervisorへVMを移動してリサイズを成立させる機能は無い
   （上記「リサイズ」節参照、拒否のみ）
@@ -287,12 +301,11 @@ tap配線（[network.md](network.md)参照）が正しく効いているかど�
   取得したdigestを際限なく保持し続ける——LRU等の削除ロジックがまだ無い
   （[docs/open-questions.md](../open-questions.md)「イメージのローカル管理」参照）
 
-プロセス隔離もStop/Start（一時停止/再開）もコールドリサイズもコールドVolume
-attach/detachももう「共通の未実装事項」ではない——jailer相当の隔離は
+プロセス隔離もStop/Start（一時停止/再開）もResize（コールド/ライブ）もVolume
+attach/detach（コールド/ライブ）ももう「共通の未実装事項」ではない——jailer相当の隔離は
 `driver_hint=FIRECRACKER`が実jailer(chroot+uid/gid drop)、`driver_hint=CLOUD_HYPERVISOR`
 が静的バイナリ+組み込みseccompという別の形で、それぞれ対応済み（上記「cgroupリソース
-制限」節参照）。Stop/Startは2026-09-12実装（上記「停止/起動」節参照）、`Resize`と
-`AttachVolume`/`DetachVolume`はどちらも2026-09-19実装（それぞれ上記「リサイズ」
-「Volume attach/detach」節参照）。ドライバ固有の未実装事項（例: Firecrackerのクロス
-hypervisorネットワーク疎通、cloud-hypervisorのPCI passthrough/vhost-user）は
-それぞれの仕様書の「この実装がカバーしないもの」を参照。
+制限」節参照）。Stop/Start・`Resize`・`AttachVolume`/`DetachVolume`はそれぞれ上記
+「停止/起動」「リサイズ」「Volume attach/detach」節参照。ドライバ固有の未実装事項
+（例: Firecrackerのクロスhypervisorネットワーク疎通、cloud-hypervisorのPCI
+passthrough/vhost-user）はそれぞれの仕様書の「この実装がカバーしないもの」を参照。
