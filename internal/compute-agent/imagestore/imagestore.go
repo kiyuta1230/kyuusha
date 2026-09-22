@@ -15,6 +15,11 @@
 // daemon, and its snapshotter abstraction targets unpacking OCI layer
 // *directory trees*, not cloning a single raw disk image file, which is
 // what an Image.spec.rootfs actually is (see CloneFile).
+//
+// The cache otherwise grows without bound: cmd/compute-agent/main.go runs
+// Sweep on a timer to cap it, evicting least-recently-used blobs (Pin/
+// Unpin exclude ones still directly in use by a running VM) -- see Sweep's
+// doc comment and docs/architecture.md「イメージのローカル管理」.
 package imagestore
 
 import (
@@ -26,8 +31,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -42,6 +49,11 @@ type Store struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// refs counts, per cache key, how many currently-running VMs Pin
+	// reported as still needing that blob directly (see Pin) -- a key
+	// present here with a positive count is never evicted by Sweep
+	// regardless of recency. Guarded by mu, same as locks.
+	refs map[string]int
 }
 
 // EnsureCached returns the local path to url's content, downloading it
@@ -77,6 +89,14 @@ func (s *Store) EnsureCached(ctx context.Context, url, digest string) (string, e
 	defer unlock()
 
 	if _, err := os.Stat(dest); err == nil {
+		// Touch dest's mtime on every cache hit, not just on creation --
+		// Sweep's LRU eviction order is mtime-based (see its doc comment),
+		// so without this a blob booted from repeatedly would still look
+		// exactly as stale as one nobody has touched since it was first
+		// downloaded. Best-effort: a failed touch just costs this blob
+		// some eviction priority, nothing else.
+		now := time.Now()
+		_ = os.Chtimes(dest, now, now)
 		return dest, nil
 	}
 
@@ -187,6 +207,144 @@ func (s *Store) destPath(url, digest string) (key, path string, err error) {
 		return "", "", fmt.Errorf("imagestore: unsupported digest %q (want sha256:<64 hex chars>)", digest)
 	}
 	return digest, filepath.Join(s.Dir, "blobs", "sha256", hexDigest), nil
+}
+
+// Key returns the cache key EnsureCached(ctx, url, digest) would use --
+// exported so a caller that has already fetched url/digest (Boot, in
+// fcvmm/chvmm) can later Pin/Unpin the exact same blob without duplicating
+// destPath's key-derivation rules. Errors identically to EnsureCached for
+// the same url/digest (an unsupported digest algorithm), which in practice
+// never happens here since Boot only calls Key after EnsureCached has
+// already succeeded for that same pair.
+func (s *Store) Key(url, digest string) (string, error) {
+	key, _, err := s.destPath(url, digest)
+	return key, err
+}
+
+// Pin marks each of keys as currently needed by a running VM, excluding it
+// from Sweep's eviction regardless of how stale it looks. Call once a VM
+// that reads a blob directly for as long as it runs (a KERNEL_ROOTFS
+// Image's kernel -- see fcvmm/chvmm's Boot, both of which never re-read
+// their master rootfs/disk after CloneFile-ing it into the VM's own
+// writable copy, so only the kernel needs this) is confirmed running, and
+// Unpin the same keys once that VM is gone. Multiple VMs sharing the same
+// Image each contribute their own pin -- the key stays protected until
+// every one of them has Unpinned it. Empty keys (Key's error path) are
+// ignored.
+func (s *Store) Pin(keys ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refs == nil {
+		s.refs = make(map[string]int)
+	}
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		s.refs[k]++
+	}
+}
+
+// Unpin reverses a prior Pin call for each of keys. Unpinning a key with no
+// outstanding Pin is a no-op (never goes negative) -- this keeps callers
+// simple in the face of Boot failures that Pin some keys and not others.
+func (s *Store) Unpin(keys ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range keys {
+		if k == "" || s.refs[k] <= 0 {
+			continue
+		}
+		s.refs[k]--
+		if s.refs[k] == 0 {
+			delete(s.refs, k)
+		}
+	}
+}
+
+func (s *Store) isPinned(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refs[key] > 0
+}
+
+// cacheEntry is one on-disk blob Sweep considers for eviction.
+type cacheEntry struct {
+	key     string
+	path    string
+	size    int64
+	modTime time.Time
+}
+
+// Sweep evicts cached blobs, least-recently-used first (by file mtime --
+// see EnsureCached's touch-on-hit above), until the cache's total size is
+// at or under maxBytes. A blob currently Pinned is skipped regardless of
+// recency, even if that means Sweep can't reach maxBytes -- see
+// docs/architecture.md「イメージのローカル管理」for the policy this
+// implements (LRU + reference-count exclusion + size threshold).
+// maxBytes <= 0 disables eviction entirely (Sweep is a no-op), which keeps
+// the pre-eviction behavior (unbounded growth) available as an explicit
+// opt-out.
+//
+// Deleting each candidate takes that key's own lockKey mutex first, the
+// same one EnsureCached holds while fetching/checking it -- this is what
+// stops Sweep from ever deleting a blob a concurrent EnsureCached call is
+// mid-fetch for.
+func (s *Store) Sweep(maxBytes int64) (freedBytes int64, err error) {
+	if maxBytes <= 0 {
+		return 0, nil
+	}
+
+	var entries []cacheEntry
+	var total int64
+	for _, sub := range []string{"sha256", "legacy"} {
+		dir := filepath.Join(s.Dir, "blobs", sub)
+		dirEntries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			continue // no such subdir yet -- nothing cached under it
+		}
+		for _, de := range dirEntries {
+			if de.IsDir() || strings.HasSuffix(de.Name(), ".tmp") {
+				continue
+			}
+			info, statErr := de.Info()
+			if statErr != nil {
+				continue
+			}
+			key := sub + ":" + de.Name()
+			entries = append(entries, cacheEntry{
+				key:     key,
+				path:    filepath.Join(dir, de.Name()),
+				size:    info.Size(),
+				modTime: info.ModTime(),
+			})
+			total += info.Size()
+		}
+	}
+	if total <= maxBytes {
+		return 0, nil
+	}
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].modTime.Before(entries[j].modTime) })
+
+	for _, e := range entries {
+		if total <= maxBytes {
+			break
+		}
+		if s.isPinned(e.key) {
+			continue
+		}
+		unlock := s.lockKey(e.key)
+		info, statErr := os.Stat(e.path)
+		if statErr == nil {
+			if rmErr := os.Remove(e.path); rmErr == nil {
+				total -= info.Size()
+				freedBytes += info.Size()
+			}
+		}
+		unlock()
+	}
+	return freedBytes, nil
 }
 
 // lockKey serializes EnsureCached calls that share the same cache key

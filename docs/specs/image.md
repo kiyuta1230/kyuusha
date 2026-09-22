@@ -161,6 +161,35 @@ kyuusha image build -tenant=<tenant-id> -name=<name> \
 - `QCOW2`はこの変換パスの対象外（[docs/architecture.md](../architecture.md)
   「イメージ作成体験」参照）
 
+## ローカルキャッシュのエビクション
+
+`internal/compute-agent/imagestore.Store`（各Hypervisorがkernel/rootfs/diskの
+バイト列をダウンロードし、digest検証つきで保持するローカルキャッシュ）は際限なく
+成長する。`docs/architecture.md`「イメージのローカル管理」で決めた方針
+（LRU＋参照カウント除外＋サイズ閾値）を以下の通り実装している。
+
+- **LRU**: キャッシュヒットのたびにファイルのmtimeを更新する（`EnsureCached`）。
+  Sweepはmtimeの古い順に削除候補を選ぶ
+- **参照カウント除外**: 実行中のVMが直接参照し続けるkernel（`KERNEL_ROOTFS`形式の
+  カーネルイメージ。ロード後は読み返さないrootfs/diskマスターと違い、
+  Firecracker/cloud-hypervisorはこのパスをプロセス生存中ずっと参照する）を
+  `Store.Pin`/`Unpin`で除外する。Boot成功時にPin、プロセス終了時にUnpin
+  （`fcvmm`/`chvmm`のManager）。compute-agent再起動時に`Reconcile`が拾い直す
+  既存VMも、`vmm.BootRecord.PinnedKeys`（Boot成功時に永続化）から再Pinされるため
+  漏れない
+- **サイズ閾値**: `Store.Sweep(maxBytes)`が合計サイズを閾値以下に保つよう、
+  参照カウント対象外のブロブを古い順に削除する。compute-agentが
+  `-image-cache-sweep-interval`（既定10分）ごとにこれを呼ぶ。
+  `-image-cache-max-mb`（既定20480 = 20GiB）が0なら無効化（無制限に成長する
+  旧来の挙動のまま）
+
+**副作用として許容している点**: rootfs/diskマスターはPin対象外なので、Stop中の
+VMがまだ参照しているはずのマスターがエビクトされることがある。実害は無い
+（`Start`時の`EnsureCached`が同じURLへ再度フェッチし直すだけ）が、フェッチ元
+URLがその時点で到達不能だと再起動に失敗しうる、というトレードオフを受け入れている
+（実測: playgroundでマスターエビクト後のStop→Start再起動を確認、再フェッチして
+正常にRunningへ復帰した）。
+
 ## 未実装
 
 - ハイパーバイザー間の軽量ピアフェッチ（heartbeatでキャッシュ済みdigestを報告、同一zone優先の直接転送）

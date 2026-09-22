@@ -53,6 +53,8 @@ func main() {
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	fcBin := flag.String("firecracker-bin", "firecracker", "firecracker binary jailer execs into for driver_hint=FIRECRACKER VMs")
 	imageCacheDir := flag.String("image-cache-dir", "/var/lib/kyuusha/image-cache", "directory caching downloaded kernel/rootfs artifacts, digest-verified and shared across both VMM drivers and every VM they boot (see internal/compute-agent/imagestore)")
+	imageCacheMaxMB := flag.Int64("image-cache-max-mb", 20480, "soft cap on -image-cache-dir's total size, in MiB; the sweep loop evicts least-recently-used blobs not currently in use by a running VM to stay at or under it (see internal/compute-agent/imagestore.Store.Sweep). 0 disables eviction (the cache grows unbounded)")
+	imageCacheSweepInterval := flag.Duration("image-cache-sweep-interval", 10*time.Minute, "how often the image cache eviction sweep runs")
 	fcRunDir := flag.String("fc-run-dir", "/var/lib/kyuusha/fc-run", "directory holding each running VM's console log (everything else lives inside its jail, see -fc-jail-chroot-base-dir)")
 	fcJailerBin := flag.String("fc-jailer-bin", "jailer", "jailer binary every driver_hint=FIRECRACKER VM is exec'd through -- see docs/specs/firecracker-boot.md \"jailer\"")
 	fcJailChrootBaseDir := flag.String("fc-jail-chroot-base-dir", "/var/lib/kyuusha/fc-jail", "jailer's --chroot-base-dir: parent of <exec-file-basename>/<vm_id>/root for every VM's jail")
@@ -130,6 +132,29 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Keeps -image-cache-dir bounded -- see internal/compute-agent/
+	// imagestore's package doc and Sweep's doc comment. maxBytes <= 0
+	// (imageCacheMaxMB == 0) makes Sweep itself a no-op, so no separate
+	// on/off branch is needed here.
+	imageCacheMaxBytes := *imageCacheMaxMB * 1024 * 1024
+	go func() {
+		ticker := time.NewTicker(*imageCacheSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				freed, err := imageStore.Sweep(imageCacheMaxBytes)
+				if err != nil {
+					slog.Warn("image cache sweep failed", "err", err)
+				} else if freed > 0 {
+					slog.Info("image cache sweep evicted least-recently-used blobs", "freed_bytes", freed)
+				}
+			}
+		}
+	}()
 
 	shutdownTracing, err := telemetry.Setup(ctx, "compute-agent", *otlpEndpoint)
 	if err != nil {

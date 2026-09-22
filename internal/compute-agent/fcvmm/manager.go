@@ -155,6 +155,10 @@ type runningVM struct {
 	// idempotent re-Boot (see Boot's top-of-function check) can return the
 	// exact same result without re-resolving anything.
 	attached []vmm.AttachedVolume
+	// pinnedKeys are the imagestore.Store cache keys Pinned for this VM --
+	// see vmm.BootRecord.PinnedKeys. Unpinned once this VM is removed from
+	// m.running (exit-watch or watchAdopted).
+	pinnedKeys []string
 	// done is closed once the process has exited AND its own cleanup (tap/
 	// volume-mount teardown, cgroup removal) has finished -- by Boot's
 	// exit-watch goroutine for a VM this Manager booted itself, or by
@@ -261,7 +265,8 @@ func (m *Manager) Reconcile() {
 		rv := &runningVM{
 			pid: rec.PID, exeBasename: rec.ExeBasename, tenantID: rec.TenantID,
 			taps: rec.Taps, volumeMounts: rec.VolumeMounts, ifaceIDs: rec.NetworkInterfaces, attached: rec.Attached,
-			done: make(chan struct{}),
+			pinnedKeys: rec.PinnedKeys,
+			done:       make(chan struct{}),
 		}
 		m.mu.Lock()
 		if m.running == nil {
@@ -269,6 +274,11 @@ func (m *Manager) Reconcile() {
 		}
 		m.running[vmID] = rv
 		m.mu.Unlock()
+		// Re-establish the pin an earlier compute-agent process's Boot took
+		// out (see vmm.BootRecord.PinnedKeys' doc comment) -- this process's
+		// own imagestore.Store starts with none, so without this an adopted
+		// VM's still-in-use kernel blob would look unreferenced to Sweep.
+		m.ImageStore.Pin(rec.PinnedKeys...)
 		slog.Info("fcvmm: adopted a VM still running from a previous compute-agent process", "vm_id", vmID, "pid", rec.PID)
 		go m.watchAdopted(vmID, vmDir, rv)
 	}
@@ -288,6 +298,7 @@ func (m *Manager) watchAdopted(vmID, vmDir string, rv *runningVM) {
 	m.mu.Lock()
 	delete(m.running, vmID)
 	m.mu.Unlock()
+	m.ImageStore.Unpin(rv.pinnedKeys...)
 	for _, t := range rv.taps {
 		_ = netsetup.DeleteTap(t)
 	}
@@ -334,6 +345,17 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	masterRootfs, err := m.ImageStore.EnsureCached(ctx, spec.RootfsURL, spec.RootfsDigest)
 	if err != nil {
 		return nil, fmt.Errorf("fcvmm: fetch rootfs: %w", err)
+	}
+
+	// Pinned once this VM is confirmed running (below) so imagestore.Sweep
+	// never evicts the kernel out from under a live Firecracker process --
+	// see imagestore.Store.Pin's doc comment for why only the kernel (not
+	// masterRootfs, which is never read again after CloneFile-ing it into
+	// this VM's own writable copy) needs one.
+	kernelKey, _ := m.ImageStore.Key(spec.KernelURL, spec.KernelDigest)
+	var pinnedKeys []string
+	if kernelKey != "" {
+		pinnedKeys = []string{kernelKey}
 	}
 
 	// console.log is the only thing this VM still keeps outside the jail --
@@ -612,18 +634,19 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 
 	exeBasename := filepath.Base(fcExecPath)
-	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, taps: taps, volumeMounts: volumeMounts, ifaceIDs: ifaceIDs, attached: attached, done: make(chan struct{})}
+	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, taps: taps, volumeMounts: volumeMounts, ifaceIDs: ifaceIDs, attached: attached, pinnedKeys: pinnedKeys, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
 	m.running[spec.VMID] = rv
 	m.mu.Unlock()
+	m.ImageStore.Pin(pinnedKeys...)
 
 	// Best-effort: losing this only costs this VM's restart-safety (see
 	// Reconcile), not the correctness of the process actually running now.
 	if err := vmm.WriteBootRecord(vmDir, vmm.BootRecord{
-		PID: cmd.Process.Pid, ExeBasename: exeBasename, TenantID: spec.TenantID, Taps: taps, VolumeMounts: volumeMounts, NetworkInterfaces: ifaceIDs, Attached: attached,
+		PID: cmd.Process.Pid, ExeBasename: exeBasename, TenantID: spec.TenantID, Taps: taps, VolumeMounts: volumeMounts, NetworkInterfaces: ifaceIDs, Attached: attached, PinnedKeys: pinnedKeys,
 	}); err != nil {
 		slog.Warn("fcvmm: write boot record, this VM won't be adopted if compute-agent restarts", "vm_id", spec.VMID, "err", err)
 	}
@@ -633,6 +656,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		m.mu.Lock()
 		delete(m.running, spec.VMID)
 		m.mu.Unlock()
+		m.ImageStore.Unpin(pinnedKeys...)
 		cleanup()
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("fcvmm: removing cgroup", "vm_id", spec.VMID, "err", rmErr)

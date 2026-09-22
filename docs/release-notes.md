@@ -5,6 +5,17 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-09-22
+
+- `internal/compute-agent/imagestore.Store`にキャッシュエビクション（LRU＋参照カウント除外
+  ＋サイズ閾値、`docs/architecture.md`「イメージのローカル管理」で既に決定していた方針）を
+  実装。cache-hitのたびにmtimeを更新し（最終アクセス順の実現）、実行中VMがカーネルを
+  直接参照し続ける間は`Pin`/`Unpin`で除外対象にし、`Sweep`が古い順に削除して
+  `-image-cache-max-mb`（既定20GiB、0で無効化）を超えないようにする。compute-agentの
+  `-image-cache-sweep-interval`（既定10分）タイマーで定期実行。compute-agent再起動時に
+  `Reconcile`が拾い直す既存VMも`vmm.BootRecord.PinnedKeys`経由で正しく再pinされる
+  （[Image仕様](specs/image.md)「ローカルキャッシュのエビクション」参照）
+
 ## 2026-09-20
 
 - `VirtualMachineService.Resize`/`AttachVolume`/`DetachVolume`にライブ経路を追加。

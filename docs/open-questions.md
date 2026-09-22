@@ -169,11 +169,12 @@ playgroundで実VM起動まで確認済み（HTTP経由・OCI経由どちらも�
 ゲストブート成功）。overlayfs以外のフォールバックは`CloneFile`が`FICLONE`
 失敗時に通常コピーへ自動フォールバックする形で実装時に解決済み。残る未決事項:
 
-- **キャッシュのエビクション（LRU等）が未実装**: `imagestore.Store`は
-  取得したdigestを際限なく保持し続ける——削除するロジックがまだ無い
-  （旧ドキュメントが挙げていた「containerdのGCモデルとの整合」という論点自体は
-  containerdを使わなくなったため消えたが、「いつ・何を削除するか」を自前で
-  設計する必要は残っている）
+- ~~キャッシュのエビクション（LRU等）が未実装~~ → 解決済み・実装済み（2026-09-22）:
+  `Store.Sweep`がLRU（mtime、cache-hitごとに更新）＋参照カウント除外
+  （`Pin`/`Unpin`、実行中VMが直接参照し続けるkernelのみ対象）＋サイズ閾値
+  （`-image-cache-max-mb`）で削除する。compute-agentの`-image-cache-sweep-interval`
+  タイマーで定期実行。詳細は[Image仕様](specs/image.md)「ローカルキャッシュの
+  エビクション」参照
 - **`kyuusha image build`のカーネル自動選択は未実装**（2026-09-15、本体は実装済み）:
   `cmd/kyuusha/imagebuild.go`としてDockerfileからのrootfsビルド・push・Image
   Create一気通貫のパイプラインは実装・実機確認済み（[Image仕様](specs/image.md)

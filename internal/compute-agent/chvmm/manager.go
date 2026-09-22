@@ -133,6 +133,10 @@ type runningVM struct {
 	// idempotent re-Boot (see Boot's top-of-function check) can return the
 	// exact same result without re-resolving anything.
 	attached []vmm.AttachedVolume
+	// pinnedKeys are the imagestore.Store cache keys Pinned for this VM --
+	// see vmm.BootRecord.PinnedKeys. Unpinned once this VM is removed from
+	// m.running (exit-watch or watchAdopted).
+	pinnedKeys []string
 	// done is closed once the process has exited and its own cleanup (tap
 	// teardown, cgroup removal) has finished -- by Boot's exit-watch
 	// goroutine for a VM this Manager booted itself, or by watchAdopted for
@@ -210,7 +214,8 @@ func (m *Manager) Reconcile() {
 		rv := &runningVM{
 			pid: rec.PID, exeBasename: rec.ExeBasename, tenantID: rec.TenantID,
 			taps: rec.Taps, ifaceIDs: rec.NetworkInterfaces, attached: rec.Attached,
-			done: make(chan struct{}),
+			pinnedKeys: rec.PinnedKeys,
+			done:       make(chan struct{}),
 		}
 		m.mu.Lock()
 		if m.running == nil {
@@ -218,6 +223,9 @@ func (m *Manager) Reconcile() {
 		}
 		m.running[vmID] = rv
 		m.mu.Unlock()
+		// Re-establish the pin an earlier compute-agent process's Boot took
+		// out -- see fcvmm's identical Reconcile step for the full reasoning.
+		m.ImageStore.Pin(rec.PinnedKeys...)
 		slog.Info("chvmm: adopted a VM still running from a previous compute-agent process", "vm_id", vmID, "pid", rec.PID)
 		go m.watchAdopted(vmID, vmDir, rv)
 	}
@@ -236,6 +244,7 @@ func (m *Manager) watchAdopted(vmID, vmDir string, rv *runningVM) {
 	m.mu.Lock()
 	delete(m.running, vmID)
 	m.mu.Unlock()
+	m.ImageStore.Unpin(rv.pinnedKeys...)
 	for _, t := range rv.taps {
 		_ = netsetup.DeleteTap(t)
 	}
@@ -284,6 +293,15 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// removes vmDir -- only Destroy does, called from Delete, not from
 	// here), reuse it as-is instead of recopying from the Image, so the
 	// guest's own writes since its last boot survive the restart.
+	// pinnedKeys collects the imagestore.Store cache keys this VM's Boot
+	// needs standing-pinned for as long as it runs (see
+	// imagestore.Store.Pin's doc comment) -- populated below only in the
+	// KERNEL_ROOTFS branch: a QCOW2 boot's --disk argument is
+	// primaryDiskPath, this VM's own writable clone, never the cached
+	// master (masterDisk, right below), so the QCOW2 branch has nothing to
+	// pin, same reason the KERNEL_ROOTFS branch's masterRootfs doesn't
+	// either.
+	var pinnedKeys []string
 	var kernelPath, primaryDiskPath string
 	var primaryDiskArg string
 	if useQCOW2 {
@@ -312,6 +330,9 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		kernelPath, err = m.ImageStore.EnsureCached(ctx, spec.KernelURL, spec.KernelDigest)
 		if err != nil {
 			return nil, fmt.Errorf("chvmm: fetch kernel: %w", err)
+		}
+		if kernelKey, err := m.ImageStore.Key(spec.KernelURL, spec.KernelDigest); err == nil && kernelKey != "" {
+			pinnedKeys = append(pinnedKeys, kernelKey)
 		}
 		masterRootfs, err := m.ImageStore.EnsureCached(ctx, spec.RootfsURL, spec.RootfsDigest)
 		if err != nil {
@@ -498,18 +519,19 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 
 	exeBasename := filepath.Base(m.binPath())
-	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, taps: taps, ifaceIDs: ifaceIDs, attached: attached, done: make(chan struct{})}
+	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, taps: taps, ifaceIDs: ifaceIDs, attached: attached, pinnedKeys: pinnedKeys, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)
 	}
 	m.running[spec.VMID] = rv
 	m.mu.Unlock()
+	m.ImageStore.Pin(pinnedKeys...)
 
 	// Best-effort: losing this only costs this VM's restart-safety (see
 	// Reconcile), not the correctness of the process actually running now.
 	if err := vmm.WriteBootRecord(vmDir, vmm.BootRecord{
-		PID: cmd.Process.Pid, ExeBasename: exeBasename, TenantID: spec.TenantID, Taps: taps, NetworkInterfaces: ifaceIDs, Attached: attached,
+		PID: cmd.Process.Pid, ExeBasename: exeBasename, TenantID: spec.TenantID, Taps: taps, NetworkInterfaces: ifaceIDs, Attached: attached, PinnedKeys: pinnedKeys,
 	}); err != nil {
 		slog.Warn("chvmm: write boot record, this VM won't be adopted if compute-agent restarts", "vm_id", spec.VMID, "err", err)
 	}
@@ -519,6 +541,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		m.mu.Lock()
 		delete(m.running, spec.VMID)
 		m.mu.Unlock()
+		m.ImageStore.Unpin(pinnedKeys...)
 		cleanup()
 		if rmErr := cgroup.Remove(spec.VMID); rmErr != nil {
 			slog.Warn("chvmm: removing cgroup", "vm_id", spec.VMID, "err", rmErr)

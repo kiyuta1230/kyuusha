@@ -46,6 +46,15 @@ type BootRecord struct {
 	// vmm.RunningVM.NetworkInterfaces), persisted so Reconcile can still
 	// expose them for /metrics/resources after a compute-agent restart.
 	NetworkInterfaces []string `json:"network_interfaces,omitempty"`
+	// PinnedKeys are the imagestore.Store cache keys (see Store.Key) this
+	// VM's driver Pinned for as long as it runs -- its kernel's blob, for a
+	// KERNEL_ROOTFS Image (see fcvmm/chvmm's Boot; rootfs/disk masters are
+	// only read once, during their CloneFile into this VM's own writable
+	// copy, so they don't need a standing pin). Persisted so Reconcile can
+	// re-Pin them for a VM adopted across a compute-agent restart --
+	// without this, an adopted VM's still-in-use kernel blob would have no
+	// pin at all and could be evicted by Sweep out from under it.
+	PinnedKeys []string `json:"pinned_keys,omitempty"`
 }
 
 func bootRecordPath(vmDir string) string {
