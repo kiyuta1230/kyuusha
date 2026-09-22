@@ -68,6 +68,10 @@ func (p *VirtualMachineProxy) DetachVolume(ctx context.Context, req *computev1.D
 	return p.backend.DetachVolume(ctx, req)
 }
 
+func (p *VirtualMachineProxy) Migrate(ctx context.Context, req *computev1.MigrateVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	return p.backend.Migrate(ctx, req)
+}
+
 func (p *VirtualMachineProxy) Watch(req *computev1.WatchVirtualMachinesRequest, stream computev1.VirtualMachineService_WatchServer) error {
 	backendStream, err := p.backend.Watch(stream.Context(), req)
 	if err != nil {

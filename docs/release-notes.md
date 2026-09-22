@@ -5,6 +5,21 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-09-23
+
+- `VirtualMachineService.Migrate`を実装。`Stopped`のVMを別Hypervisorへ移す
+  コールドマイグレーション（ライブ経路は無し、既存の「ライブマイグレーション不要」
+  方針のまま）。root diskはImageから移行先で作り直され、NetworkInterface（IP/MAC）
+  とVolumeAttachment（Volumeデータ）はHypervisor非依存の参照モデルのまま無傷で
+  引き継がれる。新phase`Migrating`（`Stopped → Migrating → Scheduled`と合流し、
+  以降は既存のCreate/Start経路をそのまま再利用）、`scheduleMigration`
+  （現在のHypervisorを自動選択から除外、または`target_hypervisor`明示指定時は
+  同じ既存フィルタで検証）を追加。playgroundで実機確認済み: 実行中VMをStop→Migrate
+  （自動選択）で別Hypervisorへ移し、Firecrackerゲストが新Hypervisor上で起動、
+  NetworkInterfaceのIP/MACが移行前と完全に同一であること、旧Hypervisor側の
+  jail/runディレクトリが後始末されることを確認（[VirtualMachine仕様]
+  (specs/virtual-machine.md)「マイグレーション」参照）
+
 ## 2026-09-22
 
 - `internal/compute-agent/imagestore.Store`にキャッシュエビクション（LRU＋参照カウント除外

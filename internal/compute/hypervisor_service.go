@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/resource"
@@ -193,7 +194,13 @@ func (s *Service) runHealthSweep(ctx context.Context) {
 // means no constraint (a VM with no network_interfaces yet, since
 // compute-agent doesn't wire anything real regardless -- see
 // docs/specs/network.md).
-func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, requiredZone string) (string, error) {
+//
+// excludeHypervisorID, when non-empty, drops that one Hypervisor from the
+// candidate list before Pick sees it -- Migrate's auto-pick path
+// (scheduleMigration) uses this so a migration can never "succeed" by
+// picking the VM's current Hypervisor back again; every other caller
+// passes "".
+func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, requiredZone, excludeHypervisorID string) (string, error) {
 	candidates, err := s.hypervisors.List(ctx, "")
 	if err != nil {
 		return "", err
@@ -203,6 +210,9 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, requi
 		driver = VmmDriverFirecracker
 	}
 	filtered := filterSchedulable(candidates, driver, spec.VCPU, spec.MemoryMB, requiredZone)
+	if excludeHypervisorID != "" {
+		filtered = excludeHypervisorFrom(filtered, excludeHypervisorID)
+	}
 	picked, err := s.scheduler.Pick(filtered)
 	if err != nil {
 		return "", err
@@ -212,6 +222,49 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, requi
 		return "", err
 	}
 	return picked.Meta.ID, nil
+}
+
+// scheduleMigration picks (and reserves capacity on) the Hypervisor
+// Migrate should move vm to -- see Service.Migrate and reconciler.go's
+// migrateVM. target == "" reuses scheduleVM's normal auto-pick, excluding
+// currentHypervisor (so migrating never just re-picks the same place);
+// a non-empty target is Migrate's admin-specified path, validated against
+// the exact same hard constraints scheduleVM's auto-pick applies
+// (Ready/schedulable/driver/zone/capacity) rather than trusted blindly --
+// ErrUnschedulable if it doesn't qualify, ErrValidation if it names the
+// VM's current Hypervisor (migrating to the same place is never valid).
+func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, requiredZone, currentHypervisor, target string) (string, error) {
+	if target == "" {
+		return s.scheduleVM(ctx, spec, requiredZone, currentHypervisor)
+	}
+	if target == currentHypervisor {
+		return "", fmt.Errorf("%w: target_hypervisor %q is the vm's current Hypervisor", ErrValidation, target)
+	}
+	h, err := s.hypervisors.Get(ctx, "", target)
+	if err != nil {
+		return "", err
+	}
+	driver := spec.DriverHint
+	if driver == VmmDriverUnspecified {
+		driver = VmmDriverFirecracker
+	}
+	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, requiredZone)) == 0 {
+		return "", ErrUnschedulable
+	}
+	if err := s.reserveHypervisorCapacity(ctx, target, spec.VCPU, spec.MemoryMB); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func excludeHypervisorFrom(candidates []Hypervisor, id string) []Hypervisor {
+	var out []Hypervisor
+	for _, h := range candidates {
+		if h.Meta.ID != id {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, memoryMB int64, requiredZone string) []Hypervisor {

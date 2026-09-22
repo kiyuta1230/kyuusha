@@ -3,6 +3,25 @@
 docs/architecture.md の「未決事項」は設計レベルの論点用。こちらは実装を進める中で
 出てきた、まだ判断を保留している細かい話を随時追加していくメモ。
 
+## コールドマイグレーションのroot disk転送（未着手、将来やる予定）
+
+`VirtualMachineService.Migrate`（2026-09-23実装、[VirtualMachine仕様]
+(specs/virtual-machine.md)「マイグレーション」参照）は、root disk（Imageから
+クローンした後にゲストが書き込んだ差分）を移行先Hypervisorへ引き継がない
+——移行先で同じImageから作り直すだけ。NetworkInterface/VolumeAttachmentは
+引き継がれる。
+
+ユーザー確認の上、まずはこの制限付きで実装し、root disk自体の転送は
+別途着手する方針（2026-09-23決定）。着手する場合の論点:
+
+- Hypervisor間でVM単位の生ディスクファイルを転送する経路自体がまだ存在しない
+  （kyuushaに既存のHypervisor間データパスは、Image blobの読み取り専用ピア
+  フェッチ（`docs/architecture.md`「ハイパーバイザー間の軽量ピアフェッチ」）
+  のみ）。書き込み可能な個別VMディスクの転送は別の設計が要る
+- VM稼働中（`Stopped`にする前）の差分をどこまで正確に転送するか（コールドの
+  ままdiskファイルだけ丸ごとコピーするのか、実質ライブマイグレーションの
+  一部——メモリ状態の転送——まで踏み込むのかは別問題として切り分ける）
+
 ## CLIの `-tenant` フラグをトークンのクレームからデフォルトすべきか（解決済み・実装済み、2026-09-19）
 
 `kyuusha vm`/`kyuusha tenant` の各サブコマンドは `-tenant`/`-id` を常に明示指定させていた。

@@ -59,7 +59,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|attach-volume|detach-volume|reboot|hard-reboot|add-finalizer|remove-finalizer> [flags]
+  kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|migrate|attach-volume|detach-volume|reboot|hard-reboot|add-finalizer|remove-finalizer> [flags]
   kyuusha tenant <create|get|list|watch|update|delete> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
   kyuusha hypervisor bootstrap-token create -zone=... [flags]   (dev-only, local signing; see internal/bootstraptoken)
@@ -97,6 +97,8 @@ func vmCmd(args []string) {
 		vmStart(args[1:])
 	case "resize":
 		vmResize(args[1:])
+	case "migrate":
+		vmMigrate(args[1:])
 	case "attach-volume":
 		vmAttachVolume(args[1:])
 	case "detach-volume":
@@ -413,6 +415,38 @@ func vmResize(args []string) {
 	})
 	if err != nil {
 		fatal("resize: %v", err)
+	}
+	printVM(vm)
+}
+
+// vmMigrate moves a Stopped VM to a different Hypervisor -- cold only, no
+// live counterpart (see docs/specs/virtual-machine.md「マイグレーション」):
+// its root disk is re-provisioned fresh from its Image there (guest-side
+// changes since last boot are lost), while its IP/MAC and Volume data
+// carry over unchanged. -target-hypervisor is optional; omit it to let
+// the scheduler auto-pick (excluding the VM's current Hypervisor).
+func vmMigrate(args []string) {
+	fs := flag.NewFlagSet("vm migrate", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "VM ID (required)")
+	targetHypervisor := fs.String("target-hypervisor", "", "specific Hypervisor to migrate to (default: let the scheduler auto-pick, excluding the VM's current Hypervisor)")
+	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
+
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+	client := dial(*addr)
+	ctx := authedContext(context.Background(), *token)
+	vm, err := client.Migrate(ctx, &computev1.MigrateVirtualMachineRequest{
+		TenantId: *tenant, Id: *id, TargetHypervisor: *targetHypervisor,
+	})
+	if err != nil {
+		fatal("migrate: %v", err)
 	}
 	printVM(vm)
 }

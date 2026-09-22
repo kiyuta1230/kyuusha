@@ -197,6 +197,70 @@ mutate→`store.Update`をサービス内で完結させる。
   にはこの制約は無い。同じ検証は`Create`にも入っている（`internal/compute/
   virtualmachine.go`の`validateVCPUForDriver`）
 
+## マイグレーション（`Migrate`、コールドのみ）
+
+`VirtualMachineService.Migrate(tenant_id, id, target_hypervisor)`はVMを別の
+Hypervisorへ移す。`Stopped`のVMのみ受け付ける（`FailedPrecondition`）——
+ライブマイグレーションは存在しない（`docs/architecture.md`「ライブ
+マイグレーション不要」という設計原則そのままで、対応する予定もない）。
+
+**引き継がれるもの・引き継がれないものが非対称**な点が最大の注意点:
+
+- **引き継がれる**: `NetworkInterface`（IP/MAC）と`VolumeAttachment`
+  （Volumeの実データ）。どちらも元々Hypervisor非依存の参照モデルなので、
+  同じ`iface-<vm-id>-*`/`volattach-<vm-id>-*`という決定的な名前のまま
+  新Hypervisor上で再利用される（`provisionAndPublish`の
+  `createNetworkInterfaces`/`createVolumeAttachments`が名前ベースで
+  冪等なことがそのまま効く）
+- **引き継がれない**: root disk（`KERNEL_ROOTFS`のrootfs/`QCOW2`のdisk）
+  の中身。kyuushaのroot diskは各Hypervisorのローカルディスク上でImageから
+  都度クローンされる、意図的にエフェメラルな設計（Hypervisor間のディスク
+  転送パス自体が存在しない）なので、移行先では同じImageから作り直される
+  ——ゲストが起動後にroot diskへ書いた差分は失われる。永続化したいデータは
+  元々Volumeに置く設計（`docs/architecture.md`のpet/cattle区別廃止と同じ
+  前提）なので、この非対称は設計上の欠陥ではなく「rootディスクは
+  cattle、Volumeだけがpet」という一貫した扱い
+
+**フロー**（`internal/compute/reconciler.go`の`migrateVM`、`PhaseMigrating`）:
+
+1. `Migrate`は意図を記録するだけ（`Status.Phase = Migrating`、
+   `Status.MigrateTarget = target_hypervisor`）で即座に返る——`Stop`/`Start`
+   と同じ「Service側はGet→mutate→Updateのみ、実際の処理はreconcile()」
+   という設計
+2. `migrateVM`が移行先Hypervisorをスケジュールする
+   （`hypervisor_service.go`の`scheduleMigration`）:
+   - `target_hypervisor`が空なら、`scheduleVM`の通常のフィルタ+Pick戦略で
+     自動選択する。ただし現在のHypervisorは候補から除外——除外しないと
+     「移行の結果、元の場所に戻ってくる」という無意味な成功がありうるため
+   - `target_hypervisor`が指定されていれば、そのHypervisor**だけ**を対象に
+     同じハードフィルタ（Ready/schedulable/driver対応/zone/容量）で検証する
+     ——指定を無条件に信用せず、フィルタを満たさなければ
+     `ResourceExhausted`/`FailedPrecondition`相当で拒否する。現在の
+     Hypervisorと同じIDを指定した場合は`InvalidArgument`
+   - どちらの経路も失敗時はVMを`Migrating`のまま留め、`Unmigratable`
+     Conditionを記録する。`runRetrySweep`が`PhasePending`と全く同じ
+     「無条件で毎tick再試行」を`PhaseMigrating`にも適用する——容量が空くのは
+     Hypervisor側の変化であり、このVM自身のWatchイベントには現れないため
+3. 成功したら、元Hypervisorの容量予約を解放し、`DeleteCommand`を元
+   Hypervisorへfire-and-forgetで送る（`Migrate`はStoppedのVMにしか効かない
+   ので生きているプロセスは無く、元Hypervisor上に残っていた
+   jail/runディレクトリ——古いroot diskの実体——を掃除するだけ。実質
+   「削除」と同じ処理を、VMリソース自体は消さずに1ホスト分だけ行う）
+4. `Status.Hypervisor`を新Hypervisorへ書き換え、`Phase = Scheduled`へ
+   遷移させる——ここから先は新規Createと全く同じ`provisionAndPublish`
+   （`case PhaseScheduled, PhaseStarting:`と合流）が、新Hypervisor上で
+   kernel/rootfsの取得・tap配線・Volume発見をやり直す
+
+**CLI**: `kyuusha vm migrate -tenant=... -id=... [-target-hypervisor=...]`。
+`-target-hypervisor`省略時は自動選択。
+
+playgroundで実機確認済み: Stopped状態のVMを`vm migrate`（自動選択）で
+別Hypervisorへ移し、`Migrating`→`Provisioning`→`Running`と遷移して実際に
+Firecrackerゲストが新Hypervisor上で起動し、`NetworkInterface`のIP/MACが
+移行前と完全に同一のまま(`kyuusha vm console`でゲスト自身が同じIPを
+設定するログまで確認)、かつ元Hypervisor側のjail/runディレクトリが
+掃除されていることを確認した。
+
 ## Volume attach/detach（`AttachVolume`/`DetachVolume`、コールド/ライブ両対応）
 
 `Resize`と全く同じ分岐パターン——`Stopped`のVMはコールド、`Running`＋

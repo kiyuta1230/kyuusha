@@ -54,6 +54,10 @@ func (f *FakeVirtualMachineClient) Resize(context.Context, *computev1.ResizeVirt
 	panic("FakeVirtualMachineClient: Resize not implemented; network.Service never calls it")
 }
 
+func (f *FakeVirtualMachineClient) Migrate(context.Context, *computev1.MigrateVirtualMachineRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
+	panic("FakeVirtualMachineClient: Migrate not implemented; network.Service never calls it")
+}
+
 func (f *FakeVirtualMachineClient) AttachVolume(context.Context, *computev1.AttachVolumeRequest, ...grpc.CallOption) (*computev1.VirtualMachine, error) {
 	panic("FakeVirtualMachineClient: AttachVolume not implemented; network.Service never calls it")
 }

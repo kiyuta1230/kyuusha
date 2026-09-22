@@ -405,6 +405,43 @@ func (s *Service) Start(ctx context.Context, tenantID, id string) (*VirtualMachi
 	return &out, nil
 }
 
+// Migrate moves a Stopped VM to a different Hypervisor: the VM's root disk
+// is re-provisioned fresh from its Image there -- any guest-side changes to
+// it since last boot are lost, since kyuusha's root disk is deliberately
+// ephemeral and host-local (no disk-transfer path between Hypervisors
+// exists -- see docs/specs/virtual-machine.md「マイグレーション」) -- while
+// its NetworkInterfaces (IP/MAC) and VolumeAttachments (Volume data,
+// already Hypervisor-independent) carry over unchanged.
+//
+// targetHypervisor is optional: empty lets reconcile()'s migrateVM
+// auto-pick (excluding this VM's current Hypervisor); a non-empty value
+// requires migrating there specifically, rejected later by migrateVM
+// (ErrUnschedulable/ErrValidation) if it doesn't qualify -- this call only
+// rejects the trivially-invalid case of naming the VM's current Hypervisor.
+//
+// Like Start, this only records the intent (PhaseMigrating,
+// Status.MigrateTarget) and returns immediately -- the actual scheduling
+// and re-provisioning happens asynchronously in reconcile() (reconciler.go).
+func (s *Service) Migrate(ctx context.Context, tenantID, id, targetHypervisor string) (*VirtualMachine, error) {
+	vm, err := s.store.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if vm.Status.Phase != PhaseStopped {
+		return nil, fmt.Errorf("%w: vm must be Stopped to Migrate (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
+	}
+	if targetHypervisor != "" && targetHypervisor == vm.Status.Hypervisor {
+		return nil, fmt.Errorf("%w: target_hypervisor %q is the vm's current Hypervisor", ErrValidation, targetHypervisor)
+	}
+	vm.Status.Phase = PhaseMigrating
+	vm.Status.MigrateTarget = targetHypervisor
+	out, err := s.store.Update(ctx, vm)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Resize changes a Stopped VM's vcpu/memory_mb in place (cold resize only --
 // see docs/specs/virtual-machine.md). No live/hot resize exists: cloud-
 // hypervisor's API socket is deliberately unused (docs/specs/cloud-

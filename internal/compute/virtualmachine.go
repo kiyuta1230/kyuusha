@@ -89,8 +89,15 @@ const (
 	// pass (see reconciler.go's provisionAndPublish), reusing the exact same
 	// network/volume/boot plumbing PhaseScheduled uses -- see Service.Start.
 	PhaseStarting Phase = "Starting"
-	PhaseDeleting Phase = "Deleting"
-	PhaseError    Phase = "Error"
+	// PhaseMigrating is Stopped -> Migrating -> Scheduled -> Provisioning:
+	// reconcile()'s migrateVM (reconciler.go) schedules the VM onto a
+	// different Hypervisor (see hypervisor_service.go's scheduleMigration)
+	// and releases the old one's capacity reservation, then hands off to
+	// the exact same Scheduled-phase body a fresh Create uses -- see
+	// Service.Migrate and docs/specs/virtual-machine.md「マイグレーション」.
+	PhaseMigrating Phase = "Migrating"
+	PhaseDeleting  Phase = "Deleting"
+	PhaseError     Phase = "Error"
 )
 
 type VirtualMachineStatus struct {
@@ -106,6 +113,16 @@ type VirtualMachineStatus struct {
 	// that's the one channel reconcile()'s Watch-driven loop actually
 	// observes, not a real piece of durable VM state.
 	StopForce bool
+	// MigrateTarget carries Migrate's optional target_hypervisor argument
+	// from Service.Migrate through to reconcile()'s PhaseMigrating case
+	// (migrateVM) -- same one-shot-parameter-on-Status reasoning as
+	// StopForce, not exposed over the wire. Left set across a failed
+	// scheduling attempt so runRetrySweep's unconditional PhaseMigrating
+	// retry (same treatment as PhasePending) keeps trying the same target;
+	// cleared only once migrateVM actually succeeds in scheduling
+	// somewhere, so a later plain Migrate (auto-pick) on the same VM
+	// doesn't inherit a stale target.
+	MigrateTarget string
 }
 
 type VirtualMachine struct {

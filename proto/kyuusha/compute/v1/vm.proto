@@ -169,6 +169,27 @@ message DetachVolumeRequest {
   string volume_id = 3;
 }
 
+// MigrateVirtualMachineRequest: cold migration only -- the VM must be
+// Stopped (FailedPrecondition otherwise, same convention as Start). Its
+// root disk is re-provisioned fresh from its Image on the new Hypervisor
+// (any guest-side changes to it since last boot are lost -- kyuusha's root
+// disk is deliberately ephemeral and host-local, see docs/specs/
+// virtual-machine.md「マイグレーション」), while its NetworkInterfaces
+// (IP/MAC) and VolumeAttachments (Volume data, already
+// Hypervisor-independent) carry over unchanged.
+//
+// target_hypervisor is optional: empty lets the scheduler auto-pick
+// (excluding the VM's current Hypervisor, same hard constraints as
+// Create); set it to require that specific Hypervisor -- still validated
+// against the same filters (schedulable/Ready/zone/driver/capacity) rather
+// than trusted blindly, rejected with ResourceExhausted/FailedPrecondition
+// if it doesn't qualify.
+message MigrateVirtualMachineRequest {
+  string tenant_id = 1;
+  string id = 2;
+  string target_hypervisor = 3;
+}
+
 message WatchVirtualMachinesRequest {
   string tenant_id = 1;
   int64 since_resource_version = 2;
@@ -230,6 +251,11 @@ service VirtualMachineService {
   // phase/driver combination or a timed-out live round trip.
   rpc AttachVolume(AttachVolumeRequest) returns (VirtualMachine);
   rpc DetachVolume(DetachVolumeRequest) returns (VirtualMachine);
+  // Migrate: cold-only VM migration to a different Hypervisor (see
+  // MigrateVirtualMachineRequest above). FailedPrecondition if the VM
+  // isn't Stopped; ResourceExhausted/FailedPrecondition if no Hypervisor
+  // (or the explicitly requested target_hypervisor) currently qualifies.
+  rpc Migrate(MigrateVirtualMachineRequest) returns (VirtualMachine);
   rpc Watch(WatchVirtualMachinesRequest) returns (stream VirtualMachineEvent);
   // Serial console (see docs/specs/firecracker-boot.md). Only meaningful
   // for a VM that has actually been scheduled and had a real VMM boot

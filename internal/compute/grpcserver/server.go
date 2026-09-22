@@ -171,6 +171,14 @@ func (s *Server) DetachVolume(ctx context.Context, req *computev1.DetachVolumeRe
 	return toVM(*vm), nil
 }
 
+func (s *Server) Migrate(ctx context.Context, req *computev1.MigrateVirtualMachineRequest) (*computev1.VirtualMachine, error) {
+	vm, err := s.svc.Migrate(ctx, req.GetTenantId(), req.GetId(), req.GetTargetHypervisor())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toVM(*vm), nil
+}
+
 func (s *Server) Watch(req *computev1.WatchVirtualMachinesRequest, stream computev1.VirtualMachineService_WatchServer) error {
 	events, err := s.svc.Watch(stream.Context(), req.GetTenantId(), req.GetSinceResourceVersion(), req.GetFinalizerName())
 	if err != nil {

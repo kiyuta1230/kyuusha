@@ -30,6 +30,7 @@ const (
 	VirtualMachineService_Resize_FullMethodName        = "/kyuusha.compute.v1.VirtualMachineService/Resize"
 	VirtualMachineService_AttachVolume_FullMethodName  = "/kyuusha.compute.v1.VirtualMachineService/AttachVolume"
 	VirtualMachineService_DetachVolume_FullMethodName  = "/kyuusha.compute.v1.VirtualMachineService/DetachVolume"
+	VirtualMachineService_Migrate_FullMethodName       = "/kyuusha.compute.v1.VirtualMachineService/Migrate"
 	VirtualMachineService_Watch_FullMethodName         = "/kyuusha.compute.v1.VirtualMachineService/Watch"
 	VirtualMachineService_StreamConsole_FullMethodName = "/kyuusha.compute.v1.VirtualMachineService/StreamConsole"
 )
@@ -62,6 +63,11 @@ type VirtualMachineServiceClient interface {
 	// phase/driver combination or a timed-out live round trip.
 	AttachVolume(ctx context.Context, in *AttachVolumeRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	DetachVolume(ctx context.Context, in *DetachVolumeRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
+	// Migrate: cold-only VM migration to a different Hypervisor (see
+	// MigrateVirtualMachineRequest above). FailedPrecondition if the VM
+	// isn't Stopped; ResourceExhausted/FailedPrecondition if no Hypervisor
+	// (or the explicitly requested target_hypervisor) currently qualifies.
+	Migrate(ctx context.Context, in *MigrateVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	Watch(ctx context.Context, in *WatchVirtualMachinesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VirtualMachineEvent], error)
 	// Serial console (see docs/specs/firecracker-boot.md). Only meaningful
 	// for a VM that has actually been scheduled and had a real VMM boot
@@ -177,6 +183,16 @@ func (c *virtualMachineServiceClient) DetachVolume(ctx context.Context, in *Deta
 	return out, nil
 }
 
+func (c *virtualMachineServiceClient) Migrate(ctx context.Context, in *MigrateVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VirtualMachine)
+	err := c.cc.Invoke(ctx, VirtualMachineService_Migrate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *virtualMachineServiceClient) Watch(ctx context.Context, in *WatchVirtualMachinesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VirtualMachineEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &VirtualMachineService_ServiceDesc.Streams[0], VirtualMachineService_Watch_FullMethodName, cOpts...)
@@ -243,6 +259,11 @@ type VirtualMachineServiceServer interface {
 	// phase/driver combination or a timed-out live round trip.
 	AttachVolume(context.Context, *AttachVolumeRequest) (*VirtualMachine, error)
 	DetachVolume(context.Context, *DetachVolumeRequest) (*VirtualMachine, error)
+	// Migrate: cold-only VM migration to a different Hypervisor (see
+	// MigrateVirtualMachineRequest above). FailedPrecondition if the VM
+	// isn't Stopped; ResourceExhausted/FailedPrecondition if no Hypervisor
+	// (or the explicitly requested target_hypervisor) currently qualifies.
+	Migrate(context.Context, *MigrateVirtualMachineRequest) (*VirtualMachine, error)
 	Watch(*WatchVirtualMachinesRequest, grpc.ServerStreamingServer[VirtualMachineEvent]) error
 	// Serial console (see docs/specs/firecracker-boot.md). Only meaningful
 	// for a VM that has actually been scheduled and had a real VMM boot
@@ -287,6 +308,9 @@ func (UnimplementedVirtualMachineServiceServer) AttachVolume(context.Context, *A
 }
 func (UnimplementedVirtualMachineServiceServer) DetachVolume(context.Context, *DetachVolumeRequest) (*VirtualMachine, error) {
 	return nil, status.Error(codes.Unimplemented, "method DetachVolume not implemented")
+}
+func (UnimplementedVirtualMachineServiceServer) Migrate(context.Context, *MigrateVirtualMachineRequest) (*VirtualMachine, error) {
+	return nil, status.Error(codes.Unimplemented, "method Migrate not implemented")
 }
 func (UnimplementedVirtualMachineServiceServer) Watch(*WatchVirtualMachinesRequest, grpc.ServerStreamingServer[VirtualMachineEvent]) error {
 	return status.Error(codes.Unimplemented, "method Watch not implemented")
@@ -495,6 +519,24 @@ func _VirtualMachineService_DetachVolume_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VirtualMachineService_Migrate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MigrateVirtualMachineRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VirtualMachineServiceServer).Migrate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VirtualMachineService_Migrate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VirtualMachineServiceServer).Migrate(ctx, req.(*MigrateVirtualMachineRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VirtualMachineService_Watch_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchVirtualMachinesRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -563,6 +605,10 @@ var VirtualMachineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DetachVolume",
 			Handler:    _VirtualMachineService_DetachVolume_Handler,
+		},
+		{
+			MethodName: "Migrate",
+			Handler:    _VirtualMachineService_Migrate_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

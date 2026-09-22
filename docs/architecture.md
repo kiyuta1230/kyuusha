@@ -35,7 +35,7 @@ AZごとのVLANプール(4094)といった、これまでの設計判断はそ�
 
 | 領域 | OpenStack | kyuushaでの扱い | 理由 |
 |---|---|---|---|
-| ライブマイグレーション | Novaの主要機能 | **不要** | ハイパーバイザー障害時の復旧はKaaS層(Pod再スケジュール)が担う。ハイパーバイザーはcattle |
+| ライブマイグレーション | Novaの主要機能 | **不要** | ハイパーバイザー障害時の復旧はKaaS層(Pod再スケジュール)が担う。ハイパーバイザーはcattle。ただし運用者が明示的に起動するコールドマイグレーション（`Stopped`のVMを別Hypervisorへ、IPとVolumeデータのみ引き継いで再配置——計画メンテナンス/退役用）は実装済み。障害時の自動フェイルオーバーではない点でこの判断と矛盾しない（[VirtualMachine仕様](specs/virtual-machine.md)「マイグレーション」参照） |
 | ディスク永続化 | Cinderがフル機能(スナップショット/レプリケーション等) | **最小限**。ルートディスクはイメージからのephemeral/copy-on-write。永続化が要る場合のみブロックデバイスをattach | VM自体の長期状態保持を前提にしない |
 | テナントネットワーク | Neutronがフル機能(overlay per-tenant, router, floating IP, per-tenant security policy) | **最小限**。テナント＝KaaSクラスタ単位の**L2/L3分離のみ**担保。Pod間のマルチテナント分離はCNI/NetworkPolicy層(KaaS側)の責務 | KaaSクラスタ間が疎通しなければ良く、クラスタ内のテナント性はKaaS側の仕事 |
 | 外部API設計 | REST、命令的CRUD+ポーリング、プロジェクトごとに規約バラバラ | **宣言的API**。spec/status分離、watch(ストリーミング)、resourceVersionによる楽観的並行性制御。ただしKubernetes CRD/Aggregated API Serverそのものにはしない——理由は「リソースモデル / API規約」節参照 | 利用者は人間ではなくKaaSのコントローラー。ポーリングではなくwatchで駆動したい |
@@ -54,7 +54,7 @@ PVC/CDIというコンテナ向けボリューム抽象の流用、CNI(コンテ
 
 - VirtualMachineは「Podに包まれたコンテナ」ではなく、compute-agentが直接VMMプロセス(Firecracker/libvirt)を管理する第一級リソース
 - VirtualMachineのライフサイクルはコンテナのwaiting/running/terminatedではなく、VMネイティブな状態機械
-  （例: `Pending → Scheduled → Provisioning → Running → Stopping → Stopped → Starting → Deleting`）で表現する
+  （例: `Pending → Scheduled → Provisioning → Running → Stopping → Stopped → Starting/Migrating → Deleting`）で表現する
 - vCPU/メモリはコンテナのresource requests/limitsを模倣せず、`VirtualMachineSpec`にVMの語彙でそのまま持つ
   （将来CPU pinning/NUMA/hugepagesが必要になっても、素直にspecフィールドとして追加できる形にする）
 - ボリュームはPVC/CDIのようなコンテナ向け間接層を経由せず、block-storageサービスへの
@@ -828,6 +828,7 @@ waiting/running/terminatedをそのまま持ち込まない）。
 | `Stopping` | `Stop` RPC要求。compute-agentへ`StopCommand`（`force`込み）を送信 | compute-agent |
 | `Stopped` | agentが停止（プロセス終了）を確認（`vm.stop-result`）。NetworkInterface/Volume attachment、および根本ディスク（jail/runディレクトリ）は保持したまま | compute-agent |
 | `Starting` | `Start` RPC要求。純粋に一時的なphaseで、reconcile()が同じreconcile呼び出し内でProvisioningまで進める（下記補足） | compute |
+| `Migrating` | `Migrate` RPC要求（`Stopped`のみ）。別Hypervisorのスケジュール→旧Hypervisorの容量解放・後始末を経てScheduledへ再入する（下記補足、詳細は[VirtualMachine仕様](specs/virtual-machine.md)「マイグレーション」） | compute(スケジューラ) |
 | `Deleting` | ユーザーがDelete要求（どのphaseからでも遷移可）。VM破棄→子リソース補償削除 | compute-agent → compute |
 | `Error` | 回復不能な失敗。子リソースの補償削除は完了済みだが、VirtualMachine自体は削除せず留まる（理由調査のため） | compute |
 
@@ -846,7 +847,9 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
                                   │       Provisioning(再入) ◀── Starting ◀───┘
                                   └────────────┘(Stop失敗はRunningへ差し戻し、上記とは別経路)
 
-(Pending/Scheduled/Provisioning/Running/Stopping/Stopped/Starting/Error のどこからでも)
+Stopped ──(Migrate要求)──▶ Migrating ──(別Hypervisorを確保)──▶ Scheduled(再入、Hypervisorだけ差し替え)
+
+(Pending/Scheduled/Provisioning/Running/Stopping/Stopped/Starting/Migrating/Error のどこからでも)
         │
         ▼
     Deleting ──▶ (リソース削除・DELETEDイベント)
@@ -892,6 +895,11 @@ Pending ──(scheduler割当)──▶ Scheduled ──▶ Provisioning ──
   イメージ不存在・スケジューリング不能・agentからの恒久的失敗報告など、有限回数以内に
   自然回復しないと判断される失敗のみ`Error`にする（quota超過はCreate時の同期バリデーションで
   拒否するため、VirtualMachineが生成されてから`Error`になることはない。「Quota設計」節を参照）
+- **実装済み（`Migrate` RPC）**: `Stopped`のVMを別Hypervisorへ移す、運用者が明示的に起動する
+  コールドマイグレーション。root diskはImageから移行先で作り直され（Hypervisor間のディスク転送
+  パスは存在しない）、NetworkInterface（IP/MAC）とVolumeAttachment（Volumeデータ）は
+  Hypervisor非依存の参照モデルのままなので無傷で引き継がれる。詳細は[VirtualMachine仕様]
+  (specs/virtual-machine.md)「マイグレーション」参照
 - **ハイパーバイザー喪失時、VMには一切手を触れない**——`Running`のまま
   固まり、復旧はKaaS層/オペレータに委ねる。理由・経緯は「ハイパーバイザー死活監視と
   リカバリ」/「pet/cattleの区別を廃止」節参照

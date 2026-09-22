@@ -127,7 +127,14 @@ func (r *Reconciler) runRetrySweep(ctx context.Context) {
 			seenStuck := make(map[string]bool, len(vms))
 			for _, vm := range vms {
 				switch vm.Status.Phase {
-				case PhasePending:
+				case PhasePending, PhaseMigrating:
+					// PhaseMigrating fails the exact same way PhasePending
+					// can (scheduleMigration/scheduleVM both return
+					// ErrUnschedulable when nothing currently fits), and
+					// needs the same unconditional-every-tick retry: a
+					// Hypervisor freeing capacity is a Hypervisor change,
+					// not a VM change, so it never appears on this VM's own
+					// Watch stream either.
 					r.reconcile(ctx, vm)
 				case PhaseProvisioning, PhaseStopping:
 					seenStuck[vm.Meta.ID] = true
@@ -187,7 +194,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			return
 		}
 
-		hypervisorID, err := r.svc.scheduleVM(ctx, vm.Spec, zone)
+		hypervisorID, err := r.svc.scheduleVM(ctx, vm.Spec, zone, "")
 		if err != nil {
 			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 				Type:             "Unschedulable",
@@ -229,6 +236,79 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 
 	case PhaseStopping:
 		r.publishStopCommand(ctx, vm)
+
+	case PhaseMigrating:
+		r.migrateVM(ctx, vm)
+	}
+}
+
+// migrateVM (PhaseMigrating, from Service.Migrate) schedules vm onto a
+// different Hypervisor -- excluding its current one, or validating
+// Status.MigrateTarget if the caller specified one (scheduleMigration) --
+// releases the old Hypervisor's capacity reservation, tells its
+// compute-agent to tear down whatever this vm_id left behind there (fire-
+// and-forget DeleteCommand, same as releaseIfReserved: safe because Migrate
+// only ever runs against a Stopped VM, so there's no live process to tear
+// down, just an orphaned jail/run directory holding the old root disk --
+// see docs/specs/virtual-machine.md「マイグレーション」for why that content
+// is deliberately not preserved), and hands off to the exact same
+// Scheduled-phase body a fresh Create uses (provisionAndPublish):
+// createNetworkInterfaces/createVolumeAttachments are idempotent by the
+// deterministic iface-<vm-id>-*/volattach-<vm-id>-* names this VM already
+// has, so its IP/MAC and Volume data carry over unchanged onto the new
+// Hypervisor.
+func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
+	zone, err := validateNetworkInterfaces(ctx, r.svc.subnetClient, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+	if err != nil {
+		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+			Type:             "Unmigratable",
+			Status:           resource.ConditionTrue,
+			Reason:           "NetworkInterfaceInvalid",
+			Message:          err.Error(),
+			LastTransitionAt: time.Now(),
+		})
+		if _, uerr := r.svc.Update(ctx, &vm); uerr != nil {
+			slog.Error("migrate: report condition failed", "vm_id", vm.Meta.ID, "err", uerr)
+		}
+		return
+	}
+
+	oldHypervisor := vm.Status.Hypervisor
+	newHypervisor, err := r.svc.scheduleMigration(ctx, vm.Spec, zone, oldHypervisor, vm.Status.MigrateTarget)
+	if err != nil {
+		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+			Type:             "Unmigratable",
+			Status:           resource.ConditionTrue,
+			Reason:           "InsufficientCapacity",
+			Message:          err.Error(),
+			LastTransitionAt: time.Now(),
+		})
+		if _, uerr := r.svc.Update(ctx, &vm); uerr != nil {
+			slog.Error("migrate: report condition failed", "vm_id", vm.Meta.ID, "err", uerr)
+		}
+		return
+	}
+
+	r.svc.releaseHypervisorCapacity(ctx, oldHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
+	payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
+	msg := nats.NewMsg(CmdSubjectDelete(oldHypervisor))
+	msg.Data = payload
+	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+		slog.Error("migrate: publish cleanup command to old hypervisor failed", "vm_id", vm.Meta.ID, "old_hypervisor", oldHypervisor, "err", err)
+	}
+
+	vm.Status.Hypervisor = newHypervisor
+	vm.Status.MigrateTarget = ""
+	vm.Status.Phase = PhaseScheduled
+	vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+		Type:             "Unmigratable",
+		Status:           resource.ConditionFalse,
+		Reason:           "Scheduled",
+		LastTransitionAt: time.Now(),
+	})
+	if _, err := r.svc.Update(ctx, &vm); err != nil {
+		slog.Error("migrate: update failed", "vm_id", vm.Meta.ID, "err", err)
+		r.svc.releaseHypervisorCapacity(ctx, newHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
 	}
 }
 
