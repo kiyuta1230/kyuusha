@@ -94,9 +94,10 @@ Subnetの組み合わせを自動許可する、という形で参照される�
   `NetworkInterfacePhase`にすでに用意されている`Binding`/`Rebinding`フェーズを使った
   compute-agent→network側への報告の仕組みが要るが、tap配線そのものとは別の作業として
   切り出している
-  この配線をCNIのように任意バイナリへ委譲するプラガブルな仕組みにすべきかは判断保留中
-  （`docs/architecture.md`「未決事項」3.参照）——今回はその判断を待たず、固定のtap+
-  ブリッジ実装を先に入れている
+- **tap配線のローカルなプラグイン化は未実装**（設計は確定済み、`docs/architecture.md`
+  「未決事項」解決済みリスト「VMのネットワーク接続をCNIのようにプラガブルにすべきか」参照）:
+  今は固定のLinuxブリッジ実装（`netsetup.Wire`/`DeleteTap`）のみ。`-network-attach-bin`
+  で外部バイナリへ委譲する経路はまだコードが無い
 - ネットワーク分離の実現方式（VRF/ルートリーク禁止によるテナント間非疎通性、
   DNS/名前解決の拡張機能）は設計のみ（`docs/architecture.md`参照）、実装はまだ
 - **NetworkInterfaceのオーファンGC**: VM Deleteはcomputeの予約解放とcompute-agentへの
