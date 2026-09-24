@@ -2233,7 +2233,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
     **スイッチへの実配線（attach/detach）だけ**に絞る
   - `<bin> attach`/`<bin> detach`をexec、設定はstdinでJSON
     （`tap_name`/`iface_id`/`vm_id`/`tenant_id`/`mac_address`/`ip_address`/
-    `prefix_len`/`gateway_ip`/`vlan_id`/`subnet_id`/`primary`）。ADD/DELという
+    `prefix_len`/`gateway_ip`/`vlan_id`/`primary`）。ADD/DELという
     CNI用語は使わない（CNI互換だと誤解させないため）
   - 成否はexit codeのみ（0=成功）。構造化されたResult JSONは要求しない——
     tap/IP/MACは全て厩舎が既に作成済みで、プラグインが新たに報告すべき情報が無いため
@@ -2245,6 +2245,30 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
   - CNIから意図的に採用しないもの: netns関連フィールド（`CNI_NETNS`/`CNI_IFNAME`）、
     CHECK/VERSION/GC、IPAM委譲（IPAMは厩舎の`internal/network`が唯一の権威のまま）、
     複数プラグインのchaining
+
+  **類似の先行実装との比較**: この手の「VMのtap接続をどう抽象化するか」問題には
+  いくつか有名な先行例がある。
+
+  - **OpenStack Novaの`os-vif`**が発想として最も近い。NovaがVMのNIC（tap/OVS
+    port/SR-IOV VF/vhost-user等）を実際に配線する部分を切り出したPythonライブラリで、
+    `plug()`/`unplug()`というプラグインインターフェースを持つ。CNIが標準化される
+    前から存在し、最初からVM向けに設計されているため、そもそもnetns移動という
+    概念を持ち込んでいない——ただしNova本体に密結合したPythonのオブジェクトモデルで、
+    VNAPの「バイナリ1本+stdin JSON+exit code」ほど疎結合ではない
+  - 逆に「CNIをそのまま使う」方向で解決した例が**firecracker-containerdの
+    `tc-redirect-tap`**と**KubeVirtのbridge/masqueradeバインディング**。どちらも
+    「まずCNIの標準プラグイン(bridge等)を騙すために偽のnetns+veth pairを用意し、
+    標準CNIプラグインを普通に実行させ、その結果できたvethからtapへ`tc`(traffic
+    control)でトラフィックをリダイレクトする」という、CNIとtapの間に変換アダプタを
+    挟むアプローチ。これはまさに「設計原則: KubeVirtを反面教師にする」が名指しする
+    誤りそのもの——動くには動くが、veth+tcリダイレクトという余分なホップと複雑さが
+    常について回る
+  - より緩い先行例として**libvirtの`qemu` hook**（`/etc/libvirt/hooks/qemu`）が
+    ある。VM起動/停止時に任意スクリプトを呼べるが、固定スキーマは無くもっと
+    アドホック
+
+  VNAPの立ち位置は、os-vifの発想（netnsを持ち込まない）を、CNI由来の軽い呼び出し
+  規約（バイナリ+JSON+exit code）で実装した形に近い。
 
 - `vm create -subnets=`がtap配線されないまま起動するバグ（発見・修正済み、
   原因はNetworkInterfaceの非同期IP割り当てをcompute側が待たずにbootへ進んでいたこと、
