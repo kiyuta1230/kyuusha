@@ -94,10 +94,6 @@ Subnetの組み合わせを自動許可する、という形で参照される�
   `NetworkInterfacePhase`にすでに用意されている`Binding`/`Rebinding`フェーズを使った
   compute-agent→network側への報告の仕組みが要るが、tap配線そのものとは別の作業として
   切り出している
-- **tap配線のローカルなプラグイン化は未実装**（設計は確定済み、`docs/architecture.md`
-  「未決事項」解決済みリスト「VMのネットワーク接続をCNIのようにプラガブルにすべきか」参照）:
-  今は固定のLinuxブリッジ実装（`netsetup.Wire`/`DeleteTap`）のみ。`-network-attach-bin`
-  で外部バイナリへ委譲する経路はまだコードが無い
 - ネットワーク分離の実現方式（VRF/ルートリーク禁止によるテナント間非疎通性、
   DNS/名前解決の拡張機能）は設計のみ（`docs/architecture.md`参照）、実装はまだ
 - **NetworkInterfaceのオーファンGC**: VM Deleteはcomputeの予約解放とcompute-agentへの
@@ -188,6 +184,38 @@ compute-agentコンテナ・ゲストrootfsのどちらもbusybox `ip`しか持�
 
 この機能には`/dev/net/tun`と`CAP_NET_ADMIN`が要る。`/dev/kvm`と同様、なければこの
 機能だけが動かず（VMはError相当になる）、それ以外のスタックには影響しない。
+
+## VNAP（ローカルなtap配線プラグイン契約）
+
+`docs/architecture.md`「VMのネットワーク接続をCNIのようにプラガブルにすべきか」
+（解決済みリスト参照）で確定した設計の実装。`-network-attach-bin`（compute-agentの
+フラグ）を指定すると、上記「tap配線とローカルネットワーク」の**スイッチへの実配線
+ステップだけ**を外部バイナリへ委譲できる——tapデバイス自体の作成・削除は常に
+`netsetup`（厩舎自身）が担う。未指定（既定）なら今まで通り固定のLinuxブリッジ実装
+のまま、既存の挙動は一切変わらない。
+
+- **CNI互換ではない**: VMのtapデバイスに対応するnetnsは存在しないため、CNIの
+  `CNI_NETNS`/`CNI_IFNAME`のようなnetns移動の契約は採用しない
+  （`docs/architecture.md`「設計原則: KubeVirtを反面教師にする」節が名指す誤りを
+  繰り返さないため）。CNIから借りているのは「バイナリ+stdin JSON+exit code」
+  という呼び出し規約パターンだけ
+- **呼び出し**: `<bin> attach`/`<bin> detach`をexec、標準入力にJSON
+  （`internal/compute-agent/netsetup`の`pluginRequest`）を渡す。ADD/DELという
+  CNI用語は使わない
+- **attachのpayload**（全フィールド）: `tap_name`/`iface_id`/`vm_id`/`tenant_id`/
+  `mac_address`/`ip_address`/`prefix_len`/`gateway_ip`/`vlan_id`/`primary`
+- **detachのpayload**（識別に要る最小限のみ）: `tap_name`/`iface_id`/`vm_id`/
+  `tenant_id`——ポートを消すのに以前の設定内容（IP/MAC/VLAN等）は不要なため
+- **成否はexit codeのみ**（0=成功）。構造化されたResult JSONは要求しない——
+  tap/IP/MACは全て厩舎が既に作成済みで、プラグインが新たに報告すべき情報が無いため
+- **タイムアウト**: 10秒（`pluginTimeout`）。ハングしたプラグインがVM起動/削除を
+  無期限にブロックしないようにする
+- **冪等性**: attach/detachはプラグイン側の責務として冪等でなければならない
+  （stuck-phase retry sweepがCreateCommandを再送すると`Wire`も再実行されるため）
+- **失敗時の扱い**: attach失敗は`Wire`の既存のエラー経路にそのまま乗る（Boot全体が
+  失敗し、それまでに配線済みのtapは既存の`cleanup()`が後始末）。detach失敗は
+  ログのみで継続——tapデバイス自体は、detachプラグインの成否に関わらず必ず削除される
+  （プラグイン障害でtapがリークすることはない）
 
 ## エンドポイント
 

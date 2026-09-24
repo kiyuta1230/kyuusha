@@ -97,6 +97,13 @@ type Manager struct {
 	// means this host has none -- any VM with Volumes then fails to boot,
 	// same as a missing kernel/rootfs URL would.
 	StorageConnections volumeref.Connections
+	// NetworkAttachBin, if set, is the external VNAP plugin binary
+	// netsetup.Wire/DeleteTap delegate the local tap-to-switch attach/
+	// detach step to, instead of the built-in Linux bridge implementation
+	// -- see internal/compute-agent/netsetup's package doc comment and
+	// docs/architecture.md「VMのネットワーク接続をCNIのようにプラガブルに
+	// すべきか」. Empty (the default) keeps today's behavior unchanged.
+	NetworkAttachBin string
 
 	mu      sync.Mutex
 	running map[string]*runningVM
@@ -245,8 +252,12 @@ func (m *Manager) watchAdopted(vmID, vmDir string, rv *runningVM) {
 	delete(m.running, vmID)
 	m.mu.Unlock()
 	m.ImageStore.Unpin(rv.pinnedKeys...)
-	for _, t := range rv.taps {
-		_ = netsetup.DeleteTap(t)
+	for i, t := range rv.taps {
+		ifaceID := ""
+		if i < len(rv.ifaceIDs) {
+			ifaceID = rv.ifaceIDs[i]
+		}
+		_ = netsetup.DeleteTap(t, ifaceID, vmID, rv.tenantID, m.NetworkAttachBin)
 	}
 	if rmErr := cgroup.Remove(vmID); rmErr != nil {
 		slog.Warn("chvmm: removing cgroup for adopted VM", "vm_id", vmID, "err", rmErr)
@@ -360,18 +371,26 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	var ifaceIDs []string
 	var attached []vmm.AttachedVolume
 	cleanup := func() {
-		for _, t := range taps {
-			_ = netsetup.DeleteTap(t)
+		for i, t := range taps {
+			ifaceID := ""
+			if i < len(ifaceIDs) {
+				ifaceID = ifaceIDs[i]
+			}
+			_ = netsetup.DeleteTap(t, ifaceID, spec.VMID, spec.TenantID, m.NetworkAttachBin)
 		}
 	}
 	for i, ni := range spec.NetworkInterfaces {
 		wired, err := netsetup.Wire(netsetup.Interface{
 			IfaceID:    ni.IfaceID,
+			VMID:       spec.VMID,
+			TenantID:   spec.TenantID,
 			MACAddress: ni.MACAddress,
+			IPAddress:  ni.IPAddress,
 			GatewayIP:  ni.GatewayIP,
 			PrefixLen:  ni.PrefixLen,
 			VLANID:     ni.VLANID,
-		})
+			Primary:    ni.Primary,
+		}, m.NetworkAttachBin)
 		if err != nil {
 			cleanup()
 			return nil, fmt.Errorf("chvmm: wire network interface %d (%s): %w", i, ni.IfaceID, err)

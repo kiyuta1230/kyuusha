@@ -67,6 +67,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
 	storageConnections := flag.String("storage-connections", "", "comma-separated storage connections this host already has established, name[:local_path][,name[:local_path]...] -- an iSCSI/NVMe-oF session already logged in (no local_path needed: Volumes on it are discovered under /dev/disk/by-id/) or an NFS export already mounted (local_path is its mount point). Sent to compute at self-registration and used locally by internal/compute-agent/volumeref to find each Volume's already-visible device/file at boot time; kyuusha never logs in, mounts, or exports anything itself (see docs/architecture.md「訂正: 責務の境界を...」)")
+	networkAttachBin := flag.String("network-attach-bin", "", "path to an external VNAP plugin binary (see internal/compute-agent/netsetup and docs/architecture.md \"VMのネットワーク接続をCNIのようにプラガブルにすべきか\") that Wire/DeleteTap delegate the local tap-to-switch attach/detach step to, invoked as '<bin> attach|detach' with a JSON payload on stdin. Empty (the default) keeps the built-in Linux bridge implementation")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -109,6 +110,7 @@ func main() {
 			JailUID:            uint32(*fcJailUID),
 			JailGID:            uint32(*fcJailGID),
 			StorageConnections: connections,
+			NetworkAttachBin:   *networkAttachBin,
 		},
 		string(compute.VmmDriverCloudHypervisor): &chvmm.Manager{
 			BinPath:            *chBin,
@@ -116,6 +118,7 @@ func main() {
 			ImageStore:         imageStore,
 			RunDir:             *chRunDir,
 			StorageConnections: connections,
+			NetworkAttachBin:   *networkAttachBin,
 		},
 	}
 

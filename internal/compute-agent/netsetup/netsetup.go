@@ -1,7 +1,7 @@
-// Package netsetup wires a Firecracker VM's NetworkInterface (see
-// docs/specs/network.md) to a real Linux tap device on this compute-agent's
-// own host, inside its own network namespace. This is deliberately scoped
-// to same-hypervisor connectivity only: every tap for a given Subnet's
+// Package netsetup wires a VM's NetworkInterface (see docs/specs/
+// network.md) to a real Linux tap device on this compute-agent's own host,
+// inside its own network namespace. This is deliberately scoped to
+// same-hypervisor connectivity only: every tap for a given Subnet's
 // vlan_id is attached to one Linux bridge per (compute-agent process,
 // vlan_id), and that bridge is given the Subnet's gateway_ip so it acts as
 // a real, pingable local gateway. Two VMs on the same Subnet but different
@@ -9,15 +9,26 @@
 // L2 extension between hosts (a VXLAN overlay or a VLAN trunk to a
 // physical uplink), which is a separate, later milestone. See
 // docs/specs/network.md for what this does and doesn't cover.
+//
+// This built-in Linux bridge implementation is the default; an operator
+// can instead delegate the local switch-attach/detach step to an external
+// VNAP plugin (see Plugin's doc comment and docs/architecture.md「VMの
+// ネットワーク接続をCNIのようにプラガブルにすべきか」) via -network-attach-bin.
+// Wire always creates the tap device itself either way -- only the "attach
+// this already-created tap to a local switch" step is pluggable.
 package netsetup
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -25,13 +36,19 @@ import (
 // Interface is everything Wire needs for one VM network attachment,
 // resolved by compute (see internal/compute/network.go) from the
 // NetworkInterface it created and that NetworkInterface's Subnet, and
-// carried here in compute.CreateCommand (internal/compute/nats.go).
+// carried here in compute.CreateCommand (internal/compute/nats.go) plus
+// the owning VM's own id/tenant (from vmm.BootSpec, not the
+// NetworkInterface itself).
 type Interface struct {
 	IfaceID    string // the NetworkInterface's id; used to derive a deterministic tap name
+	VMID       string
+	TenantID   string
 	MACAddress string
+	IPAddress  string
 	GatewayIP  string // the Subnet's gateway_ip; assigned to the VLAN bridge, not the tap
 	PrefixLen  int    // the Subnet CIDR's prefix length, for the bridge's gateway_ip/PrefixLen address
 	VLANID     int32
+	Primary    bool
 }
 
 // Wired is what Wire returns: the tap device name Firecracker's
@@ -42,36 +59,67 @@ type Wired struct {
 	MACAddress string
 }
 
-// Wire ensures iface's VLAN bridge exists (creating it and assigning it
+// Wire creates a persistent tap device for iface (always this package's
+// own job, regardless of attachBin -- see the package doc comment), then
+// attaches it to a local switch: the built-in Linux bridge implementation
+// (ensures iface's VLAN bridge exists, creating it and assigning it
 // GatewayIP the first time any interface for that vlan_id is wired on this
-// host), creates a persistent tap device for iface, and attaches it to
-// that bridge. Idempotent: safe to call again for a tap that already
-// exists, or a bridge another interface already created.
-func Wire(iface Interface) (*Wired, error) {
-	br := bridgeName(iface.VLANID)
-	if err := ensureBridge(br, iface.GatewayIP, iface.PrefixLen); err != nil {
-		return nil, err
-	}
+// host) when attachBin is empty, or an external VNAP plugin (see Plugin's
+// doc comment) when it isn't. Idempotent either way: safe to call again
+// for a tap that already exists, or a bridge another interface already
+// created -- an external plugin must be idempotent too (see Plugin's doc
+// comment for why).
+func Wire(iface Interface, attachBin string) (*Wired, error) {
 	tap := TapName(iface.IfaceID)
 	if err := createPersistentTap(tap); err != nil {
 		return nil, err
 	}
-	if err := runIP("link", "set", tap, "master", br); err != nil {
-		return nil, err
-	}
-	if err := runIP("link", "set", tap, "up"); err != nil {
+	if attachBin == "" {
+		if err := wireBuiltinBridge(iface, tap); err != nil {
+			return nil, err
+		}
+	} else if err := runPlugin(attachBin, "attach", attachRequest(iface, tap)); err != nil {
 		return nil, err
 	}
 	return &Wired{TapName: tap, MACAddress: iface.MACAddress}, nil
 }
 
-// DeleteTap removes a tap device created by Wire (by its already-derived
-// name -- see TapName). The VLAN bridge itself is left in place: it's
-// shared by every VM on this Hypervisor for that Subnet, and only ever
-// torn down along with the whole compute-agent process (which drops its
-// network namespace entirely, taking the bridge with it).
-func DeleteTap(tapName string) error {
-	return runIP("link", "delete", tapName)
+func wireBuiltinBridge(iface Interface, tap string) error {
+	br := bridgeName(iface.VLANID)
+	if err := ensureBridge(br, iface.GatewayIP, iface.PrefixLen); err != nil {
+		return err
+	}
+	if err := runIP("link", "set", tap, "master", br); err != nil {
+		return err
+	}
+	return runIP("link", "set", tap, "up")
+}
+
+// DeleteTap detaches tapName from whatever local switch Wire attached it
+// to -- the built-in Linux bridge (where "ip link delete" below already
+// does this as a side effect, so the built-in path takes no separate
+// detach action) or an external VNAP plugin (attachBin non-empty) -- and
+// then removes the tap device itself. ifaceID/vmID/tenantID identify which
+// port to remove for the plugin's detach payload (see Plugin's doc
+// comment); ignored on the built-in path. The tap is always removed
+// (even if the plugin's own detach fails) so a plugin failure can never
+// leak a tap device the way skipping deletion would -- see DeleteTap's
+// callers in fcvmm/chvmm, which already treat this as best-effort cleanup
+// and just log a non-nil error.
+func DeleteTap(tapName, ifaceID, vmID, tenantID, attachBin string) error {
+	var detachErr error
+	if attachBin != "" {
+		detachErr = runPlugin(attachBin, "detach", pluginRequest{
+			TapName: tapName, IfaceID: ifaceID, VMID: vmID, TenantID: tenantID,
+		})
+	}
+	if err := runIP("link", "delete", tapName); err != nil {
+		if detachErr != nil {
+			return fmt.Errorf("netsetup: detach plugin failed (%v), then delete tap also failed: %w", detachErr, err)
+		}
+		return err
+	}
+	return detachErr
 }
 
 // TapName derives a deterministic, <=15-char (IFNAMSIZ-1) Linux interface
@@ -133,6 +181,72 @@ func createPersistentTap(name string) error {
 	}
 	if err := unix.IoctlSetInt(int(f.Fd()), unix.TUNSETPERSIST, 1); err != nil {
 		return fmt.Errorf("netsetup: TUNSETPERSIST %s: %w", name, err)
+	}
+	return nil
+}
+
+// pluginRequest is the JSON a VNAP plugin (see Plugin's doc comment)
+// receives on stdin. attachRequest fills every field for "attach";
+// DeleteTap's detach call only ever sets TapName/IfaceID/VMID/TenantID
+// (omitempty drops the rest) since removing a port never needs to know
+// what it used to be configured with, only which one to remove.
+type pluginRequest struct {
+	TapName    string `json:"tap_name"`
+	IfaceID    string `json:"iface_id"`
+	VMID       string `json:"vm_id"`
+	TenantID   string `json:"tenant_id"`
+	MACAddress string `json:"mac_address,omitempty"`
+	IPAddress  string `json:"ip_address,omitempty"`
+	PrefixLen  int    `json:"prefix_len,omitempty"`
+	GatewayIP  string `json:"gateway_ip,omitempty"`
+	VLANID     int32  `json:"vlan_id,omitempty"`
+	Primary    bool   `json:"primary,omitempty"`
+}
+
+func attachRequest(iface Interface, tap string) pluginRequest {
+	return pluginRequest{
+		TapName: tap, IfaceID: iface.IfaceID, VMID: iface.VMID, TenantID: iface.TenantID,
+		MACAddress: iface.MACAddress, IPAddress: iface.IPAddress, PrefixLen: iface.PrefixLen,
+		GatewayIP: iface.GatewayIP, VLANID: iface.VLANID, Primary: iface.Primary,
+	}
+}
+
+// pluginTimeout bounds how long an external VNAP plugin may run -- local
+// networking commands (add/remove a switch port) should be near-instant; a
+// hung plugin must not hang VM boot/teardown indefinitely.
+const pluginTimeout = 10 * time.Second
+
+// runPlugin is this package's side of VNAP (the "VM Network Attach
+// Protocol", see docs/architecture.md「VMのネットワーク接続をCNIのように
+// プラガブルにすべきか」for the full contract this implements and why it's
+// deliberately NOT CNI-compatible): it execs attachBin as
+// "<attachBin> <verb>" (verb is "attach" or "detach" -- never CNI's ADD/DEL,
+// so nobody mistakes this for real CNI compatibility), writing req as JSON
+// to its stdin.
+//
+// Exit code 0 is the only success signal this contract defines -- no
+// structured result is expected back on stdout, unlike CNI's Result JSON:
+// a VNAP plugin never creates the tap/allocates the IP (kyuusha already
+// did both before ever invoking it), so it has nothing new to report.
+// Non-zero exit: stderr (and stdout) are captured and folded into the
+// returned error for logging. A plugin MUST be idempotent (Wire/DeleteTap
+// can both be re-invoked for the same iface -- see their doc comments) and
+// MUST clean up after itself before returning a non-zero exit from
+// "attach" (a half-configured switch port left behind on failure is the
+// plugin's own leak to avoid, not something this contract detects or
+// unwinds).
+func runPlugin(attachBin, verb string, req pluginRequest) error {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("netsetup: marshal VNAP request: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pluginTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, attachBin, verb)
+	cmd.Stdin = bytes.NewReader(payload)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("netsetup: VNAP plugin %s %s: %w: %s", attachBin, verb, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

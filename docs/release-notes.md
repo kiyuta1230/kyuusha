@@ -5,6 +5,21 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-09-25
+
+- `internal/compute-agent/netsetup`に、tap配線のローカルなスイッチattach/detach
+  ステップを外部バイナリへ委譲できるVNAP（VM Network Attach Protocol）契約を実装。
+  compute-agentの`-network-attach-bin`で指定、未指定なら既存の固定Linuxブリッジ
+  実装のまま。tapデバイス自体の作成・削除は常に厩舎が担い、プラグインは
+  「作成済みのtapをローカルスイッチへattach/detachする」ことだけを担当する
+  （CNI互換ではなく、バイナリ+stdin JSON+exit codeという呼び出し規約パターンだけを
+  参考にしたkyuusha独自の契約——`docs/architecture.md`「VMのネットワーク接続を
+  CNIのようにプラガブルにすべきか」参照）。playgroundで実機確認: 既定のLinux
+  ブリッジ経路は無変更のまま実VM起動を確認、外部プラグイン経由でも正しいattach/
+  detach JSONペイロードを受け取りゲストが正常に起動、プラグイン失敗時もtap自体は
+  必ず削除されることを確認（[network仕様](specs/network.md)「VNAP（ローカルな
+  tap配線プラグイン契約）」参照）
+
 ## 2026-09-24
 
 - `VirtualMachineService.Resize`のコールド経路に、容量不足時のマイグレーション
