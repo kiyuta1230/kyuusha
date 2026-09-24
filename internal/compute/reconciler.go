@@ -312,6 +312,125 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 	}
 }
 
+// ResizeWithMigration is Resize's migration-assisted fallback --
+// grpcserver.Resize calls this only after the plain cold Resize
+// (Service.Resize) has already failed with ErrHypervisorCapacityExceeded,
+// and only when the caller opted in via allow_migrate (see
+// ResizeVirtualMachineRequest and docs/specs/virtual-machine.md
+// 「リサイズ」「マイグレーション」). Redoes the same validation
+// Service.Resize does (phase/vcpu-for-driver/quota) from scratch -- the
+// same double-fetch tolerance this codebase already accepts elsewhere --
+// rather than threading state through from the failed attempt, since that
+// attempt left nothing mutated to reuse (resizeHypervisorCapacity's
+// capacity check runs, and fails, strictly before Service.Resize ever
+// touches vm.Spec).
+//
+// Unlike a plain Migrate, this is synchronous: no live compute-agent round
+// trip is needed (the VM is Stopped) and Resize has always returned the
+// final Spec immediately, so there's no reason to route this through
+// PhaseMigrating/reconcile() the way Migrate does. It finds a different
+// Hypervisor (scheduleVM's auto-pick, excluding the current one -- no
+// explicit target_hypervisor option here, unlike Migrate, since this is a
+// capacity fallback, not a placement decision the caller is making) that
+// fits the *new* size, reserves it there, releases the old Hypervisor's
+// reservation for the *old* size, writes the new Spec/Hypervisor in one
+// Update, and fires the same old-Hypervisor cleanup DeleteCommand
+// migrateVM does -- the root disk is re-provisioned fresh from the Image on
+// the new Hypervisor, exactly like a plain Migrate (see docs/specs/
+// virtual-machine.md「マイグレーション」for why that's unavoidable without
+// a Hypervisor-to-Hypervisor disk transfer path).
+func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id string, vcpu int32, memoryMB int64) (*VirtualMachine, error) {
+	if vcpu <= 0 {
+		return nil, fmt.Errorf("%w: vcpu must be positive", ErrValidation)
+	}
+	if memoryMB <= 0 {
+		return nil, fmt.Errorf("%w: memory_mb must be positive", ErrValidation)
+	}
+
+	r.svc.usageMu.Lock()
+	defer r.svc.usageMu.Unlock()
+
+	vm, err := r.svc.store.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if vm.Status.Phase != PhaseStopped {
+		return nil, fmt.Errorf("%w: vm must be Stopped to Resize (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
+	}
+	if err := validateVCPUForDriver(vcpu, vm.Spec.DriverHint); err != nil {
+		return nil, err
+	}
+	if vcpu == vm.Spec.VCPU && memoryMB == vm.Spec.MemoryMB {
+		return &vm, nil
+	}
+	oldVCPU, oldMemoryMB := vm.Spec.VCPU, vm.Spec.MemoryMB
+	deltaVCPU := vcpu - oldVCPU
+	deltaMemoryMB := memoryMB - oldMemoryMB
+
+	// Same growing-only quota gate as Service.Resize: a rejection here means
+	// no Hypervisor placement can fix it, so there's no point even looking
+	// for one.
+	if deltaVCPU > 0 || deltaMemoryMB > 0 {
+		limit, err := lookupQuota(ctx, r.svc.identityClient, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		usage := r.svc.usage[tenantID]
+		allowed, err := r.svc.quota.allowResize(ctx, usage, deltaVCPU, deltaMemoryMB, vcpu, memoryMB, limit)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, fmt.Errorf("%w: tenant %q", ErrQuotaExceeded, tenantID)
+		}
+	}
+
+	zone, err := validateNetworkInterfaces(ctx, r.svc.subnetClient, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+	if err != nil {
+		return nil, err
+	}
+
+	oldHypervisor := vm.Status.Hypervisor
+	newSpec := vm.Spec
+	newSpec.VCPU = vcpu
+	newSpec.MemoryMB = memoryMB
+	newHypervisor, err := r.svc.scheduleVM(ctx, newSpec, zone, oldHypervisor)
+	if err != nil {
+		return nil, fmt.Errorf("%w: no other hypervisor has room for the new size either", ErrHypervisorCapacityExceeded)
+	}
+
+	r.svc.releaseHypervisorCapacity(ctx, oldHypervisor, oldVCPU, oldMemoryMB)
+	payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
+	msg := nats.NewMsg(CmdSubjectDelete(oldHypervisor))
+	msg.Data = payload
+	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+		slog.Error("resize: publish cleanup command to old hypervisor failed", "vm_id", vm.Meta.ID, "old_hypervisor", oldHypervisor, "err", err)
+	}
+
+	vm.Spec.VCPU = vcpu
+	vm.Spec.MemoryMB = memoryMB
+	vm.Status.Hypervisor = newHypervisor
+	out, err := r.svc.store.Update(ctx, vm)
+	if err != nil {
+		// Compensate both sides of the reservation swap so accounting
+		// matches the still-unchanged VM object (still on oldHypervisor at
+		// the old size) -- same Saga-style compensating-action shape
+		// Resize's own rollback and reconcile() already use elsewhere.
+		r.svc.releaseHypervisorCapacity(ctx, newHypervisor, vcpu, memoryMB)
+		if rerr := r.svc.reserveHypervisorCapacity(ctx, oldHypervisor, oldVCPU, oldMemoryMB); rerr != nil {
+			slog.Error("resize: failed to restore old hypervisor reservation after Update failure", "vm_id", vm.Meta.ID, "err", rerr)
+		}
+		return nil, err
+	}
+
+	usage := r.svc.usage[tenantID]
+	usage.VCPU += deltaVCPU
+	usage.MemoryMB += deltaMemoryMB
+	r.svc.usage[tenantID] = usage
+
+	return &out, nil
+}
+
 // publishStopCommand tells compute-agent to tear down the real VMM process;
 // it reports back on EvtSubjectStopResult (handleStopResult) once it
 // actually has, which is what advances this VM to Stopped -- see nats.go's

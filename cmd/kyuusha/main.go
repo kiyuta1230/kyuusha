@@ -400,6 +400,7 @@ func vmResize(args []string) {
 	id := fs.String("id", "", "VM ID (required)")
 	vcpu := fs.Int("vcpu", 0, "new vCPU count (required)")
 	memoryMB := fs.Int64("memory-mb", 0, "new memory in MB (required)")
+	allowMigrate := fs.Bool("allow-migrate", false, "cold resize only: if the VM's current Hypervisor doesn't have room for the new size, move the VM (cold migration) to one that does instead of failing -- the root disk is re-provisioned fresh from the Image on the new Hypervisor (any guest-side changes to it are lost); NetworkInterfaces/VolumeAttachments carry over unchanged. Ignored for a live (Running+CLOUD_HYPERVISOR) resize")
 	fs.Parse(args)
 	if *tenant == "" {
 		*tenant = resolveTenant(*token)
@@ -411,7 +412,7 @@ func vmResize(args []string) {
 	client := dial(*addr)
 	ctx := authedContext(context.Background(), *token)
 	vm, err := client.Resize(ctx, &computev1.ResizeVirtualMachineRequest{
-		TenantId: *tenant, Id: *id, Vcpu: int32(*vcpu), MemoryMb: *memoryMB,
+		TenantId: *tenant, Id: *id, Vcpu: int32(*vcpu), MemoryMb: *memoryMB, AllowMigrate: *allowMigrate,
 	})
 	if err != nil {
 		fatal("resize: %v", err)

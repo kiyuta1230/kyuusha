@@ -130,6 +130,13 @@ func (s *Server) Resize(ctx context.Context, req *computev1.ResizeVirtualMachine
 		vm, err = s.live.LiveResize(ctx, req.GetTenantId(), req.GetId(), req.GetVcpu(), req.GetMemoryMb())
 	} else {
 		vm, err = s.svc.Resize(ctx, req.GetTenantId(), req.GetId(), req.GetVcpu(), req.GetMemoryMb())
+		// allow_migrate opts into ResizeWithMigration only as a fallback for
+		// this one failure mode -- a plain Resize that fails for any other
+		// reason (quota, bad phase, invalid vcpu) is never retried this way,
+		// since moving Hypervisors can't fix those.
+		if errors.Is(err, compute.ErrHypervisorCapacityExceeded) && req.GetAllowMigrate() {
+			vm, err = s.live.ResizeWithMigration(ctx, req.GetTenantId(), req.GetId(), req.GetVcpu(), req.GetMemoryMb())
+		}
 	}
 	if err != nil {
 		return nil, toStatus(err)

@@ -150,6 +150,18 @@ message ResizeVirtualMachineRequest {
   string id = 2;
   int32 vcpu = 3;
   int64 memory_mb = 4;
+  // allow_migrate: only meaningful for the cold path (Stopped VM). When the
+  // VM's current Hypervisor doesn't have room for the new size, a plain
+  // Resize is rejected with ResourceExhausted (kyuusha never migrates a VM
+  // as a side effect the caller didn't ask for). Setting this opts into a
+  // migration-assisted fallback instead: find a different Hypervisor with
+  // room for the new size and move the VM there (same cold-migration
+  // semantics as VirtualMachineService.Migrate -- the root disk is
+  // re-provisioned fresh from the Image on the new Hypervisor, any
+  // guest-side changes to it are lost; NetworkInterfaces/VolumeAttachments
+  // carry over unchanged). Ignored for the live path (Running+
+  // CLOUD_HYPERVISOR): a live resize never migrates.
+  bool allow_migrate = 5;
 }
 
 // AttachVolumeRequest/DetachVolumeRequest: same cold/live branching as
@@ -241,9 +253,12 @@ service VirtualMachineService {
   // Running+CLOUD_HYPERVISOR VM live with no downtime (see
   // ResizeVirtualMachineRequest above): FailedPrecondition for any other
   // phase/driver combination, ResourceExhausted if the new size would
-  // exceed tenant quota or the current Hypervisor's free capacity (no
-  // cross-hypervisor migration -- see docs/specs/vm-scheduling.md),
-  // Unavailable if a live resize's compute-agent round trip times out.
+  // exceed tenant quota or the current Hypervisor's free capacity -- the
+  // cold path only re-schedules to a different Hypervisor if allow_migrate
+  // was set (see ResizeVirtualMachineRequest.allow_migrate and
+  // docs/specs/vm-scheduling.md), otherwise this is a straight rejection,
+  // same as the live path always is. Unavailable if a live resize's
+  // compute-agent round trip times out.
   rpc Resize(ResizeVirtualMachineRequest) returns (VirtualMachine);
   // AttachVolume/DetachVolume: cold (Stopped VM) or live (Running+
   // CLOUD_HYPERVISOR, no downtime) -- see AttachVolumeRequest above. Same

@@ -178,7 +178,9 @@ mutate→`store.Update`をサービス内で完結させる。
   Hypervisorに対してのみ`allocated_vcpu`/`allocated_memory_mb`のデルタ調整を
   行う（[VMスケジュール仕様](vm-scheduling.md)「リサイズ時の容量調整」参照）。
   収まらない場合は別のHypervisorへ再スケジュールせず、そのまま
-  `ResourceExhausted`で拒否する——ユーザーはVMを作り直す以外の手段がない。
+  `ResourceExhausted`で拒否する——`allow_migrate=true`（下記「容量不足時の
+  マイグレーションフォールバック」参照）を明示しない限り、ユーザーはVMを
+  作り直す以外の手段がない。
   ライブ経路でホットプラグ呼び出し自体が失敗した場合は容量予約を解放し、
   `store.Update`が失敗した場合はベストエフォートで旧サイズへの
   補償的resize-backを試みる（失敗時はログのみ、ゲストと永続化済みspecが
@@ -196,6 +198,42 @@ mutate→`store.Update`をサービス内で完結させる。
   (firecracker-boot.md)「spec.vcpuの制約」参照）。`driver_hint=CLOUD_HYPERVISOR`
   にはこの制約は無い。同じ検証は`Create`にも入っている（`internal/compute/
   virtualmachine.go`の`validateVCPUForDriver`）
+
+### 容量不足時のマイグレーションフォールバック（`allow_migrate`、コールドのみ）
+
+`ResizeVirtualMachineRequest.allow_migrate`（既定`false`）を`true`にすると、
+コールドリサイズが現在のHypervisorの容量不足で失敗するケースに限り、
+「マイグレーション」（下記）と同じコールド移動を併用して自動的に解決する。
+ライブ経路（`Running`＋`CLOUD_HYPERVISOR`）では無視される——ライブリサイズは
+マイグレーションしない。
+
+- **常にデフォルトはfalse、明示的なオプトインのみ**: 通常のResizeは同じ
+  Hypervisor上でspecを書き換えるだけなので、既にクローン済みのroot disk
+  （jail/runディレクトリ）は無傷のまま——`allow_migrate=false`（既定）では
+  この性質が保たれる。`allow_migrate=true`で実際に移動が発動した場合のみ、
+  「マイグレーション」節と同じ理由でroot diskの中身が失われる。この
+  非対称性をユーザーに黙って発生させないため、容量不足時に自動発動させる
+  のではなく明示フラグ必須にした（ユーザー確認の上での判断、2026-09-24）
+- **失敗する場合にのみ発動**: `grpcserver.Server.Resize`が、まず通常の
+  `Service.Resize`（コールド、同一Hypervisor限定）を試し、
+  `ErrHypervisorCapacityExceeded`で失敗し、かつ`allow_migrate=true`の場合
+  だけ`Reconciler.ResizeWithMigration`を呼ぶ。quota超過・不正なフェーズ・
+  無効なvcpuなど他の失敗理由では発動しない（Hypervisorを変えても解決しない
+  失敗のため）
+- **`ResizeWithMigration`は同期処理**: VMは`Stopped`なので生きている
+  プロセスは無く、`Migrate`のような`PhaseMigrating`経由の非同期reconcileは
+  不要——Resize自体が元々同期RPC（`Get`→検証→`store.Update`）である契約を
+  崩さない。現在のHypervisorを除外した`scheduleVM`の自動選択で**新サイズが
+  収まる**Hypervisorを探し（`target_hypervisor`を明示指定するオプションは
+  無い——これは配置の意思決定ではなく容量不足のフォールバックのため）、
+  見つかった新Hypervisorへ新サイズ分を予約、旧Hypervisorから旧サイズ分を
+  解放、`vm.Spec`と`vm.Status.hypervisor`を1回の`Update`で書き換える。
+  旧Hypervisorには`Migrate`と同じ`DeleteCommand`をfire-and-forgetで送り、
+  残っていたjail/runディレクトリを掃除する
+- **新Hypervisorでも収まらなければ**`ErrHypervisorCapacityExceeded`
+  （`ResourceExhausted`）——`ErrUnschedulable`ではなく、通常のResize失敗と
+  同じエラーにそろえてある
+- **CLI**: `kyuusha vm resize -id=... -vcpu=... -memory-mb=... -allow-migrate`
 
 ## マイグレーション（`Migrate`、コールドのみ）
 

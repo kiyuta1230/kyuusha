@@ -5,6 +5,20 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-09-24
+
+- `VirtualMachineService.Resize`のコールド経路に、容量不足時のマイグレーション
+  フォールバックを追加（`ResizeVirtualMachineRequest.allow_migrate`、既定
+  `false`）。現在のHypervisorに新サイズが収まらない場合、`allow_migrate=true`を
+  明示した時だけ`Migrate`と同じコールド移動を併用して収まる別Hypervisorへ
+  移す（root diskはそのケースだけImageから作り直され中身が失われる——既定
+  falseのままなら従来通りroot diskは無傷でResourceExhaustedのまま）。
+  `Reconciler.ResizeWithMigration`として実装、`grpcserver.Server.Resize`が
+  通常のコールドResizeが`ErrHypervisorCapacityExceeded`で失敗した場合のみ
+  フォールバックとして呼ぶ。CLIは`kyuusha vm resize -allow-migrate`
+  （[VirtualMachine仕様](specs/virtual-machine.md)「容量不足時のマイグレーション
+  フォールバック」参照）
+
 ## 2026-09-23
 
 - `VirtualMachineService.Migrate`を実装。`Stopped`のVMを別Hypervisorへ移す

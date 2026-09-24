@@ -1012,11 +1012,23 @@ func (x *StartVirtualMachineRequest) GetId() string {
 // relies on resource.Store.Update's own compare-and-swap, rather than
 // asking the caller to supply one.
 type ResizeVirtualMachineRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Id            string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
-	Vcpu          int32                  `protobuf:"varint,3,opt,name=vcpu,proto3" json:"vcpu,omitempty"`
-	MemoryMb      int64                  `protobuf:"varint,4,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Id       string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	Vcpu     int32                  `protobuf:"varint,3,opt,name=vcpu,proto3" json:"vcpu,omitempty"`
+	MemoryMb int64                  `protobuf:"varint,4,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	// allow_migrate: only meaningful for the cold path (Stopped VM). When the
+	// VM's current Hypervisor doesn't have room for the new size, a plain
+	// Resize is rejected with ResourceExhausted (kyuusha never migrates a VM
+	// as a side effect the caller didn't ask for). Setting this opts into a
+	// migration-assisted fallback instead: find a different Hypervisor with
+	// room for the new size and move the VM there (same cold-migration
+	// semantics as VirtualMachineService.Migrate -- the root disk is
+	// re-provisioned fresh from the Image on the new Hypervisor, any
+	// guest-side changes to it are lost; NetworkInterfaces/VolumeAttachments
+	// carry over unchanged). Ignored for the live path (Running+
+	// CLOUD_HYPERVISOR): a live resize never migrates.
+	AllowMigrate  bool `protobuf:"varint,5,opt,name=allow_migrate,json=allowMigrate,proto3" json:"allow_migrate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1077,6 +1089,13 @@ func (x *ResizeVirtualMachineRequest) GetMemoryMb() int64 {
 		return x.MemoryMb
 	}
 	return 0
+}
+
+func (x *ResizeVirtualMachineRequest) GetAllowMigrate() bool {
+	if x != nil {
+		return x.AllowMigrate
+	}
+	return false
 }
 
 // AttachVolumeRequest/DetachVolumeRequest: same cold/live branching as
@@ -1593,12 +1612,13 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x05force\x18\x03 \x01(\bR\x05force\"I\n" +
 	"\x1aStartVirtualMachineRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
-	"\x02id\x18\x02 \x01(\tR\x02id\"{\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\"\xa0\x01\n" +
 	"\x1bResizeVirtualMachineRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x12\n" +
 	"\x04vcpu\x18\x03 \x01(\x05R\x04vcpu\x12\x1b\n" +
-	"\tmemory_mb\x18\x04 \x01(\x03R\bmemoryMb\"\x80\x01\n" +
+	"\tmemory_mb\x18\x04 \x01(\x03R\bmemoryMb\x12#\n" +
+	"\rallow_migrate\x18\x05 \x01(\bR\fallowMigrate\"\x80\x01\n" +
 	"\x13AttachVolumeRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1b\n" +

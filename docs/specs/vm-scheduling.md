@@ -89,8 +89,13 @@ PCIデバイスフィルタは未実装（PCI在庫が存在しないため）�
   「予約」節のスケジューリング失敗時（`ErrUnschedulable`、候補が1つも無い）とは
   意味が異なる別エラーとして扱う——こちらは「候補が無い」のではなく
   「この1台に収まらない」ため
-- **他Hypervisorへの再スケジュールはしない**: 収まらなければそこで拒否して終わり。
-  ユーザーはVMを作り直す以外の手段がない
+- **既定では他Hypervisorへの再スケジュールはしない**: 収まらなければそこで拒否して
+  終わり。`ResizeVirtualMachineRequest.allow_migrate=true`を明示した場合のみ、
+  この1台に収まらないことが唯一の失敗理由であるケースに限って、`Migrate`と同じ
+  コールド移動（現在のHypervisorを除外した`scheduleVM`の自動選択、新サイズ基準）を
+  併用して収まる別Hypervisorへ移す。既定`false`のままなら、ユーザーはVMを
+  作り直す以外の手段がない（[VirtualMachine仕様](virtual-machine.md)
+  「容量不足時のマイグレーションフォールバック」参照）
 - 予約と同じくGet→mutate→Updateの楽観的並行性制御（`updateHypervisor`の
   リトライループ）を再利用する。成功後にVM側の`store.Update`が失敗した場合、
   適用したデルタと同じ値で逆方向の調整（`releaseHypervisorCapacity`相当）を行い

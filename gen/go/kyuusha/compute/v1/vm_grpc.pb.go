@@ -53,9 +53,12 @@ type VirtualMachineServiceClient interface {
 	// Running+CLOUD_HYPERVISOR VM live with no downtime (see
 	// ResizeVirtualMachineRequest above): FailedPrecondition for any other
 	// phase/driver combination, ResourceExhausted if the new size would
-	// exceed tenant quota or the current Hypervisor's free capacity (no
-	// cross-hypervisor migration -- see docs/specs/vm-scheduling.md),
-	// Unavailable if a live resize's compute-agent round trip times out.
+	// exceed tenant quota or the current Hypervisor's free capacity -- the
+	// cold path only re-schedules to a different Hypervisor if allow_migrate
+	// was set (see ResizeVirtualMachineRequest.allow_migrate and
+	// docs/specs/vm-scheduling.md), otherwise this is a straight rejection,
+	// same as the live path always is. Unavailable if a live resize's
+	// compute-agent round trip times out.
 	Resize(ctx context.Context, in *ResizeVirtualMachineRequest, opts ...grpc.CallOption) (*VirtualMachine, error)
 	// AttachVolume/DetachVolume: cold (Stopped VM) or live (Running+
 	// CLOUD_HYPERVISOR, no downtime) -- see AttachVolumeRequest above. Same
@@ -249,9 +252,12 @@ type VirtualMachineServiceServer interface {
 	// Running+CLOUD_HYPERVISOR VM live with no downtime (see
 	// ResizeVirtualMachineRequest above): FailedPrecondition for any other
 	// phase/driver combination, ResourceExhausted if the new size would
-	// exceed tenant quota or the current Hypervisor's free capacity (no
-	// cross-hypervisor migration -- see docs/specs/vm-scheduling.md),
-	// Unavailable if a live resize's compute-agent round trip times out.
+	// exceed tenant quota or the current Hypervisor's free capacity -- the
+	// cold path only re-schedules to a different Hypervisor if allow_migrate
+	// was set (see ResizeVirtualMachineRequest.allow_migrate and
+	// docs/specs/vm-scheduling.md), otherwise this is a straight rejection,
+	// same as the live path always is. Unavailable if a live resize's
+	// compute-agent round trip times out.
 	Resize(context.Context, *ResizeVirtualMachineRequest) (*VirtualMachine, error)
 	// AttachVolume/DetachVolume: cold (Stopped VM) or live (Running+
 	// CLOUD_HYPERVISOR, no downtime) -- see AttachVolumeRequest above. Same
