@@ -62,6 +62,18 @@ kyuushaはVolumeを「プロビジョニングせず参照するだけ」に境�
 この病理を構造として持ち込まない。ネットワークもテナント＝KaaSクラスタ単位の
 L2/L3分離のみに絞り、per-tenant SDNのようなベンダー領域には踏み込まない。
 
+同じ考え方をより狭い形で採ったのがVNAP（VM Network Attach Protocol、
+[architecture.md](architecture.md)「VMのネットワーク接続をCNIのようにプラガブル
+にすべきか」参照）——ネットワークバックエンド全体をNeutronのML2プラグインの
+ように丸ごと差し替え可能にするのではなく、実際にホスト依存で厩舎自身がやらざるを
+得ない「新しく起動したVMのtapデバイスをどのローカルスイッチへ繋ぐか」という
+一点だけを外部バイナリへの委譲対象に絞り、IP/VLANの払い出しやホストを跨ぐ分離
+方式（VLANトランクかVXLANか等）はkyuusha自身の薄い実装のまま据え置いた。
+Cinderのボトルネックが「フルCRUDをベンダーごとに実装させたこと」だったのと
+同様、Neutronのボトルネックも「ネットワーク全体をベンダープラグインに丸ごと
+委ねたこと」であり、答えは同じ形——**委譲する範囲を、本当にホスト依存な最小限の
+一点だけに絞る**。
+
 ### 3. oslo: 標準が無かった時代の自前実装、その後も剥がせない負債
 
 oslo.log/oslo.messaging、そしてCeilometer（MongoDB→Gnocchi→Aodh→Pankoという
@@ -127,6 +139,7 @@ Harvester/KubeVirtとの比較で詳しく説明する。
 | ディスク永続化 | Cinderがスナップショット/レプリケーション等フル機能を持つ | 最小限。ルートディスクはイメージからのephemeral/copy-on-write、永続化が要る場合のみVolumeをattach（[architecture.md](architecture.md)「スコープ縮小の判断」参照） |
 | ブロックストレージのバックエンド抽象化 | Cinderは80以上のベンダー固有ドライバがそれぞれボリュームの作成/削除/エクスポートまでフルCRUDを実装——バックエンドが増えるたびに実装コストが増える分裂したエコシステムになっている | ボリュームの作成/削除/host接続の確立は一切しない。「プロトコル（iSCSI/NVMe-oF/NFS）を抽象化の境界に置き、既存のボリュームを参照して"紐つける"だけ」に責務を縮小——実際の作成・接続はオペレータの仕事（ちょうど`/dev/kvm`と同じ、ホスト側の前提条件）。ベンダー固有ドライバが要らないので、Cinder的なドライバエコシステムそのものを持つ必要がない（[architecture.md](architecture.md)「訂正: 責務の境界を『プロビジョニング＋export』から『参照＋接続』へ縮小」、[Volume仕様](specs/volume.md)参照） |
 | テナントネットワーク | Neutronがoverlay per-tenant/router/floating IP/per-tenant security policyまでフル機能を持つ | 最小限。テナント＝KaaSクラスタ単位のL2/L3分離のみ。クラスタ内Pod間の分離はCNI/NetworkPolicy層(KaaS側)の責務（同上） |
+| ネットワークバックエンドの抽象化 | NeutronのML2プラグインエコシステムは、各ベンダーSDNがネットワーク全体（スイッチング/ルーティング等）を丸ごと実装——バックエンドが増えるたびに実装コストが増える分裂したエコシステムになっている | ホストを跨ぐ分離方式（VLANトランク/VXLANオーバーレイ/EVPN等）はネットワークチームの物理ファブリック設定に完全に委ね、厩舎自身は一切関知しない。厩舎が実際に担う「ローカルなtap-スイッチ接続」だけを**VNAP**という狭い契約で外部バイナリに差し替え可能にする——ネットワークバックエンド全体を丸ごと差し替えるNeutron的な広いベンダープラグインエコシステムは持たない（[architecture.md](architecture.md)「VMのネットワーク接続をCNIのようにプラガブルにすべきか」、[network仕様](specs/network.md)参照） |
 | APIエンドポイント | Keystoneのサービスカタログ方式——各コンポーネントが個別のpublic URLを持ち、クライアントがカタログを見て使い分ける | `api-gateway`という単一の公開エンドポイントに集約。認証・認可の実施点も1箇所（backendは無認証）。K8s API server/BFFパターンと同じ思想（[認証・認可仕様](specs/authn-authz.md)参照） |
 | API設計・制御フロー | REST、命令的CRUD+ポーリング、手続き型のサービス間RPC（`taskflow`のような補助ライブラリが必要になるほど） | 宣言的API（spec/status分離、Watch、resource_versionによる楽観的並行性制御）を内部通信・外部APIの両方に適用。ただしKubernetes CRD/Aggregated API Serverそのものにはしない——なぜそれで良いのかは後述のHarvester/KubeVirt比較参照 |
 | リソースの語彙・抽象化 | Flavorという料理的比喩の固定カタログ、Port（仮想スイッチの差し込み口という実装比喩）等、実装都合の比喩・用語が随所にある | 固定カタログは廃止し`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定（Quotaと役割重複と判断）。命名も実態を直接表す語を選ぶ（`Port`→`NetworkInterface`等）。ただし`Volume`/`Subnet`のような業界共通語はそのまま使う（[architecture.md](architecture.md)「設計原則: 命名はOpenStackを踏襲しない」参照） |
@@ -189,7 +202,7 @@ Kubernetesの**思想**は借りつつ、CRD/Aggregated API Serverという**実
 
 - 赤の他人同士が同居する公開マルチテナントクラウド（テナント分離の脅威モデルが違う）
 - 数千ハイパーバイザー・10万VM超のような1桁上のスケール（スケジューラのキャッシュ/インデックス戦略、DBシャーディング等、別の前提の見直しが要る）
-- OpenStackが持つドライバ/プラグインの広いエコシステム（ネットワークバックエンド等の選択肢の広さ）。ただしブロックストレージについては、広いドライバエコシステムが要らないこと自体が上表の設計判断——非ゴールというより意図的な回避
+- OpenStackが持つドライバ/プラグインの広いエコシステムそのもの（ベンダーごとに作り込む選択肢の広さ）。ただしブロックストレージ・ネットワークのどちらも、広いドライバエコシステムが要らないこと自体が上表の設計判断——非ゴールというより意図的な回避（ネットワークはVNAPという、本当にホスト依存な一点だけへの差し替え可能性に絞っている）
 
 詳しい経緯・議論・トレードオフは[docs/architecture.md](architecture.md)を、現状の
 機能単位の仕様は[docs/specs/](specs/README.md)を参照。
