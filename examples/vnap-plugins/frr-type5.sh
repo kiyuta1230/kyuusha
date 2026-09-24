@@ -1,0 +1,160 @@
+#!/bin/sh
+# frr-type5.sh -- a reference VNAP (VM Network Attach Protocol; see
+# docs/architecture.md「VMのネットワーク接続をCNIのようにプラガブルにすべきか」
+# and docs/specs/network.md「VNAP（ローカルなtap配線プラグイン契約）」) plugin
+# for a pure EVPN Type-5 deployment (see docs/network-deployment-guide.md
+# 「3.5. Type-5（EVPN pure L3）デプロイの場合」).
+#
+# Unlike the built-in Linux-bridge implementation (one shared bridge per
+# Subnet, holding that Subnet's gateway_ip -- a real local L2 domain every
+# VM on that Subnet, on this host, sits on), this gives each VM's tap its
+# own point-to-point-shaped presence: no bridge, no shared L2 domain at
+# all, matching Type-5's "no L2 stretch needed, route by exact /32 host
+# route" model. Per VM, "attach":
+#
+#   1. assigns the Subnet's gateway_ip as a /32 address directly on the
+#      tap, so the kernel natively answers the guest's ARP for its own
+#      gateway -- the guest's own network-config is an ordinary subnet
+#      CIDR + gateway4, completely unchanged from the built-in Linux-bridge
+#      path (see internal/compute-agent/vmm/seed.go's buildNetworkConfig)
+#   2. enables proxy_arp on the tap, so the guest's ARP for another VM it
+#      believes is on-link (same Subnet CIDR, per its own network-config)
+#      gets answered with this tap's own MAC too -- the kernel then
+#      IP-forwards the frame via that destination's own /32 route (added
+#      by this same script, for that VM's own attach -- possibly via a
+#      different tap on this same host, or learned from FRR/BGP if it's on
+#      a different Hypervisor) rather than ever needing a real shared L2
+#      segment
+#   3. installs a kernel host route for the VM's own IP (/32, via this
+#      tap) and injects the same /32 into FRR (via vtysh, into a per-tenant
+#      VRF) as a static route
+#
+# This script only ever talks to FRR's RIB (a static route in one VRF) --
+# it is NOT responsible for BGP/EVPN configuration itself (VRF/RD/RT
+# definitions, or the "redistribute static" policy that actually turns
+# these static routes into EVPN Type-5 advertisements). That remains the
+# network team's job, same as the rest of docs/network-deployment-guide.md
+# -- see the REQUIRED companion FRR config sketch at the bottom of this
+# file.
+#
+# Requires (on whatever host runs compute-agent with
+# -network-attach-bin=/path/to/this/script): a real iproute2 `ip` (not
+# busybox's -- needs `ip addr replace`/`ip route replace`), `sysctl`, `jq`,
+# and FRR's `vtysh`, all reachable, running as a user with CAP_NET_ADMIN
+# (root is simplest).
+#
+# This is a REFERENCE implementation, meant to be read and adapted, not
+# deployed unmodified: it does no locking against concurrent attach/detach
+# for different VMs (vtysh serializes its own config changes, but this
+# script's own kernel-side steps are not transactional across the three
+# ip/sysctl calls), and the "vrfNNNNNNNNNNNN" VRF-naming convention below
+# is this script's own invention -- match it to whatever your own FRR VRF
+# naming actually is.
+set -eu
+
+verb="$1"
+req="$(cat)"
+
+json() { printf '%s' "$req" | jq -r ".$1 // empty"; }
+
+tap="$(json tap_name)"
+tenant_id="$(json tenant_id)"
+
+# Mirrors internal/compute-agent/netsetup.TapName's own reasoning: a VRF
+# name may need to double as a Linux VRF net-device name (IFNAMSIZ-1 = 15
+# chars), too short for kyuusha's own tenant_id ("tenant-<16 hex chars>").
+vrf="vrf$(printf '%s' "$tenant_id" | sha256sum | cut -c1-12)"
+
+case "$verb" in
+attach)
+	ip_addr="$(json ip_address)"
+	gateway_ip="$(json gateway_ip)"
+	if [ -z "$ip_addr" ] || [ -z "$gateway_ip" ]; then
+		echo "frr-type5: attach requires ip_address and gateway_ip" >&2
+		exit 1
+	fi
+
+	cleanup() {
+		ip route del "${ip_addr}/32" dev "$tap" 2>/dev/null || true
+		ip addr del "${gateway_ip}/32" dev "$tap" 2>/dev/null || true
+	}
+
+	if ! ip link set "$tap" up; then
+		echo "frr-type5: ip link set $tap up failed" >&2
+		exit 1
+	fi
+	# "replace", not "add": attach must be idempotent (see this script's
+	# doc comment and docs/specs/network.md「VNAP」「冪等性」) -- a resent
+	# CreateCommand re-invokes Wire for a tap already wired.
+	if ! ip addr replace "${gateway_ip}/32" dev "$tap"; then
+		echo "frr-type5: assign gateway_ip to $tap failed" >&2
+		exit 1
+	fi
+	if ! sysctl -qw "net.ipv4.ip_forward=1"; then
+		echo "frr-type5: enable ip_forward failed" >&2
+		cleanup
+		exit 1
+	fi
+	if ! sysctl -qw "net.ipv4.conf.${tap}.proxy_arp=1"; then
+		echo "frr-type5: enable proxy_arp on $tap failed" >&2
+		cleanup
+		exit 1
+	fi
+	if ! ip route replace "${ip_addr}/32" dev "$tap"; then
+		echo "frr-type5: install host route for $ip_addr failed" >&2
+		cleanup
+		exit 1
+	fi
+	if ! vtysh -c "configure terminal" -c "vrf ${vrf}" \
+		-c "ip route ${ip_addr}/32 ${tap}" -c "end"; then
+		echo "frr-type5: FRR route injection for $ip_addr failed" >&2
+		cleanup
+		exit 1
+	fi
+	;;
+
+detach)
+	# detach's payload never carries ip_address (see docs/specs/
+	# network.md「VNAP」: removing a port never needs to know what it used
+	# to be configured with) -- recover it from the kernel's own /32 route
+	# for this tap instead, which (unlike a bridge attachment) this script
+	# itself installed at attach time and which still exists at this point
+	# (netsetup.DeleteTap calls detach before removing the tap device).
+	# iproute2 prints a /32 host route without the "/32" suffix (e.g. "10.9.9.5
+	# scope link"), so this takes the first field as-is rather than grepping
+	# for one.
+	ip_addr="$(ip -4 -o route show dev "$tap" 2>/dev/null | awk '{print $1}' | head -n1)"
+	if [ -n "$ip_addr" ]; then
+		vtysh -c "configure terminal" -c "vrf ${vrf}" \
+			-c "no ip route ${ip_addr}/32 ${tap}" -c "end" 2>/dev/null || true
+	fi
+	# The tap device itself (and everything tied to its lifetime -- its
+	# kernel /32 route, its own proxy_arp sysctl entry) is removed right
+	# after this by netsetup.DeleteTap's own "ip link delete"; only FRR's
+	# separately-held RIB entry needed this script's help to clean up.
+	;;
+
+*)
+	echo "frr-type5: unknown verb '$verb' (want attach|detach)" >&2
+	exit 1
+	;;
+esac
+
+# --- Required companion FRR config (sketch, not exhaustive) ---
+#
+# vrf vrfNNNNNNNNNNNN
+#  vni <per-tenant L3VNI, network team's own numbering>
+# exit-vrf
+# !
+# router bgp <local ASN> vrf vrfNNNNNNNNNNNN
+#  address-family ipv4 unicast
+#   redistribute static
+#  exit-address-family
+#  address-family l2vpn evpn
+#   advertise ipv4 unicast
+#  exit-address-family
+# !
+#
+# See docs/network-deployment-guide.md for the surrounding RT/RD
+# requirements this config sits inside of (per-tenant RT unique across AZs,
+# RD that does NOT derive from kyuusha's vlan_id alone).

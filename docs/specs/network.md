@@ -217,6 +217,15 @@ compute-agentコンテナ・ゲストrootfsのどちらもbusybox `ip`しか持�
   ログのみで継続——tapデバイス自体は、detachプラグインの成否に関わらず必ず削除される
   （プラグイン障害でtapがリークすることはない）
 
+**参考実装**: `examples/vnap-plugins/frr-type5.sh`——EVPN Type-5（pure L3）
+デプロイ向けのサンプル（[network-deployment-guide.md](../network-deployment-guide.md)
+「3.5. Type-5（EVPN pure L3）デプロイの場合」参照）。共有ブリッジを使わず、
+VMごとのtapへ`gateway_ip`を`/32`で直接付与しproxy ARPを有効化した上で、VM自身の
+IPを`/32`のホストルートとしてカーネルとFRR（`vtysh`経由）の両方へ注入する。
+playgroundで実機確認済み（Firecrackerゲストがブリッジ無しで実際に起動しゲスト
+自身がgatewayへのpingに成功、VM削除時にFRR側のルートも正しく引き上げられることを
+確認）。
+
 ## エンドポイント
 
 `network :8084`（`SubnetService`, `NetworkInterfaceService`）。api-gateway経由でのみ

@@ -7,6 +7,17 @@
 
 ## 2026-09-25
 
+- `docs/network-deployment-guide.md`に、EVPN Type-5（pure L3）デプロイ向けの
+  「3.5. Type-5デプロイの場合」節を追加。`vlan_id`は厩舎自身のローカルな帳簿番号
+  （Hypervisor上のブリッジ/ルーティング分離キー）であり、ワイヤ上の本物の802.1Qタグ
+  であることを強制されない点、「1 VLAN = 1 VRF」という既定マッピングがType-5には
+  適用されない点、Route Distinguisherを`vlan_id`単体から機械的に導出してはいけない点
+  （AZ内でのみ一意なため）を明記。あわせて`examples/vnap-plugins/frr-type5.sh`
+  （VNAPのサンプル実装）を追加——共有ブリッジを使わず、VMごとのtapへ`gateway_ip`を
+  `/32`で直接付与しproxy ARPを有効化した上で、VM自身のIPを`/32`のホストルートとして
+  カーネルとFRR（`vtysh`経由）へ注入する。playgroundで実機確認済み（[network仕様]
+  (specs/network.md)「VNAP（ローカルなtap配線プラグイン契約）」参照）
+
 - `internal/compute-agent/netsetup`に、tap配線のローカルなスイッチattach/detach
   ステップを外部バイナリへ委譲できるVNAP（VM Network Attach Protocol）契約を実装。
   compute-agentの`-network-attach-bin`で指定、未指定なら既存の固定Linuxブリッジ
