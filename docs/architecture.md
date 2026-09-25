@@ -1595,8 +1595,8 @@ distribution）を新しいdocker-composeサービスとして追加し、`image
 HTTP経由取得時と全く同じパス・digestで保存されることを確認した。
 
 残る未決事項は[docs/open-questions.md](open-questions.md)「イメージの
-ローカル管理/OCIレジストリ対応」参照（エビクション未実装、Track 3着手基準は
-引き続き未定義）。
+ローカル管理/OCIレジストリ対応」参照（キャッシュのエビクションは2026-09-22に
+実装済み。カーネル自動選択・Track 3着手基準は引き続き未定義）。
 
 ### `kyuusha image build`の実装
 
