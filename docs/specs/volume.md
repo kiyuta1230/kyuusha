@@ -193,15 +193,17 @@ NATS直結**（computeのgRPCを経由しない）: block-storageが「どのHyp
 （`internal/block-storage/nats.go`）が持つ——compute-agentもこの2つのストリームの存在を
 `EnsureStreams`で保証する（block-storageと起動順序が前後してもよいように）。
 
-**スケジューリング時のフィルタリングは未実装**（`docs/open-questions.md`参照）:
-あるVolumeを要求するVMが、そのVolumeの`storage_connection`を宣言していないHypervisorへ
-スケジュールされる可能性は現状排除されていない。その場合、`volumeref.Resolve`がその
-Hypervisor上で失敗し、そのVolumeだけアタッチされずにVMが起動する（IPが解決しなかった
-NetworkInterfaceと同じ「寛容な劣化」——今のところこれで実害は無いという判断だが、v1の
-スコープ外として明示的に先送り）。ただし、VolumeそのものはCreate時に既に
-`storage_connection`が存在するStorageConnectionを参照しているか検証されるため
-（下記「Create時のバリデーション」）、この寛容な劣化が起きるのは「Volumeは正しく
-登録されているが、たまたま繋がっていないHypervisorへスケジュールされた」場合のみ。
+**スケジューリング時のフィルタリングを実装済み**（[VMスケジュール仕様]
+(vm-scheduling.md)「フィルタ（ハード制約）」参照）: VMが要求するVolumeの
+`storage_connection`を全て自己申告済みのHypervisorだけがスケジュール候補に残る
+（`internal/compute/volume.go`の`validateVolumes`がzoneの導出と全く同じ
+タイミング・仕組みで、Create時とスケジュール時（PhasePendingの`reconcile()`）
+の両方でVolumeを引き直し、重複除去した`storage_connection`一覧を返す）。
+`Migrate`・`Resize`の容量不足フォールバックの再スケジュールも同じフィルタを
+通る。VolumeそのものはCreate時に既に`storage_connection`が存在する
+StorageConnectionを参照しているか検証されるため（下記「Create時の
+バリデーション」）、このフィルタが実際に候補を絞り込むのは「Volumeは正しく
+登録されているが、一部のHypervisorだけがその接続を宣言している」場合。
 
 ## compute-agent側の配線（`internal/compute-agent/volumeref`）
 

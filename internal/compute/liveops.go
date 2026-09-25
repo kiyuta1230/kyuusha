@@ -206,7 +206,7 @@ func (r *Reconciler) LiveAttachVolume(ctx context.Context, tenantID, id, volumeI
 	if !isLiveEligible(vm) {
 		return nil, fmt.Errorf("%w: live attach requires Running+CLOUD_HYPERVISOR (phase=%s, driver=%s)", ErrInvalidPhase, vm.Status.Phase, vm.Spec.DriverHint)
 	}
-	if err := validateVolumes(ctx, r.svc.volumeClient, tenantID, []VolumeRequest{{VolumeID: volumeID, DeviceHint: deviceHint}}); err != nil {
+	if _, err := validateVolumes(ctx, r.svc.volumeClient, tenantID, []VolumeRequest{{VolumeID: volumeID, DeviceHint: deviceHint}}); err != nil {
 		return nil, err
 	}
 

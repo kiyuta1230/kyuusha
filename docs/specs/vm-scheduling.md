@@ -42,6 +42,8 @@ sequenceDiagram
 4. `status.allocatable_vcpu - status.allocated_vcpu >= 要求vcpu`
 5. `status.allocatable_memory_mb - status.allocated_memory_mb >= 要求memory_mb`
 6. `status.zone == requiredZone`（`requiredZone`が空でない場合のみ）
+7. `spec.volumes`が要求する`storage_connection`が全て`status.storage_connections`
+   に含まれる（`requiredConnections`が空でない場合のみ）
 
 `requiredZone`は`spec.network_interfaces`が参照するSubnetのzoneから導出する
 （[network.md](network.md)「compute側の統合」参照）。マルチAZにまたがる
@@ -50,6 +52,15 @@ VirtualMachineは作れない、という`docs/architecture.md`の決定を実�
 PhasePendingの`reconcile()`が毎回Subnetを引き直してzoneを求めるため、
 Create時点から実際のスケジュール時点までの間にSubnetが変わっていても
 （例えば削除されていても）常に最新の状態で評価される。
+
+`requiredConnections`は同様に`spec.volumes`が参照するVolumeの
+`spec.storage_connection`から`validateVolumes`が毎回導出する（重複除去済み）
+——zoneと全く同じ「Create時点でキャッシュせず、実際のスケジュール時点で
+都度Volumeを引き直す」設計（[Volume仕様](volume.md)「スケジューリング時の
+フィルタリング」参照）。`Migrate`・`Resize`の容量不足フォールバックが行う
+再スケジュールもこの同じフィルタを通るため、移行先で対象Volumeが解決できない
+Hypervisorへ移すことはない。`network_interfaces`が空のVMと同様、`volumes`が
+空のVM（接続要件なし）には影響しない。
 
 PCIデバイスフィルタは未実装（PCI在庫が存在しないため）。
 

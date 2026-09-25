@@ -183,24 +183,37 @@ func (s *Service) runHealthSweep(ctx context.Context) {
 	}
 }
 
-// scheduleVM picks a Hypervisor satisfying spec's hard constraints (see
-// "フィルタ（ハード制約）"; PCI filters are deferred -- no PCI inventory
-// exists yet), reserves capacity against it, and returns its id. Callers
-// are responsible for then transitioning the VM to Scheduled and releasing
-// the reservation (releaseHypervisorCapacity) if that fails.
-//
-// requiredZone (derived from spec.network_interfaces' Subnets by the
-// caller -- see reconciler.go) restricts candidates to that zone; empty
-// means no constraint (a VM with no network_interfaces yet, since
-// compute-agent doesn't wire anything real regardless -- see
-// docs/specs/network.md).
-//
-// excludeHypervisorID, when non-empty, drops that one Hypervisor from the
-// candidate list before Pick sees it -- Migrate's auto-pick path
-// (scheduleMigration) uses this so a migration can never "succeed" by
-// picking the VM's current Hypervisor back again; every other caller
-// passes "".
-func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, requiredZone, excludeHypervisorID string) (string, error) {
+// scheduleConstraints bundles scheduleVM/scheduleMigration's optional hard
+// constraints beyond spec's own vcpu/memory_mb/driver_hint (see
+// filterSchedulable) -- a struct rather than a growing positional
+// parameter list, since new constraint kinds keep getting added here (PCI
+// device requirements are the next candidate).
+type scheduleConstraints struct {
+	// Zone restricts candidates to spec.network_interfaces' Subnets' zone
+	// (derived by the caller -- see reconciler.go); empty means no
+	// constraint (a VM with no network_interfaces yet, since compute-agent
+	// doesn't wire anything real regardless -- see docs/specs/network.md).
+	Zone string
+	// StorageConnections requires every name to already be present in a
+	// candidate's self-reported Status.StorageConnections (derived by the
+	// caller from spec.volumes via validateVolumes); empty means no
+	// constraint. See docs/specs/volume.md「スケジューリング時のフィルタ
+	// リング」.
+	StorageConnections []string
+	// Exclude, when non-empty, drops that one Hypervisor from the
+	// candidate list before Pick sees it -- Migrate's auto-pick path
+	// (scheduleMigration) uses this so a migration can never "succeed" by
+	// picking the VM's current Hypervisor back again; every other caller
+	// leaves it "".
+	Exclude string
+}
+
+// scheduleVM picks a Hypervisor satisfying spec's hard constraints plus c
+// (see "フィルタ（ハード制約）"; PCI filters are deferred -- no PCI
+// inventory exists yet), reserves capacity against it, and returns its id.
+// Callers are responsible for then transitioning the VM to Scheduled and
+// releasing the reservation (releaseHypervisorCapacity) if that fails.
+func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c scheduleConstraints) (string, error) {
 	candidates, err := s.hypervisors.List(ctx, "")
 	if err != nil {
 		return "", err
@@ -209,10 +222,7 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, requi
 	if driver == VmmDriverUnspecified {
 		driver = VmmDriverFirecracker
 	}
-	filtered := filterSchedulable(candidates, driver, spec.VCPU, spec.MemoryMB, requiredZone)
-	if excludeHypervisorID != "" {
-		filtered = excludeHypervisorFrom(filtered, excludeHypervisorID)
-	}
+	filtered := filterSchedulable(candidates, driver, spec.VCPU, spec.MemoryMB, c)
 	picked, err := s.scheduler.Pick(filtered)
 	if err != nil {
 		return "", err
@@ -230,12 +240,13 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, requi
 // currentHypervisor (so migrating never just re-picks the same place);
 // a non-empty target is Migrate's admin-specified path, validated against
 // the exact same hard constraints scheduleVM's auto-pick applies
-// (Ready/schedulable/driver/zone/capacity) rather than trusted blindly --
-// ErrUnschedulable if it doesn't qualify, ErrValidation if it names the
-// VM's current Hypervisor (migrating to the same place is never valid).
-func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, requiredZone, currentHypervisor, target string) (string, error) {
+// (Ready/schedulable/driver/zone/storage connections/capacity) rather than
+// trusted blindly -- ErrUnschedulable if it doesn't qualify, ErrValidation
+// if it names the VM's current Hypervisor (migrating to the same place is
+// never valid).
+func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, requiredZone, currentHypervisor, target string, requiredConnections []string) (string, error) {
 	if target == "" {
-		return s.scheduleVM(ctx, spec, requiredZone, currentHypervisor)
+		return s.scheduleVM(ctx, spec, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, Exclude: currentHypervisor})
 	}
 	if target == currentHypervisor {
 		return "", fmt.Errorf("%w: target_hypervisor %q is the vm's current Hypervisor", ErrValidation, target)
@@ -248,7 +259,7 @@ func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec
 	if driver == VmmDriverUnspecified {
 		driver = VmmDriverFirecracker
 	}
-	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, requiredZone)) == 0 {
+	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections})) == 0 {
 		return "", ErrUnschedulable
 	}
 	if err := s.reserveHypervisorCapacity(ctx, target, spec.VCPU, spec.MemoryMB); err != nil {
@@ -257,17 +268,7 @@ func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec
 	return target, nil
 }
 
-func excludeHypervisorFrom(candidates []Hypervisor, id string) []Hypervisor {
-	var out []Hypervisor
-	for _, h := range candidates {
-		if h.Meta.ID != id {
-			out = append(out, h)
-		}
-	}
-	return out
-}
-
-func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, memoryMB int64, requiredZone string) []Hypervisor {
+func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, memoryMB int64, c scheduleConstraints) []Hypervisor {
 	var out []Hypervisor
 	for _, h := range candidates {
 		if h.Status.Phase != HypervisorPhaseReady {
@@ -285,12 +286,38 @@ func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, me
 		if h.Status.AllocatableMemoryMB-h.Status.AllocatedMemoryMB < memoryMB {
 			continue
 		}
-		if requiredZone != "" && h.Status.Zone != requiredZone {
+		if c.Zone != "" && h.Status.Zone != c.Zone {
+			continue
+		}
+		if c.Exclude != "" && h.Meta.ID == c.Exclude {
+			continue
+		}
+		if !hasAllStorageConnections(h.Status.StorageConnections, c.StorageConnections) {
 			continue
 		}
 		out = append(out, h)
 	}
 	return out
+}
+
+// hasAllStorageConnections reports whether have (a Hypervisor's
+// self-reported connections) includes every name in want (a VM's Volumes'
+// required connections, from validateVolumes). want empty is trivially
+// satisfied.
+func hasAllStorageConnections(have []StorageConnection, want []string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	haveNames := make(map[string]bool, len(have))
+	for _, sc := range have {
+		haveNames[sc.Name] = true
+	}
+	for _, w := range want {
+		if !haveNames[w] {
+			return false
+		}
+	}
+	return true
 }
 
 func hasDriver(supported []string, driver VmmDriver) bool {

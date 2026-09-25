@@ -18,23 +18,36 @@ import (
 // Create time (reconciler.go's PhaseScheduled branch), which can only be
 // as fresh as the moment it runs, same reasoning as re-deriving the
 // network zone there instead of trusting this Create-time check.
-func validateVolumes(ctx context.Context, client blockstoragev1.VolumeServiceClient, tenantID string, volumes []VolumeRequest) error {
+//
+// storageConnections (mirroring validateNetworkInterfaces' returned zone)
+// is the deduplicated set of every referenced Volume's spec.storage_connection
+// -- fed into scheduleConstraints so scheduleVM/scheduleMigration only
+// consider Hypervisors self-reporting all of them (see docs/specs/volume.md
+// 「スケジューリング時のフィルタリング」). A Volume with no
+// storage_connection set contributes nothing (defensive only -- Create-time
+// validation elsewhere already requires one).
+func validateVolumes(ctx context.Context, client blockstoragev1.VolumeServiceClient, tenantID string, volumes []VolumeRequest) (storageConnections []string, err error) {
+	seen := make(map[string]bool, len(volumes))
 	for _, v := range volumes {
 		if v.VolumeID == "" {
-			return fmt.Errorf("%w: volumes[].volume_id is required", ErrValidation)
+			return nil, fmt.Errorf("%w: volumes[].volume_id is required", ErrValidation)
 		}
 		vol, err := client.Get(ctx, &blockstoragev1.GetVolumeRequest{TenantId: tenantID, Id: v.VolumeID})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("%w: volume_id %q does not exist", ErrValidation, v.VolumeID)
+				return nil, fmt.Errorf("%w: volume_id %q does not exist", ErrValidation, v.VolumeID)
 			}
-			return err
+			return nil, err
 		}
 		if vol.GetStatus().GetPhase() != "Ready" {
-			return fmt.Errorf("%w: volume %q is not Ready (phase=%s)", ErrValidation, v.VolumeID, vol.GetStatus().GetPhase())
+			return nil, fmt.Errorf("%w: volume %q is not Ready (phase=%s)", ErrValidation, v.VolumeID, vol.GetStatus().GetPhase())
+		}
+		if conn := vol.GetSpec().GetStorageConnection(); conn != "" && !seen[conn] {
+			seen[conn] = true
+			storageConnections = append(storageConnections, conn)
 		}
 	}
-	return nil
+	return storageConnections, nil
 }
 
 // volumeAttachmentName is createVolumeAttachments' deterministic

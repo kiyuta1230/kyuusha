@@ -187,7 +187,7 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	if _, err := validateNetworkInterfaces(ctx, s.subnetClient, tenantID, spec.NetworkInterfaces); err != nil {
 		return nil, err
 	}
-	if err := validateVolumes(ctx, s.volumeClient, tenantID, spec.Volumes); err != nil {
+	if _, err := validateVolumes(ctx, s.volumeClient, tenantID, spec.Volumes); err != nil {
 		return nil, err
 	}
 
@@ -630,7 +630,7 @@ func (s *Service) AttachVolume(ctx context.Context, tenantID, id, volumeID, devi
 	if vm.Status.Phase != PhaseStopped {
 		return nil, fmt.Errorf("%w: vm must be Stopped to AttachVolume (phase=%s)", ErrInvalidPhase, vm.Status.Phase)
 	}
-	if err := validateVolumes(ctx, s.volumeClient, tenantID, []VolumeRequest{{VolumeID: volumeID, DeviceHint: deviceHint}}); err != nil {
+	if _, err := validateVolumes(ctx, s.volumeClient, tenantID, []VolumeRequest{{VolumeID: volumeID, DeviceHint: deviceHint}}); err != nil {
 		return nil, err
 	}
 

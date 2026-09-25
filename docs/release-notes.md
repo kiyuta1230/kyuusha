@@ -5,6 +5,23 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-09-26
+
+- スケジューラにVolume容量ではなく**storage_connectionによるフィルタ**を追加
+  （`docs/specs/volume.md`「スケジューリング時のフィルタリング」が長らく
+  未実装として残していた項目）。VMが要求するVolumeの`storage_connection`を
+  全て自己申告済みのHypervisorだけが候補に残る——`internal/compute/
+  hypervisor_service.go`の`filterSchedulable`/`scheduleVM`/`scheduleMigration`
+  を`scheduleConstraints`構造体（`Zone`/`StorageConnections`/`Exclude`）へ
+  リファクタし、`validateVolumes`がzoneの導出と同じ仕組みで
+  `storage_connection`一覧を返すように変更。Create時の初回スケジュール
+  だけでなく、`Migrate`・`Resize`の容量不足フォールバックの再スケジュールも
+  同じフィルタを通る。playgroundで実機確認済み: あるHypervisorだけに
+  特定の`storage_connection`を宣言させ、空き容量では別のHypervisorが
+  選ばれるはずの状況でも、正しくその接続を持つHypervisorへスケジュール
+  され、Volumeが実際にAttachedまで到達することを確認
+  （[VMスケジュール仕様](specs/vm-scheduling.md)「フィルタ（ハード制約）」参照）
+
 ## 2026-09-25
 
 - `VirtualMachineService.Create`向けのAdmission Webhook（Kubernetesの

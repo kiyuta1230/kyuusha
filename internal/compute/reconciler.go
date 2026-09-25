@@ -193,8 +193,25 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			}
 			return
 		}
+		// Same re-derive-fresh reasoning as zone above, for the storage
+		// connections a Hypervisor must already self-report to be eligible
+		// (see docs/specs/volume.md「スケジューリング時のフィルタリング」).
+		storageConnections, err := validateVolumes(ctx, r.svc.volumeClient, vm.Meta.TenantID, vm.Spec.Volumes)
+		if err != nil {
+			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+				Type:             "Unschedulable",
+				Status:           resource.ConditionTrue,
+				Reason:           "VolumeInvalid",
+				Message:          err.Error(),
+				LastTransitionAt: time.Now(),
+			})
+			if _, uerr := r.svc.Update(ctx, &vm); uerr != nil {
+				slog.Error("unschedulable: report condition failed", "vm_id", vm.Meta.ID, "err", uerr)
+			}
+			return
+		}
 
-		hypervisorID, err := r.svc.scheduleVM(ctx, vm.Spec, zone, "")
+		hypervisorID, err := r.svc.scheduleVM(ctx, vm.Spec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections})
 		if err != nil {
 			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 				Type:             "Unschedulable",
@@ -272,9 +289,23 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 		}
 		return
 	}
+	storageConnections, err := validateVolumes(ctx, r.svc.volumeClient, vm.Meta.TenantID, vm.Spec.Volumes)
+	if err != nil {
+		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+			Type:             "Unmigratable",
+			Status:           resource.ConditionTrue,
+			Reason:           "VolumeInvalid",
+			Message:          err.Error(),
+			LastTransitionAt: time.Now(),
+		})
+		if _, uerr := r.svc.Update(ctx, &vm); uerr != nil {
+			slog.Error("migrate: report condition failed", "vm_id", vm.Meta.ID, "err", uerr)
+		}
+		return
+	}
 
 	oldHypervisor := vm.Status.Hypervisor
-	newHypervisor, err := r.svc.scheduleMigration(ctx, vm.Spec, zone, oldHypervisor, vm.Status.MigrateTarget)
+	newHypervisor, err := r.svc.scheduleMigration(ctx, vm.Spec, zone, oldHypervisor, vm.Status.MigrateTarget, storageConnections)
 	if err != nil {
 		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 			Type:             "Unmigratable",
@@ -389,12 +420,16 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 	if err != nil {
 		return nil, err
 	}
+	storageConnections, err := validateVolumes(ctx, r.svc.volumeClient, vm.Meta.TenantID, vm.Spec.Volumes)
+	if err != nil {
+		return nil, err
+	}
 
 	oldHypervisor := vm.Status.Hypervisor
 	newSpec := vm.Spec
 	newSpec.VCPU = vcpu
 	newSpec.MemoryMB = memoryMB
-	newHypervisor, err := r.svc.scheduleVM(ctx, newSpec, zone, oldHypervisor)
+	newHypervisor, err := r.svc.scheduleVM(ctx, newSpec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, Exclude: oldHypervisor})
 	if err != nil {
 		return nil, fmt.Errorf("%w: no other hypervisor has room for the new size either", ErrHypervisorCapacityExceeded)
 	}
