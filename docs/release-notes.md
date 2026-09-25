@@ -7,6 +7,21 @@
 
 ## 2026-09-25
 
+- `VirtualMachineService.Create`向けのAdmission Webhook（Kubernetesの
+  `ValidatingAdmissionWebhook`相当）を実装。新規`internal/admissionwebhook`
+  パッケージ（リソース非依存、HTTP POST+JSON、gRPCではない）を`compute`サービス
+  起動時の`-admission-webhook-urls`（カンマ区切り、複数指定可）で有効化。
+  Image/NetworkInterface/Quotaの内部バリデーションを全て通した後・実際に
+  永続化する前の最後のゲートとして呼ばれ、設定した全URLが`allowed:true`を
+  返して初めて許可する（1つでも拒否すれば全体を拒否）。webhookが疎通不能な
+  場合の挙動は`-admission-webhook-fail-open`で選択可能（既定fail-closed）。
+  webhook URLの一覧はサービス起動時のオペレータ設定のみで、APIからテナントが
+  登録する経路は作らない——`internal/compute-agent/netsetup`のVNAPプラグイン
+  と同じセキュリティ上の割り切り。playgroundで実機確認済み（許可/拒否双方の
+  応答、webhook疎通不能時のfail-closed拒否、拒否されたCreateがVMを一切
+  永続化しないことを確認。[外部システム連携仕様](specs/external-integration.md)
+  「ゲート系(作成側): Admission Webhook」参照）
+
 - `docs/network-deployment-guide.md`に、EVPN Type-5（pure L3）デプロイ向けの
   「3.5. Type-5デプロイの場合」節を追加。`vlan_id`は厩舎自身のローカルな帳簿番号
   （Hypervisor上のブリッジ/ルーティング分離キー）であり、ワイヤ上の本物の802.1Qタグ

@@ -923,10 +923,14 @@ kyuushaでは、この2つを別の仕組みとして素直に解決する。
   notificationと違い取りこぼしても再開できるため、新しい仕組みは要らない
 - **ゲート系（Delete側）**: 本節で説明する**Finalizer**（Kubernetesの同名パターンを
   そのまま借用）
-- **ゲート系（Create側）**: ValidatingAdmissionWebhook相当の仕組みが要るはずだが、
-  同期的な外部呼び出しの分だけ可用性のカップリング・timeout/failure policy設計・
-  「誰がwebhookを登録できるか」というセキュリティ面まで検討が必要で、Finalizerより
-  一段複雑。設計自体は今後の課題として明示しておくが、本パスでは実装しない
+- **ゲート系（Create側）**: ValidatingAdmissionWebhook相当（`internal/admissionwebhook`、
+  2026-09-25実装）。Finalizerより一段複雑だった懸念点はそれぞれこう解決した:
+  可用性のカップリングは`-admission-webhook-fail-open`で運用者が選択可能に
+  （既定はfail-closed、安全側）、「誰がwebhookを登録できるか」は`compute`
+  サービス起動時のオペレータ設定のみに限定（APIからテナントが登録する経路は
+  作らない——`internal/compute-agent/netsetup`のVNAPプラグインと同じ発想）
+  することで回避した。詳細は[外部システム連携仕様](specs/external-integration.md)
+  「ゲート系(作成側): Admission Webhook」参照
 
 ### 仕組み
 

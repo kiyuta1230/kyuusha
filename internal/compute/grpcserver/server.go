@@ -231,6 +231,10 @@ func toStatus(err error) error {
 		return status.Error(codes.ResourceExhausted, err.Error())
 	case errors.Is(err, compute.ErrLiveOpUnavailable):
 		return status.Error(codes.Unavailable, err.Error())
+	case errors.Is(err, compute.ErrAdmissionDenied):
+		return status.Error(codes.PermissionDenied, err.Error())
+	case errors.Is(err, compute.ErrAdmissionUnavailable):
+		return status.Error(codes.Unavailable, err.Error())
 	}
 	if status.Code(err) != codes.Unknown {
 		return err

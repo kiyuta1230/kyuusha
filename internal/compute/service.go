@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/kiyuta1230/kyuusha/internal/admissionwebhook"
 	"github.com/kiyuta1230/kyuusha/internal/authn"
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 
@@ -20,12 +22,14 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("vm: not found")
-	ErrConflict      = errors.New("vm: resource_version conflict")
-	ErrValidation    = errors.New("vm: validation failed")
-	ErrHistoryPruned = errors.New("vm: watch resume point too old, relist required")
-	ErrQuotaExceeded = errors.New("vm: tenant quota exceeded")
-	ErrInvalidPhase  = errors.New("vm: not in a phase this operation allows")
+	ErrNotFound             = errors.New("vm: not found")
+	ErrConflict             = errors.New("vm: resource_version conflict")
+	ErrValidation           = errors.New("vm: validation failed")
+	ErrHistoryPruned        = errors.New("vm: watch resume point too old, relist required")
+	ErrQuotaExceeded        = errors.New("vm: tenant quota exceeded")
+	ErrInvalidPhase         = errors.New("vm: not in a phase this operation allows")
+	ErrAdmissionDenied      = errors.New("vm: rejected by admission webhook")
+	ErrAdmissionUnavailable = errors.New("vm: admission webhook unavailable")
 )
 
 // EventType and Event are re-exported from the generic resource.Store so
@@ -62,6 +66,15 @@ type Service struct {
 	volumeClient           blockstoragev1.VolumeServiceClient
 	volumeAttachmentClient blockstoragev1.VolumeAttachmentServiceClient
 	quota                  *quotaChecker
+
+	// AdmissionGate is Create's optional external validation gate (see
+	// internal/admissionwebhook and docs/specs/external-integration.md
+	// 「ゲート系(作成側)」). The zero value (no URLs configured) is a safe
+	// no-op, so this is a plain exported field cmd/compute/main.go sets
+	// after NewService returns -- like fcvmm.Manager's NetworkAttachBin,
+	// this is operator config, not something NewService's constructor
+	// signature needs to grow for.
+	AdmissionGate admissionwebhook.Gate
 
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
@@ -191,6 +204,19 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 		return nil, fmt.Errorf("%w: tenant %q", ErrQuotaExceeded, tenantID)
 	}
 
+	// Last gate before actually creating anything, same "a doomed
+	// VirtualMachine is never created just to be marked Error afterwards"
+	// reasoning Quota above already follows -- this is also the most
+	// expensive check (a network round trip per configured webhook), so it
+	// only runs once every cheaper internal check has already passed.
+	if webhookAllowed, reason, webhookErr := s.AdmissionGate.Validate(ctx, admissionwebhook.Request{
+		Operation: "CREATE", Resource: "VirtualMachine", TenantID: tenantID, Name: name, Spec: admissionVMSpecJSON(spec),
+	}); webhookErr != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAdmissionUnavailable, webhookErr)
+	} else if !webhookAllowed {
+		return nil, fmt.Errorf("%w: %s", ErrAdmissionDenied, reason)
+	}
+
 	out, err := s.store.Create(ctx, tenantID, name, VirtualMachine{
 		Spec:   spec,
 		Status: VirtualMachineStatus{Phase: PhasePending},
@@ -205,6 +231,45 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	s.usage[tenantID] = usage
 
 	return &out, nil
+}
+
+// admissionVMSpec is the JSON shape of VirtualMachineSpec sent as
+// admissionwebhook.Request.Spec -- a separate, explicitly-tagged type
+// rather than marshaling VirtualMachineSpec directly, since that Go struct
+// has no json tags of its own (nothing internal to kyuusha needed them
+// before now) and would otherwise serialize as PascalCase field names,
+// inconsistent with the snake_case every other kyuusha wire format uses.
+// v1: the fields most likely to matter for an external policy decision
+// (sizing, image, driver, referenced Subnets/Volumes); extend as real
+// webhook consumers need more.
+type admissionVMSpec struct {
+	ImageID          string   `json:"image_id"`
+	VCPU             int32    `json:"vcpu"`
+	MemoryMB         int64    `json:"memory_mb"`
+	DriverHint       string   `json:"driver_hint"`
+	UserData         string   `json:"user_data,omitempty"`
+	NetworkSubnetIDs []string `json:"network_subnet_ids,omitempty"`
+	VolumeIDs        []string `json:"volume_ids,omitempty"`
+}
+
+func admissionVMSpecJSON(spec VirtualMachineSpec) json.RawMessage {
+	out := admissionVMSpec{
+		ImageID: spec.ImageID, VCPU: spec.VCPU, MemoryMB: spec.MemoryMB,
+		DriverHint: string(spec.DriverHint), UserData: spec.UserData,
+	}
+	for _, ni := range spec.NetworkInterfaces {
+		out.NetworkSubnetIDs = append(out.NetworkSubnetIDs, ni.SubnetID)
+	}
+	for _, v := range spec.Volumes {
+		out.VolumeIDs = append(out.VolumeIDs, v.VolumeID)
+	}
+	payload, err := json.Marshal(out)
+	if err != nil {
+		// Every field above is a plain string/int/slice-of-string -- this
+		// cannot actually fail for a well-formed VirtualMachineSpec.
+		return json.RawMessage("{}")
+	}
+	return payload
 }
 
 func (s *Service) Get(ctx context.Context, tenantID, id string) (*VirtualMachine, error) {

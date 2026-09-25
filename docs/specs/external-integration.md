@@ -14,7 +14,7 @@ CMDB登録、ネットワーク台帳登録、独自バリデーション、削�
 |---|---|---|
 | 通知系（何が起きたかを確実に拾いたい） | VM起動完了でCMDB登録、IP払い出しでネットワーク台帳登録 | **Watch**（実装済み、全リソース共通） |
 | ゲート系・削除側（外部の確認が取れるまで実削除させたくない） | VM削除時、そのインターフェースのIPが外部ACLにまだ残っていたら拒否 | **Finalizer**（実装済み、現状VirtualMachineのみ） |
-| ゲート系・作成側（作成前に外部バリデーションを通したい） | 独自ポリシーチェックをCreate前に挟む | **未実装**（ValidatingAdmissionWebhook相当、設計のみ） |
+| ゲート系・作成側（作成前に外部バリデーションを通したい） | 独自ポリシーチェックをCreate前に挟む | **Admission Webhook**（`internal/admissionwebhook`、現状VirtualMachineのみ） |
 
 ## 通知系: Watch
 
@@ -114,11 +114,49 @@ api-gatewayを経由しない内部呼び出しから付いたエントリ）の
 として誰でも削除できる——後方互換のためであり、新規に追加するエントリが
 この状態になることは通常ない（api-gateway経由なら必ず`sub`が刻まれる）。
 
-## ゲート系(作成側): 未実装
+## ゲート系(作成側): Admission Webhook
 
 Create前の同期的な外部バリデーション（Kubernetesの`ValidatingAdmissionWebhook`
-相当）は設計のみで実装していない。Finalizerより複雑（同期的な外部呼び出しに
-伴う可用性のカップリング、timeout/failure policy設計、「誰がwebhookを登録
-できるか」というセキュリティ）なため、後回しにしている。今のCreate時
-バリデーション（Image/NetworkInterface/Quota等）はすべてkyuusha内部にハード
-コードされており、外部から差し込む口は無い。
+相当）。`internal/admissionwebhook`が実装、`compute.Service.Create`
+（VirtualMachineのみ、現状）が、Image/NetworkInterface/Quotaといった内部
+バリデーションを全て通した後・実際に永続化する前の最後のゲートとして呼ぶ
+（Quotaと同じ「doomedなVirtualMachineを作ってからErrorにしない」設計に従う）。
+
+### 契約
+
+- **呼び出し**: 設定された全URLへ並行にHTTP POST（JSON）。**全てが`allowed: true`
+  を返して初めて許可**——Kubernetes自身の「全てのvalidating webhookが合意して
+  初めて許可」と同じ意味論（「どれか1つの承認で十分」ではない）
+  ```json
+  {"operation":"CREATE","resource":"VirtualMachine","tenant_id":"...","name":"...","spec":{...}}
+  ```
+  レスポンス:
+  ```json
+  {"allowed":false,"reason":"..."}
+  ```
+- **gRPCではなくHTTP+JSON**: 外部バリデータはkyuushaが実装言語・スタックを
+  制御できない第三者ツールが典型なので、生成されたgRPCクライアントを要求せず
+  Kubernetes自身のAdmissionReviewと同じ素朴なHTTP規約にした
+- **Validatingのみ、Mutatingではない**: `docs/specs/external-integration.md`が
+  当初から「ValidatingAdmissionWebhook相当」と明記していた通り、返せるのは
+  許可/拒否のみ。specを書き換えるMutating側の意味論（merge-patch等）は実装しない
+- **失敗時の挙動は設定可能**: webhookが疎通不能/タイムアウトした場合、既定
+  （`-admission-webhook-fail-open=false`）はfail-closed（拒否）。true にすると
+  fail-open（暗黙に許可）——ただし**明示的な拒否は他のwebhookが疎通不能でも
+  常に優先される**（fail-openは「答えが得られない」場合の話であり、「はっきり
+  ノーと言われた」場合を上書きしない）
+- **タイムアウト**: `-admission-webhook-timeout`（既定3秒）。webhookごとに独立
+- **セキュリティ**: webhook URLの一覧は`compute`サービス起動時のオペレータ
+  設定（`-admission-webhook-urls`、カンマ区切り）のみ——APIからテナントが
+  登録する経路は無い。「誰がwebhookを登録できるか」という当初の懸念を、
+  `internal/compute-agent/netsetup`のVNAPプラグイン（`-network-attach-bin`）
+  と同じ「オペレータ設定のみ、テナント非公開」という考え方で回避している
+- **エラーマッピング**: 明示的な拒否は`PermissionDenied`（理由を含む）、
+  webhook疎通不能によるfail-closedは`Unavailable`
+
+### 現状の対応範囲: VirtualMachineの`Create`のみ
+
+Finalizerと同じ絞り込み方針——`internal/admissionwebhook.Gate`自体は
+リソース非依存の汎用実装だが、実際に呼ぶ経路があるのは
+`compute.Service.Create`だけ。Update/Delete側へのゲートや他リソース種別への
+展開は、実需が出た時点で追加する。

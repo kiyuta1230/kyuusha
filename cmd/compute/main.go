@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
+	"github.com/kiyuta1230/kyuusha/internal/admissionwebhook"
 	"github.com/kiyuta1230/kyuusha/internal/authn"
 	"github.com/kiyuta1230/kyuusha/internal/compute"
 	"github.com/kiyuta1230/kyuusha/internal/compute/grpcserver"
@@ -62,6 +64,9 @@ func main() {
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA both callers' and dialed services' certificates must chain to")
 	bootstrapTokenPublicKey := flag.String("bootstrap-token-public-key", "hack/devkeys/jwt-dev.pub", "PEM public key verifying Hypervisor self-registration bootstrap tokens (see internal/bootstraptoken, 'kyuusha hypervisor bootstrap-token create')")
 	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
+	admissionWebhookURLs := flag.String("admission-webhook-urls", "", "comma-separated external validation webhook URLs consulted synchronously on every VirtualMachine Create (see internal/admissionwebhook and docs/specs/external-integration.md \"ゲート系(作成側)\"). All must allow; empty (the default) disables this entirely")
+	admissionWebhookTimeout := flag.Duration("admission-webhook-timeout", admissionwebhook.DefaultTimeout, "per-webhook timeout for -admission-webhook-urls")
+	admissionWebhookFailOpen := flag.Bool("admission-webhook-fail-open", false, "if true, an unreachable/erroring webhook is treated as an implicit allow instead of denying the Create (an explicit deny from a different webhook is never overridden either way)")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -188,6 +193,13 @@ func main() {
 	if err != nil {
 		slog.Error("new compute service", "err", err)
 		os.Exit(1)
+	}
+	if *admissionWebhookURLs != "" {
+		svc.AdmissionGate = admissionwebhook.Gate{
+			URLs:     strings.Split(*admissionWebhookURLs, ","),
+			Timeout:  *admissionWebhookTimeout,
+			FailOpen: *admissionWebhookFailOpen,
+		}
 	}
 	// recon.Run is deliberately never called here -- see this package's doc
 	// comment. This value exists so grpcserver.New below can call its
