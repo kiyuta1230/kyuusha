@@ -3,6 +3,27 @@
 docs/architecture.md の「未決事項」は設計レベルの論点用。こちらは実装を進める中で
 出てきた、まだ判断を保留している細かい話を随時追加していくメモ。
 
+## ingress_rules/egress_rules周りで意図的に見送った2項目（未着手、2026-09-27）
+
+ACL強制自体（`internal/compute-agent/secacl`/`nftacl`、`UpdateFirewallRules`）は
+実装済み（詳細は[network仕様](specs/network.md)「セキュリティバックエンド」）だが、
+このタイミングでは以下2つは意図的にスコープ外とした（両方とも「ACL強制と同時に
+やるべきか」という一体感のある論点ではあるが、今回のリクエスト——プラガブルな
+セキュリティバックエンド＋ingress/egress_rulesの更新対応——の範囲外）:
+
+1. **`SubnetSpec.shared_with_tenant_ids`によるクロステナントCIDR許可の検証**:
+   `docs/architecture.md`「ソフトウェア側の強制」節が既に設計として書いている
+   （あるテナントの`ingress_rules`が他テナントのSubnet CIDRを`allow`する場合、
+   対象Subnetの`shared_with_tenant_ids`に自テナントが含まれていなければCreate/
+   `UpdateFirewallRules`時にバリデーションエラーとする）が、実装はまだ無い
+2. **`mesh_group`が一致するSubnet同士の自動許可**: [network仕様](specs/network.md)
+   「`spec.mesh_group`」が同様に設計意図だけを記録している状態のまま
+
+どちらも実装するなら`internal/network`の`validateFirewallRules`（またはその
+呼び出し元）に手を入れる形になる見込み。次にingress_rules/egress_rules周りへ
+着手するタイミングで、architecture.mdの「未決事項」へ格上げするか、ここで
+そのまま片付けるかを判断する。
+
 ## コールドマイグレーションのroot disk転送（解決済み・実装済み、2026-09-26）
 
 `Migrate(transfer_root_disk=true)`として実装済み——既定`false`のまま

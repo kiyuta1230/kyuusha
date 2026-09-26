@@ -57,20 +57,23 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
 - SubnetのDelete/NetworkInterfaceのDeleteは、`Ready`で実際に払い出し済みだった場合のみ
   VLAN ID/IPアドレスをプールへ返却する
 
-## `spec.mesh_group`（宣言のみ、ACL強制はまだ）
+## `spec.mesh_group`（宣言のみ、自動許可はまだ）
 
 同一テナントが複数のAZにまたがってSubnetを持つ場合（AZ毎に別Subnet/別VLANになる設計、
 `docs/architecture.md`「マルチAZにまたがるVirtualMachineは作れない」参照）、AZ間の
-**経路**はRoute Targetによる自動交換で疎通するが、`NetworkInterfaceSpec.ingress_rules`の
-**ACL**はSubnet CIDR外を既定で拒否するため、AZ間で通信したい場合は本来Subnetの組み合わせ
+**経路**はRoute Targetによる自動交換で疎通するが、`NetworkInterfaceSpec.ingress_rules`/
+`egress_rules`の**ACL**はSubnet CIDR外を既定で拒否するため（下記「セキュリティ
+バックエンド」参照、これ自体は実装済み）、AZ間で通信したい場合は本来Subnetの組み合わせ
 ごとに手動でallowルールを書く必要がある。
 
 `spec.mesh_group`は、この手間を減らすための**意図の宣言**フィールド（`shared_with_tenant_ids`
 と同じ位置づけ）: 同一テナント内で同じ`mesh_group`値を持つSubnet同士は、デフォルトで
-互いを許可する対象とみなす、という設計上の意図だけを表す。**現状これを実際に強制する
-ACLエンジンはどこにも存在しない**（`ingress_rules`自体もまだ実際のホスト側ファイアウォール
-に反映されていない、同じ段階）。tap配線・ACL適用が実装される時に、`mesh_group`が一致する
-Subnetの組み合わせを自動許可する、という形で参照される想定。
+互いを許可する対象とみなす、という設計上の意図だけを表す。**現状これを実際に自動許可へ
+反映する経路はまだ無い**（`shared_with_tenant_ids`によるクロステナントCIDR許可の検証も
+同様に未実装）——ACL強制自体（`ingress_rules`/`egress_rules`）は実装済みだが、
+`mesh_group`一致を根拠に暗黙のallowルールを注入する処理はまだ`UpdateFirewallRules`にも
+Create時にも組み込まれておらず、[open-questions.md](../open-questions.md)の未解決事項
+として残っている。
 
 ## Create時のバリデーション
 
@@ -107,14 +110,14 @@ Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
   （`compute.Reconciler.releaseIfReserved`参照）。`docs/architecture.md`が決めている
   「子リソースが親の存在を10分毎にGetで確認し、NotFoundなら自分を消す」という
   オーファンGCパターンは2026-09-13に実装済み（`network.Service.sweepOrphanedNetworkInterfaces`、
-  `Service.Run`から10分間隔で起動）。networkはこのためだけにcomputeの
-  VirtualMachineServiceへ直接gRPCで問い合わせる`computeClient`を新たに持つ
-  （`-compute-addr`）。ただしこの`Service.Run`（IPAM割り当て・オーファンGCを含む
-  reconcileループ本体）を実際に起動するのは`network`本体（gRPC APIのみ、複数レプリカ可、
-  `computeClient`は`nil`のまま使わない）ではなく、別バイナリ`network-reconciler`
-  （`cmd/network-reconciler/main.go`、常に単一レプリカ）——`-compute-addr`もこちらが持つ。
-  VMが存在する限り触らず、`Get`が`NotFound`を返した場合のみ削除する（一時的な疎通不可
-  などその他のエラーは「わからないので消さない」で次回ティックに委ねる）
+  `Service.Run`から10分間隔で起動）。この`Service.Run`（IPAM割り当て・オーファンGCを含む
+  reconcileループ本体）を実際に起動するのは`network`本体（gRPC APIのみ、複数レプリカ可）
+  ではなく、別バイナリ`network-reconciler`（`cmd/network-reconciler/main.go`、常に単一
+  レプリカ）——`-compute-addr`もこちらが持つ。VMが存在する限り触らず、`Get`が`NotFound`
+  を返した場合のみ削除する（一時的な疎通不可などその他のエラーは「わからないので消さない」
+  で次回ティックに委ねる）。`network`本体（gRPC APIバイナリ）も別の理由で同じ
+  `computeClient`を独自に持つ——`UpdateFirewallRules`がACL変更を通知すべきHypervisorを
+  解決するためで、こちらはオーファンGCとは無関係（下記「セキュリティバックエンド」参照）
 
 ## compute側の統合
 
@@ -231,6 +234,86 @@ IPを`/32`のホストルートとしてカーネルとFRR（`vtysh`経由）の
 playgroundで実機確認済み（Firecrackerゲストがブリッジ無しで実際に起動しゲスト
 自身がgatewayへのpingに成功、VM削除時にFRR側のルートも正しく引き上げられることを
 確認）。
+
+## セキュリティバックエンド（ホスト側ACL強制プラグイン契約）
+
+`ingress_rules`（VMへの着信を許可するルール）/`egress_rules`（VM発の送信を許可する
+ルール）は、VNAPと同じ設計思想でプラガブルにしたホスト側ACL強制エンジンによって実際に
+強制される。`-security-backend-bin`（compute-agentのフラグ）を指定すると、tapの
+ワイヤリング（VNAP）とは独立に外部バイナリへ委譲できる——未指定（既定）なら
+`internal/compute-agent/nftacl`（後述）が担う。VNAPと1つのプラグインに統合していない
+理由: 配線（tapをどのスイッチに繋ぐか）とACL強制（何を通すか）は直交する関心事で、
+片方だけ差し替えたい運用（例: 既定のLinuxブリッジ配線のままeBPF/OVS ACLだけ独自実装
+に差し替える）に対応するため。
+
+- **契約はVNAPと同型**（`<bin> attach`/`<bin> detach`をexec、標準入力にJSON、成否は
+  exit codeのみ、タイムアウト10秒、プラグイン側が冪等性の責務を負う）——ただし
+  ペイロードの中身もフラグも別（`-network-attach-bin`とは無関係）
+- **attachのpayload**: `tap_name`/`iface_id`/`vm_id`/`tenant_id`/`subnet_cidr`/
+  `gateway_ip`/`ingress_rules`/`egress_rules`
+- **呼び出しタイミング**: VM Boot時（`netsetup.Wire`成功直後）と、`UpdateFirewallRules`
+  呼び出し後の再適用時（後述、NATS経由）の両方
+- **detachのpayload**: `tap_name`/`iface_id`/`vm_id`/`tenant_id`のみ（VNAPのdetachと
+  同じ理由）
+- **失敗時の扱い**: Boot時のattach失敗はVNAPのattach失敗と同じエラー経路（Boot全体が
+  失敗、`cleanup()`が後始末）。detach失敗はログのみで継続
+
+### デフォルト実装: `internal/compute-agent/nftacl`（bridgeファミリ）
+
+`nft`コマンドをexecする実装（Go nftablesライブラリへの依存は追加しない、`netsetup`の
+`ip`exec方式と同じ流儀）。**netdevファミリ（tapごとの独立したingress/egressフック）
+ではなく、bridgeファミリのforwardフックを使う**——実機検証の結果、netdevファミリでは
+`ct state`（確立済み接続の自動許可）が使えないことが判明したため（"Protocol error"。
+netdevフックはconntrackが確立されるより前段のフックで、環境依存の問題ではなくnetdev
+ファミリ自体の制約）。この設計上の代償として、**このデフォルト実装はtapがLinuxブリッジ
+のポートであることを前提とする**——VNAPで非ブリッジ配線（`examples/vnap-plugins/
+frr-type5.sh`のようなEVPN Type-5 pure L3構成）を使う場合、`-security-backend-bin`で
+別の（ブリッジを前提としない）セキュリティバックエンドを組み合わせる必要がある。
+
+- 1つの共有base chain（`bridge kyuusha_acl base`、`hook forward`、`policy accept`——
+  このフックはホスト上の全ブリッジ転送トラフィックに発火するため、kyuushaが管理しない
+  トラフィックに影響してはならない）が、稼働中のtapごとに`iifname "<tap>" jump <tap>-in`
+  /`oifname "<tap>" jump <tap>-out`という2本のガード規則を持つ
+- `<tap>-in`（`iifname`一致＝VM自身が送信した通信）が`egress_rules`を、`<tap>-out`
+  （`oifname`一致＝VMへ配送される通信）が`ingress_rules`を強制する——tap自身を主語にした
+  netfilterの方向と、VMを主語にしたspecの命名は逆になる点に注意
+- 各チェーン内は`accept`ではなく`return`で「許可」を表す（VM間通信は1回のforwardフックで
+  送信元・宛先両方のtapのチェーンを通過する必要があるため、`accept`で早期終了すると
+  もう一方のチェーンが評価されなくなってしまう）。`drop`で明示的な拒否、チェーン末尾にも
+  `drop`（該当ルール無しはデフォルト拒否）。両チェーンをreturnで通過した後、実際に許可
+  するのはbase chain自身の`policy accept`
+- 実装済み・playground実機確認済み（VM起動直後のデフォルト拒否ベースライン、
+  `UpdateFirewallRules`後のルール反映を確認——詳細はdocs/release-notes.md参照）。
+  「compute-agentプロセスの再起動を跨いでnftablesルールが残る」という主張自体は
+  正しい（`ip netns`を破棄しない限りnftablesはカーネル側の状態でありプロセスの
+  生死に依らない、tapの`TUNSETPERSIST`と全く同じ理屈）が、**playground環境では
+  実機確認できない**——`docker compose restart compute-agent-N`はコンテナの
+  ネットワーク名前空間ごと作り直すため、tap/nftablesを含むそのnetns内の状態が
+  丸ごと失われ、かつコンテナ内の全プロセス（Firecracker/jailerの子プロセスも
+  含む）が道連れに終了する。これはベアメタル環境でcompute-agentだけを
+  （systemd等で）再起動する場合とは異なるDocker特有の挙動で、今回のACL機能に
+  限らずVNAP以来のtap永続化の前提そのものに付随する、コンテナ化playground側の
+  制約として認識しておく
+
+### `UpdateFirewallRules`とホストへの反映
+
+`NetworkInterfaceService.UpdateFirewallRules`（`ingress_rules`/`egress_rules`を
+まとめて置き換える専用RPC、`resource_version`は持たない——Resize等と同じ
+Get-then-mutate-then-Update規約）は、etcdへの書き込みに成功すると、対象VMが現在
+稼働しているHypervisorへNATS経由（`ms.network.cmd.<hypervisor>.network_interface.
+update_acl`、`network`独自のJetStreamストリーム`NETWORK_CMD`）でベストエフォート通知
+する（`internal/network/service.go`の`publishUpdateACL`）。Hypervisor解決に失敗する・
+まだスケジュールされていない・NATS publish自体が失敗、のいずれも通知を諦めるだけで
+RPC自体は成功のまま返す（etcdへの反映は既に完了しているため）。
+
+compute-agent側は`update_acl`コマンドを受信すると、稼働中の全ドライバへ
+`ApplyACL(vm_id, iface_id, ...)`を試し、該当tapを持つドライバが見つかるまでメッセージを
+**Ackしない**——JetStreamの再配送（デフォルトAckWait、`MaxDeliver=20`で打ち切り）に
+そのまま「VM起動待ち」のリトライを任せる。`UpdateACLCommand`は常にその時点の
+**全ルールセット**を運ぶ（差分ではない）ため、再配送や順序前後があっても最終的に
+正しい状態へ収束する。ただし`resource_version`を使い、より新しいコマンドが既に適用済み
+なら古いコマンドを再適用しない（compute-agent再起動でこの記録が失われても問題ない——
+次に来る`update_acl`が常に完全な状態を運ぶため）。
 
 ## エンドポイント
 

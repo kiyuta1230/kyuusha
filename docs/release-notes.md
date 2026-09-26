@@ -35,6 +35,69 @@
   `InvalidArgument`として拒否されることを確認（詳細は
   [Quota仕様](specs/quota.md)「imageのQuota判定」「networkのQuota判定」参照）
 
+- NetworkInterfaceのACL(`ingress_rules`、新規`egress_rules`)強制を実装し、
+  セキュリティバックエンドをVNAPと同じ発想でプラガブルにした。`FirewallRule`
+  メッセージ自体は既存のまま、`NetworkInterfaceSpec`に`egress_rules`
+  （field 4）を新設。専用RPC`UpdateFirewallRules`（`resource_version`無し、
+  Resizeと同じGet-then-mutate-then-Update規約）を追加し、Create後の
+  ingress_rules/egress_rules変更にも対応——既存の汎用`Update` RPCはこの2
+  フィールドの変更を拒否するよう変更し、変更経路を一本化した。
+  compute-agent側に新規`-security-backend-bin`フラグ（`internal/
+  compute-agent/secacl`が契約、既定実装は新規`internal/compute-agent/
+  nftacl`）を追加。`network`独自のNATS JetStreamストリーム`NETWORK_CMD`
+  を新設し、`UpdateFirewallRules`が対象VMの稼働Hypervisorへベストエフォート
+  で変更を通知する（`cmd/network`がこの通知のためだけにcompute/NATSへ
+  依存するようになった——`cmd/compute`が既に持つ同種の例外と同じ扱い）。
+
+  実機検証で設計を1回転させている: 当初netdevファミリ（tapごとの独立した
+  ingress/egressフック）で実装したが、`ct state established,related`が
+  netdevファミリで使えない（"Protocol error"、conntrackが確立される前段の
+  フックであるための構造的な制約）ことが判明し、bridgeファミリの
+  forwardフック＋共有base chainへのjump方式に設計を変更した（`nft -j list
+  chain`のJSON出力でjumpルールの既存有無・handleを判定し、重複追加/
+  削除漏れを防ぐ）。この変更に伴い、デフォルト実装はtapがLinuxブリッジの
+  ポートであることを前提とする——非ブリッジVNAP配線（EVPN Type-5等）では
+  別のセキュリティバックエンドプラグインが必要になる、という制約を受け入れた
+  （詳細は[network仕様](specs/network.md)「セキュリティバックエンド」、
+  経緯は`docs/architecture.md`「ACL強制もVNAPと同じ発想でプラガブルに
+  すべきか」参照）。`shared_with_tenant_ids`によるクロステナントCIDR検証と
+  `mesh_group`自動許可は、今回は意図的にスコープ外のまま
+  （[open-questions.md](open-questions.md)参照）。
+
+  `kyuusha netif create`/新設`kyuusha netif set-firewall-rules`に
+  `-ingress-rules`/`-egress-rules`（`protocol:port_range:source_cidr:action`の
+  カンマ区切り）を追加。実装の過程で、`internal/gateway`の
+  `NetworkInterfaceProxy`（api-gatewayがnetworkへ委譲する層）に
+  `UpdateFirewallRules`の転送が無く、CLIから呼ぶと`Unimplemented`になる
+  抜けを発見・修正——`internal/network/grpcserver`側にRPCハンドラを足しても、
+  api-gateway側の委譲層は自動的には追従しないため、新RPCを追加する際は
+  両方を見る必要がある、という教訓
+  （`internal/gateway/networkinterface_proxy.go`）。
+
+  playgroundで実機確認済み: `scenario.sh`のVM+NetworkInterface作成経路
+  （`-subnets=`による実Firecracker起動）が新しいsecacl/nftacl配線を経ても
+  無退行であること（実ゲストが起動しSubnetのgateway_ipへの実pingに成功）、
+  対象tapに`kyuusha_acl`テーブル・`<tap>-in`/`<tap>-out`両チェーンが
+  デフォルト拒否ベースライン（`ct state established,related`＋自Subnet CIDR＋
+  gateway_ip許可＋末尾drop）付きで実際に作られること、`netif
+  set-firewall-rules`呼び出し後に対象Hypervisorの`nft list chain`へ
+  該当ルール（`tcp dport 22`/`tcp dport 443`等）が実際に反映されることを
+  確認。なお「compute-agentプロセス再起動を跨いでnftables状態が残る」こと
+  自体は`docker compose restart`では検証できなかった（Dockerコンテナの
+  再起動はネットワーク名前空間ごと作り直し、tap/nftablesを含むnetns内状態と
+  コンテナ内の全プロセス——Firecracker/jailerの子プロセスも——を道連れにする。
+  VNAP以来のtap永続化の前提そのものに付随するplayground特有の制約で、
+  今回のACL機能固有の問題ではない。詳細は[network仕様](specs/network.md)
+  「デフォルト実装: internal/compute-agent/nftacl」参照）。
+  併せて`playground/scenario.sh`自身の2つの既存バグ（`Subnet`/
+  `NetworkInterface`のCreate直後レスポンスが`phase=Ready`である前提の
+  チェックが、実際は非同期割当のため常にPending——`subnet get`/`netif get`
+  でポーリングするよう修正）を検証中に発見・修正した（本来は今回のACL機能とは
+  無関係な、以前の非同期割当移行以来の潜在バグ）。VolumeAttachmentが
+  Attachedへ到達しない別の既存問題を検証中に見つけたが、こちらはblock-storage
+  側の話でACL機能とは無関係のため、この変更では対応していない
+  （別途調査が必要）。
+
 ## 2026-09-26
 
 - スケジューラにVolume容量ではなく**storage_connectionによるフィルタ**を追加

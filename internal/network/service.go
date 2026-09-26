@@ -2,16 +2,20 @@ package network
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -96,6 +100,15 @@ type Service struct {
 
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
+
+	// js is used only by UpdateFirewallRules's publishUpdateACL, to notify
+	// whichever hypervisor is currently running a NetworkInterface's VM
+	// that its ingress_rules/egress_rules changed. nil (e.g. cmd/network-
+	// reconciler, which serves no UpdateFirewallRules RPC at all, and most
+	// tests) makes publishUpdateACL a no-op -- best-effort, never blocks or
+	// fails the RPC itself (see docs/specs/network.md「セキュリティ
+	// バックエンド」).
+	js jetstream.JetStream
 }
 
 // NewService constructs a Service and synchronously rebuilds its VLAN/IP
@@ -103,7 +116,7 @@ type Service struct {
 // etcd before returning -- callers must not start serving Create requests
 // until this returns, or a Create racing either rebuild could hand out an
 // id/address/quota charge the rebuild was about to reserve.
-func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, computeClient computev1.VirtualMachineServiceClient) (*Service, error) {
+func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, computeClient computev1.VirtualMachineServiceClient, js jetstream.JetStream) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
@@ -122,6 +135,7 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 		computeClient:  computeClient,
 		identityClient: identityClient,
 		quota:          quota,
+		js:             js,
 		vlans:          newVLANPool(),
 		ips:            newIPPool(),
 		usage:          make(map[string]tenantUsage),
@@ -626,12 +640,118 @@ func (s *Service) ListNetworkInterfaces(ctx context.Context, tenantID string) ([
 	return s.interfaces.List(ctx, tenantID)
 }
 
+// UpdateNetworkInterface rejects any request whose spec.ingress_rules/
+// egress_rules differ from the currently-stored value -- UpdateFirewallRules
+// is the only sanctioned path for changing either list (see its own doc
+// comment and the UpdateFirewallRules RPC's doc comment in the proto),
+// since only that path validates the rules and notifies the owning
+// hypervisor via NATS. Without this check, a caller could smuggle a rule
+// change through here and silently desync the enforced host state from
+// etcd.
 func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInterface) (*NetworkInterface, error) {
+	current, err := s.interfaces.Get(ctx, iface.Meta.TenantID, iface.Meta.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !firewallRulesEqual(current.Spec.IngressRules, iface.Spec.IngressRules) ||
+		!firewallRulesEqual(current.Spec.EgressRules, iface.Spec.EgressRules) {
+		return nil, fmt.Errorf("%w: ingress_rules/egress_rules can only be changed via UpdateFirewallRules", ErrValidation)
+	}
+
 	out, err := s.interfaces.Update(ctx, *iface)
 	if err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// firewallRulesEqual treats nil and empty-but-non-nil as equal (proto
+// decoding of an empty repeated field can go either way depending on the
+// call path) before falling back to reflect.DeepEqual, which does not.
+func firewallRulesEqual(a, b []FirewallRule) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// UpdateFirewallRules replaces a NetworkInterface's ingress_rules/
+// egress_rules wholesale (not a delta/merge, same convention as Resize's
+// new_vcpu/new_memory_mb) and best-effort notifies the hypervisor currently
+// running its VM via NATS (see publishUpdateACL) so the change actually
+// takes effect on the host, not just in etcd.
+func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, ingress, egress []FirewallRule) (*NetworkInterface, error) {
+	if err := validateFirewallRules(ingress); err != nil {
+		return nil, err
+	}
+	if err := validateFirewallRules(egress); err != nil {
+		return nil, err
+	}
+
+	n, err := s.interfaces.Get(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	n.Spec.IngressRules = ingress
+	n.Spec.EgressRules = egress
+
+	out, err := s.interfaces.Update(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+
+	s.publishUpdateACL(ctx, out)
+	return &out, nil
+}
+
+// publishUpdateACL resolves the hypervisor currently running n's VM (via
+// the same computeClient sweepOrphanedNetworkInterfaces already holds) and
+// publishes an UpdateACLCommand to it. Best-effort only: a resolve failure,
+// an unscheduled VM (empty hypervisor -- the eventual boot-time
+// secacl.Attach will carry the current rules anyway), a nil computeClient/
+// js, or a publish failure all just log-and-return, never propagate to the
+// caller -- the etcd write already succeeded, and this is host-state
+// convergence, not correctness of the API call itself.
+func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
+	if n.Spec.VMID == "" || s.computeClient == nil || s.js == nil {
+		return
+	}
+	vm, err := s.computeClient.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: n.Meta.TenantID, Id: n.Spec.VMID})
+	if err != nil {
+		slog.Warn("network: resolve hypervisor for update_acl failed, skipping notify", "netif_id", n.Meta.ID, "vm_id", n.Spec.VMID, "err", err)
+		return
+	}
+	hypervisor := vm.GetStatus().GetHypervisor()
+	if hypervisor == "" {
+		return
+	}
+
+	var subnetCIDR, gatewayIP string
+	if subnet, err := s.subnets.Get(ctx, n.Meta.TenantID, n.Spec.SubnetID); err == nil {
+		subnetCIDR = subnet.Spec.CIDR
+		gatewayIP = subnet.Spec.GatewayIP
+	}
+
+	cmd := UpdateACLCommand{
+		IfaceID:         n.Meta.ID,
+		VMID:            n.Spec.VMID,
+		TenantID:        n.Meta.TenantID,
+		SubnetCIDR:      subnetCIDR,
+		GatewayIP:       gatewayIP,
+		IngressRules:    toFirewallRuleInfos(n.Spec.IngressRules),
+		EgressRules:     toFirewallRuleInfos(n.Spec.EgressRules),
+		ResourceVersion: n.Meta.ResourceVersion,
+	}
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		slog.Error("network: marshal update_acl command failed", "netif_id", n.Meta.ID, "err", err)
+		return
+	}
+	msg := nats.NewMsg(CmdSubjectUpdateACL(hypervisor))
+	msg.Data = payload
+	if _, err := s.js.PublishMsg(ctx, msg); err != nil {
+		slog.Warn("network: publish update_acl failed", "netif_id", n.Meta.ID, "hypervisor", hypervisor, "err", err)
+	}
 }
 
 // DeleteNetworkInterface releases the interface's IP back to its Subnet's

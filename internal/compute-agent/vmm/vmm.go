@@ -74,6 +74,20 @@ type VMM interface {
 	// if the file doesn't exist (this driver never booted vmID, or it's
 	// already been deleted).
 	RootDiskPath(vmID string) (string, error)
+	// ApplyACL re-applies ingress/egress firewall rules for an already-
+	// wired NetworkInterface (vmID, ifaceID), via secacl.Attach -- the
+	// post-boot counterpart to Boot's own initial secacl.Attach call (see
+	// docs/specs/network.md「セキュリティバックエンド」). subnetCIDR/
+	// gatewayIP are passed in fresh (from the triggering
+	// network.UpdateACLCommand) rather than looked up from this driver's
+	// own boot-time state, so nothing here needs to survive a
+	// compute-agent restart for this to keep working. applied=false (not
+	// an error) means this driver has no currently-wired tap for that
+	// (vmID, ifaceID) pair -- e.g. the VM hasn't finished booting yet, or
+	// runs under the other driver -- letting agent.go's handleUpdateACL
+	// distinguish "not ready yet, let JetStream redeliver" from "genuinely
+	// failed".
+	ApplyACL(vmID, ifaceID, subnetCIDR, gatewayIP string, ingress, egress []FirewallRule) (applied bool, err error)
 }
 
 // Hotplugger is implemented by a VMM driver whose control surface supports
@@ -287,4 +301,24 @@ type NetIface struct {
 	GatewayIP  string
 	VLANID     int32
 	Primary    bool
+	// SubnetCIDR is this interface's Subnet's own CIDR (compute.
+	// NetworkInterfaceInfo.CIDR verbatim) -- used by secacl's default
+	// nftacl implementation to build the "allow within own Subnet"
+	// baseline (see docs/specs/network.md「セキュリティバックエンド」),
+	// same CIDR netsetup itself never needed until now.
+	SubnetCIDR string
+	// IngressRules/EgressRules are this interface's spec fields as of Boot
+	// time -- see compute.NetworkInterfaceInfo's identically-named fields.
+	IngressRules []FirewallRule
+	EgressRules  []FirewallRule
+}
+
+// FirewallRule mirrors compute.FirewallRuleInfo/network.FirewallRule -- its
+// own copy, not an import, same "no dependency on compute" convention as
+// every other vmm-local mirror type (e.g. UnpinnedNumaNode).
+type FirewallRule struct {
+	Protocol   string
+	PortRange  string
+	SourceCIDR string
+	Action     string
 }

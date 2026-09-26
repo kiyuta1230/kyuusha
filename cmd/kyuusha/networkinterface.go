@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -35,6 +36,8 @@ func netifCmd(args []string) {
 		netifList(args[1:])
 	case "watch":
 		netifWatch(args[1:])
+	case "set-firewall-rules":
+		netifSetFirewallRules(args[1:])
 	case "delete":
 		netifDelete(args[1:])
 	default:
@@ -51,6 +54,8 @@ func netifCreate(args []string) {
 	name := fs.String("name", "", "network interface name (idempotency key)")
 	vmID := fs.String("vm", "", "VM ID (required)")
 	subnetID := fs.String("subnet", "", "subnet ID (required)")
+	ingressRules := fs.String("ingress-rules", "", "comma-separated rules allowed into the VM, protocol:port_range:source_cidr:action (e.g. tcp:22:0.0.0.0/0:allow)")
+	egressRules := fs.String("egress-rules", "", "comma-separated rules allowed out of the VM, same protocol:port_range:source_cidr:action shape")
 	fs.Parse(args)
 	if *tenant == "" {
 		*tenant = resolveTenant(*token)
@@ -67,8 +72,10 @@ func netifCreate(args []string) {
 		TenantId: *tenant,
 		Name:     *name,
 		Spec: &networkv1.NetworkInterfaceSpec{
-			VmId:     *vmID,
-			SubnetId: *subnetID,
+			VmId:         *vmID,
+			SubnetId:     *subnetID,
+			IngressRules: parseFirewallRules(*ingressRules),
+			EgressRules:  parseFirewallRules(*egressRules),
 		},
 	})
 	if err != nil {
@@ -165,6 +172,57 @@ func netifWatch(args []string) {
 	}
 }
 
+// netifSetFirewallRules calls UpdateFirewallRules, replacing ingress_rules/
+// egress_rules wholesale (not a merge -- see the RPC's own doc comment): a
+// caller who wants to keep one direction unchanged must pass its current
+// value again, e.g. by first `netif get`-ting the existing rules.
+func netifSetFirewallRules(args []string) {
+	fs := flag.NewFlagSet("netif set-firewall-rules", flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "network interface ID (required)")
+	ingressRules := fs.String("ingress-rules", "", "comma-separated rules allowed into the VM, protocol:port_range:source_cidr:action (e.g. tcp:22:0.0.0.0/0:allow); empty clears ingress_rules entirely")
+	egressRules := fs.String("egress-rules", "", "comma-separated rules allowed out of the VM, same protocol:port_range:source_cidr:action shape; empty clears egress_rules entirely")
+	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
+	if *tenant == "" || *id == "" {
+		fatal("-tenant and -id are required")
+	}
+
+	client := dialNetworkInterfaces(*addr)
+	ctx := authedContext(context.Background(), *token)
+	n, err := client.UpdateFirewallRules(ctx, &networkv1.UpdateFirewallRulesRequest{
+		TenantId:     *tenant,
+		Id:           *id,
+		IngressRules: parseFirewallRules(*ingressRules),
+		EgressRules:  parseFirewallRules(*egressRules),
+	})
+	if err != nil {
+		fatal("set-firewall-rules: %v", err)
+	}
+	printNetworkInterface(n)
+}
+
+func parseFirewallRules(s string) []*networkv1.FirewallRule {
+	if s == "" {
+		return nil
+	}
+	var out []*networkv1.FirewallRule
+	for _, entry := range strings.Split(s, ",") {
+		parts := strings.SplitN(entry, ":", 4)
+		if len(parts) != 4 {
+			fatal("invalid firewall rule %q: want protocol:port_range:source_cidr:action", entry)
+		}
+		out = append(out, &networkv1.FirewallRule{
+			Protocol: parts[0], PortRange: parts[1], SourceCidr: parts[2], Action: parts[3],
+		})
+	}
+	return out
+}
+
 func netifDelete(args []string) {
 	fs := flag.NewFlagSet("netif delete", flag.ExitOnError)
 	addr := fs.String("addr", "localhost:8080", "api-gateway address")
@@ -187,9 +245,18 @@ func netifDelete(args []string) {
 }
 
 func printNetworkInterface(n *networkv1.NetworkInterface) {
-	fmt.Printf("id=%s name=%s tenant=%s vm=%s subnet=%s phase=%s ip=%s mac=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s vm=%s subnet=%s phase=%s ip=%s mac=%s ingress_rules=%s egress_rules=%s rv=%d\n",
 		n.GetMeta().GetId(), n.GetMeta().GetName(), n.GetMeta().GetTenantId(),
 		n.GetSpec().GetVmId(), n.GetSpec().GetSubnetId(),
 		n.GetStatus().GetPhase(), n.GetStatus().GetIpAddress(), n.GetStatus().GetMacAddress(),
+		formatFirewallRules(n.GetSpec().GetIngressRules()), formatFirewallRules(n.GetSpec().GetEgressRules()),
 		n.GetMeta().GetResourceVersion())
+}
+
+func formatFirewallRules(rules []*networkv1.FirewallRule) string {
+	parts := make([]string, 0, len(rules))
+	for _, r := range rules {
+		parts = append(parts, fmt.Sprintf("%s:%s:%s:%s", r.GetProtocol(), r.GetPortRange(), r.GetSourceCidr(), r.GetAction()))
+	}
+	return strings.Join(parts, ",")
 }

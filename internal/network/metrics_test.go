@@ -19,7 +19,7 @@ import (
 // whichever one Create alone happens to leave objects in.
 func TestMetricsCollector_CountsByTenantAndPhase(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

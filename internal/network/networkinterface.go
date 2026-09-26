@@ -16,7 +16,8 @@ type FirewallRule struct {
 type NetworkInterfaceSpec struct {
 	VMID         string
 	SubnetID     string
-	IngressRules []FirewallRule
+	IngressRules []FirewallRule // traffic allowed *into* the VM
+	EgressRules  []FirewallRule // traffic allowed *out of* the VM
 }
 
 type NetworkInterfacePhase string

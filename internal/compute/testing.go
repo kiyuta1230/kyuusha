@@ -247,6 +247,10 @@ func (f *FakeNetworkInterfaceClient) Update(context.Context, *networkv1.UpdateNe
 	panic("FakeNetworkInterfaceClient: Update not implemented; compute.Service never calls it")
 }
 
+func (f *FakeNetworkInterfaceClient) UpdateFirewallRules(context.Context, *networkv1.UpdateFirewallRulesRequest, ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
+	panic("FakeNetworkInterfaceClient: UpdateFirewallRules not implemented; compute.Service never calls it")
+}
+
 func (f *FakeNetworkInterfaceClient) Delete(context.Context, *networkv1.DeleteNetworkInterfaceRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
 	panic("FakeNetworkInterfaceClient: Delete not implemented; compute.Service never calls it")
 }

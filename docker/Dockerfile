@@ -122,13 +122,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # iproute2: `ip` (internal/compute-agent/netsetup's tap/bridge wiring) --
 # unlike Alpine, Ubuntu's minimal base doesn't carry this by default.
 #
+# nftables: `nft` (internal/compute-agent/nftacl's default ACL enforcement
+# backend, see docs/specs/network.md「セキュリティバックエンド」) -- same
+# "not in the minimal base image" reasoning as iproute2 above.
+#
 # No iSCSI package here anymore: kyuusha never logs in to anything itself
 # (see internal/compute-agent/volumeref and docs/architecture.md
 # 「block-storageのバックエンド抽象化」) -- establishing an iSCSI/NVMe-oF
 # session or an NFS mount is entirely the operator's own doing, a host-level
 # prerequisite this container doesn't need any tooling for.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      e2fsprogs iproute2 \
+      e2fsprogs iproute2 nftables \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/compute-agent /usr/local/bin/compute-agent
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/

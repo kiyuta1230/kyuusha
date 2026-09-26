@@ -64,6 +64,17 @@ func (s *NetworkInterfaceServer) Update(ctx context.Context, req *networkv1.Upda
 	return toNetworkInterface(*updated), nil
 }
 
+func (s *NetworkInterfaceServer) UpdateFirewallRules(ctx context.Context, req *networkv1.UpdateFirewallRulesRequest) (*networkv1.NetworkInterface, error) {
+	if req.GetTenantId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	n, err := s.svc.UpdateFirewallRules(ctx, req.GetTenantId(), req.GetId(), fromFirewallRules(req.GetIngressRules()), fromFirewallRules(req.GetEgressRules()))
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toNetworkInterface(*n), nil
+}
+
 func (s *NetworkInterfaceServer) Delete(ctx context.Context, req *networkv1.DeleteNetworkInterfaceRequest) (*emptypb.Empty, error) {
 	if err := s.svc.DeleteNetworkInterface(ctx, req.GetTenantId(), req.GetId()); err != nil {
 		return nil, toStatus(err)
@@ -110,6 +121,9 @@ func fromNetworkInterfaceSpec(s *networkv1.NetworkInterfaceSpec) network.Network
 	for _, r := range s.GetIngressRules() {
 		spec.IngressRules = append(spec.IngressRules, fromFirewallRule(r))
 	}
+	for _, r := range s.GetEgressRules() {
+		spec.EgressRules = append(spec.EgressRules, fromFirewallRule(r))
+	}
 	return spec
 }
 
@@ -120,6 +134,17 @@ func toNetworkInterfaceSpec(s network.NetworkInterfaceSpec) *networkv1.NetworkIn
 	}
 	for _, r := range s.IngressRules {
 		out.IngressRules = append(out.IngressRules, toFirewallRule(r))
+	}
+	for _, r := range s.EgressRules {
+		out.EgressRules = append(out.EgressRules, toFirewallRule(r))
+	}
+	return out
+}
+
+func fromFirewallRules(rs []*networkv1.FirewallRule) []network.FirewallRule {
+	var out []network.FirewallRule
+	for _, r := range rs {
+		out = append(out, fromFirewallRule(r))
 	}
 	return out
 }

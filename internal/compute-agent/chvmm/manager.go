@@ -36,6 +36,7 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/imagestore"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/netsetup"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/secacl"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
 )
@@ -104,6 +105,12 @@ type Manager struct {
 	// docs/architecture.md「VMのネットワーク接続をCNIのようにプラガブルに
 	// すべきか」. Empty (the default) keeps today's behavior unchanged.
 	NetworkAttachBin string
+	// SecurityBackendBin, if set, is the external security-backend plugin
+	// binary secacl.Attach/Detach delegate ACL enforcement to, instead of
+	// the built-in nftacl implementation -- see internal/compute-agent/
+	// secacl's package doc comment. Empty (the default) keeps ACL
+	// enforcement in this process via nftacl.
+	SecurityBackendBin string
 	// NumaTopology maps this host's self-reported NUMA node ids to their
 	// host logical CPU lists -- see fcvmm.Manager's identical field for the
 	// full doc comment (this Manager's numaPin helper mirrors that one).
@@ -217,6 +224,41 @@ func (m *Manager) RootDiskPath(vmID string) (string, error) {
 	return "", fmt.Errorf("chvmm: no root disk found for vm_id %q in %s", vmID, vmDir)
 }
 
+// ApplyACL mirrors fcvmm.Manager's identical method -- see vmm.VMM's own
+// doc comment for the applied=false/no-tap-yet contract.
+func (m *Manager) ApplyACL(vmID, ifaceID, subnetCIDR, gatewayIP string, ingress, egress []vmm.FirewallRule) (bool, error) {
+	m.mu.Lock()
+	rv, ok := m.running[vmID]
+	var tap, tenantID string
+	if ok {
+		tenantID = rv.tenantID
+		for i, id := range rv.ifaceIDs {
+			if id == ifaceID {
+				tap = rv.taps[i]
+				break
+			}
+		}
+	}
+	m.mu.Unlock()
+	if tap == "" {
+		return false, nil
+	}
+	err := secacl.Attach(secacl.Interface{
+		IfaceID: ifaceID, VMID: vmID, TenantID: tenantID, TapName: tap,
+		SubnetCIDR: subnetCIDR, GatewayIP: gatewayIP,
+		IngressRules: toSecaclRules(ingress), EgressRules: toSecaclRules(egress),
+	}, m.SecurityBackendBin)
+	return true, err
+}
+
+func toSecaclRules(rules []vmm.FirewallRule) []secacl.FirewallRule {
+	var out []secacl.FirewallRule
+	for _, r := range rules {
+		out = append(out, secacl.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
+	}
+	return out
+}
+
 // ConsoleLogPath is where Boot(vmID's spec) captures cloud-hypervisor's
 // stdout/stderr (== the guest's serial console, ttyS0, via --serial tty
 // below) -- see docs/specs/cloud-hypervisor-boot.md. It exists only once
@@ -301,6 +343,7 @@ func (m *Manager) watchAdopted(vmID, vmDir string, rv *runningVM) {
 		if i < len(rv.ifaceIDs) {
 			ifaceID = rv.ifaceIDs[i]
 		}
+		_ = secacl.Detach(ifaceID, vmID, rv.tenantID, t, m.SecurityBackendBin)
 		_ = netsetup.DeleteTap(t, ifaceID, vmID, rv.tenantID, m.NetworkAttachBin)
 	}
 	if rmErr := cgroup.Remove(vmID); rmErr != nil {
@@ -420,6 +463,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 			if i < len(ifaceIDs) {
 				ifaceID = ifaceIDs[i]
 			}
+			_ = secacl.Detach(ifaceID, spec.VMID, spec.TenantID, t, m.SecurityBackendBin)
 			_ = netsetup.DeleteTap(t, ifaceID, spec.VMID, spec.TenantID, m.NetworkAttachBin)
 		}
 	}
@@ -441,6 +485,14 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		}
 		taps = append(taps, wired.TapName)
 		ifaceIDs = append(ifaceIDs, ni.IfaceID)
+		if err := secacl.Attach(secacl.Interface{
+			IfaceID: ni.IfaceID, VMID: spec.VMID, TenantID: spec.TenantID, TapName: wired.TapName,
+			SubnetCIDR: ni.SubnetCIDR, GatewayIP: ni.GatewayIP,
+			IngressRules: toSecaclRules(ni.IngressRules), EgressRules: toSecaclRules(ni.EgressRules),
+		}, m.SecurityBackendBin); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("chvmm: apply ACL for network interface %d (%s): %w", i, ni.IfaceID, err)
+		}
 		chNetArgs = append(chNetArgs, "--net", fmt.Sprintf("tap=%s,mac=%s", wired.TapName, wired.MACAddress))
 		// kyuusha.net.<i>.* is not a real kernel parameter: it's parsed by
 		// the guest's own /init (docker/fc-guest-init.sh), exactly like

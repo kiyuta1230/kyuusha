@@ -121,7 +121,11 @@ func main() {
 	// own -- both need one (Run's methods read/write through it), but
 	// neither shares process memory (including vlanPool/ipPool/
 	// nextMACOct) with the other, only the etcd state both connect to.
-	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn))
+	// js is nil: this binary serves no gRPC API (no UpdateFirewallRules
+	// handler ever runs here), so publishUpdateACL's NATS notify path is
+	// simply never reached -- see cmd/network/main.go for the binary that
+	// does need it.
+	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn), nil)
 	if err != nil {
 		slog.Error("new network service", "err", err)
 		os.Exit(1)

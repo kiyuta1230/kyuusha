@@ -238,6 +238,8 @@ services:
       - "-grpc-addr=:8084"
       - "-etcd-endpoints=etcd:2379"
       - "-identity-addr=identity:8082"
+      - "-compute-addr=compute:8081"
+      - "-nats-url=nats://nats:4222"
       - "-metrics-addr=:9096"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
@@ -245,9 +247,19 @@ services:
         condition: service_healthy
       identity:
         condition: service_started
+      nats:
+        condition: service_healthy
       jaeger:
         condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
+    # -compute-addr/-nats-url: only UpdateFirewallRules' publishUpdateACL
+    # path uses these (see cmd/network/main.go's own package doc comment).
+    # No depends_on: compute here -- compute itself depends on network, so
+    # the reverse would be a real (compose-level, not just conceptual)
+    # dependency cycle. Not needed anyway: grpc.NewClient dials lazily, and
+    # publishUpdateACL already treats a resolve failure as "skip, log a
+    # warning" (see internal/network/service.go), same reasoning as
+    # network-reconciler's own identical -compute-addr note below.
 
   # network's actual reconcile loop (vlan_id/ip_address/mac_address
   # allocation, orphan-GC), split into its own process from the gRPC API

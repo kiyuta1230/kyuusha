@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -28,6 +29,7 @@ import (
 
 	blockstorage "github.com/kiyuta1230/kyuusha/internal/block-storage"
 	"github.com/kiyuta1230/kyuusha/internal/compute"
+	"github.com/kiyuta1230/kyuusha/internal/network"
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
 	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
@@ -120,6 +122,18 @@ type Agent struct {
 	// with no entry (or a nil map), so tests that don't set this keep
 	// working.
 	Drivers map[string]vmm.VMM
+
+	// lastAppliedACL tracks, per iface_id, the resource_version of the
+	// last network.UpdateACLCommand this Agent actually applied (see
+	// handleUpdateACL) -- guards against a redelivered or reordered stale
+	// command re-applying an older rule set over a newer one already in
+	// effect. Lazily initialized; empty (including after a restart -- this
+	// is never persisted) just means the next command for that iface_id is
+	// treated as newer than anything seen before, which is always correct
+	// since every command carries the interface's *complete* current rule
+	// set, never a delta (see network.UpdateACLCommand's own doc comment).
+	lastAppliedACLMu sync.Mutex
+	lastAppliedACL   map[string]int64
 }
 
 // reconciler is implemented by any vmm.VMM driver that persists enough
@@ -252,6 +266,39 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	defer verifyConsumeCtx.Stop()
+
+	// network's UpdateFirewallRules-triggered ACL update -- same "a
+	// separate stream the other service owns/creates" shape as
+	// BLOCKSTORAGE_CMD above.
+	if err := network.EnsureStreams(ctx, a.JS); err != nil {
+		return err
+	}
+	networkStream, err := a.JS.Stream(ctx, "NETWORK_CMD")
+	if err != nil {
+		return err
+	}
+	updateACLCons, err := networkStream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "compute-agent-" + a.Hypervisor + "-update-acl",
+		FilterSubject: network.CmdSubjectUpdateACL(a.Hypervisor),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		// MaxDeliver bounds retries for a NetworkInterface whose VM hasn't
+		// finished booting on this host yet (see handleUpdateACL: it
+		// deliberately doesn't Ack until some driver reports the tap as
+		// wired) -- 20 x the default 30s AckWait is a generous ~10 minutes,
+		// comfortably past any real VM boot time, without retrying forever
+		// for a VM that will genuinely never boot here (deleted before
+		// ever booting on this host, or scheduled to a different one by
+		// the time this message was published).
+		MaxDeliver: 20,
+	})
+	if err != nil {
+		return err
+	}
+	updateACLConsumeCtx, err := updateACLCons.Consume(a.handleUpdateACL)
+	if err != nil {
+		return err
+	}
+	defer updateACLConsumeCtx.Stop()
 
 	// Plain NATS core subscription, not JetStream: console access is
 	// ephemeral/live, not a durable work-queue command -- see
@@ -439,6 +486,73 @@ func (a *Agent) handleStop(msg jetstream.Msg) {
 	}
 }
 
+// handleUpdateACL re-applies a NetworkInterface's current ingress_rules/
+// egress_rules (see internal/compute-agent/secacl) once the VM they belong
+// to has actually finished booting on this host. Unlike every other
+// handleX above, this deliberately does NOT Ack on receipt: only once some
+// driver reports the tap as wired (ApplyACL's applied=true) does it Ack --
+// otherwise JetStream's own redelivery (bounded by the consumer's
+// MaxDeliver, see Run) is the retry mechanism for "this VM hasn't finished
+// booting yet", with no separate polling loop needed here.
+func (a *Agent) handleUpdateACL(msg jetstream.Msg) {
+	var cmd network.UpdateACLCommand
+	if err := json.Unmarshal(msg.Data(), &cmd); err != nil {
+		slog.Error("compute-agent: bad update_acl command", "err", err)
+		_ = msg.Ack() // malformed payload will never parse differently on redelivery
+		return
+	}
+
+	if !a.shouldApplyACL(cmd.IfaceID, cmd.ResourceVersion) {
+		_ = msg.Ack() // a newer command for this interface already applied
+		return
+	}
+
+	ingress := toVMMFirewallRulesFromNetwork(cmd.IngressRules)
+	egress := toVMMFirewallRulesFromNetwork(cmd.EgressRules)
+	for _, driver := range a.Drivers {
+		applied, err := driver.ApplyACL(cmd.VMID, cmd.IfaceID, cmd.SubnetCIDR, cmd.GatewayIP, ingress, egress)
+		if !applied {
+			continue
+		}
+		if err != nil {
+			slog.Error("compute-agent: apply ACL failed", "vm_id", cmd.VMID, "iface_id", cmd.IfaceID, "err", err)
+		} else {
+			a.recordAppliedACL(cmd.IfaceID, cmd.ResourceVersion)
+		}
+		_ = msg.Ack() // a driver had this tap: either applied, or genuinely failed -- neither is "not ready yet"
+		return
+	}
+	// No driver has this tap wired yet -- leave unacked for redelivery.
+}
+
+func (a *Agent) shouldApplyACL(ifaceID string, resourceVersion int64) bool {
+	a.lastAppliedACLMu.Lock()
+	defer a.lastAppliedACLMu.Unlock()
+	return resourceVersion > a.lastAppliedACL[ifaceID]
+}
+
+func (a *Agent) recordAppliedACL(ifaceID string, resourceVersion int64) {
+	a.lastAppliedACLMu.Lock()
+	defer a.lastAppliedACLMu.Unlock()
+	if a.lastAppliedACL == nil {
+		a.lastAppliedACL = make(map[string]int64)
+	}
+	a.lastAppliedACL[ifaceID] = resourceVersion
+}
+
+// toVMMFirewallRulesFromNetwork mirrors toVMMFirewallRules (defined below,
+// for compute.FirewallRuleInfo) but for network.FirewallRuleInfo -- a
+// separate wire type from a separate service, same shape, not unified into
+// one conversion since the two source types aren't related by anything
+// other than coincidence.
+func toVMMFirewallRulesFromNetwork(rules []network.FirewallRuleInfo) []vmm.FirewallRule {
+	var out []vmm.FirewallRule
+	for _, r := range rules {
+		out = append(out, vmm.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
+	}
+	return out
+}
+
 // handleVerifyVolume answers block-storage's request to confirm a Volume's
 // identifier actually exists on this host, and its real size -- see
 // internal/block-storage/verification.go. Uses the exact same
@@ -494,14 +608,25 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.Net
 		}
 		prefixLen, _ := ipnet.Mask.Size()
 		out = append(out, vmm.NetIface{
-			IfaceID:    ni.IfaceID,
-			MACAddress: ni.MACAddress,
-			IPAddress:  ni.IPAddress,
-			PrefixLen:  prefixLen,
-			GatewayIP:  ni.GatewayIP,
-			VLANID:     ni.VLANID,
-			Primary:    ni.Primary,
+			IfaceID:      ni.IfaceID,
+			MACAddress:   ni.MACAddress,
+			IPAddress:    ni.IPAddress,
+			PrefixLen:    prefixLen,
+			GatewayIP:    ni.GatewayIP,
+			VLANID:       ni.VLANID,
+			Primary:      ni.Primary,
+			SubnetCIDR:   ni.CIDR,
+			IngressRules: toVMMFirewallRules(ni.IngressRules),
+			EgressRules:  toVMMFirewallRules(ni.EgressRules),
 		})
+	}
+	return out
+}
+
+func toVMMFirewallRules(rules []compute.FirewallRuleInfo) []vmm.FirewallRule {
+	var out []vmm.FirewallRule
+	for _, r := range rules {
+		out = append(out, vmm.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
 	}
 	return out
 }

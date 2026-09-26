@@ -408,7 +408,8 @@ message FirewallRule {
 message NetworkInterfaceSpec {
   string vm_id = 1;
   string subnet_id = 2;
-  repeated FirewallRule ingress_rules = 3; // 自Subnet CIDR外からはデフォルト拒否。SecurityGroupのような別リソースは介さない
+  repeated FirewallRule ingress_rules = 3; // VMへの着信許可。自Subnet CIDR外からはデフォルト拒否。SecurityGroupのような別リソースは介さない
+  repeated FirewallRule egress_rules = 4;  // VM発の送信許可。同じくデフォルト拒否
 }
 
 message NetworkInterfaceStatus {
@@ -2509,6 +2510,36 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 
   VNAPの立ち位置は、os-vifの発想（netnsを持ち込まない）を、CNI由来の軽い呼び出し
   規約（バイナリ+JSON+exit code）で実装した形に近い。
+
+- **ACL(`ingress_rules`/`egress_rules`)強制もVNAPと同じ発想でプラガブルにすべきか**
+  （判断確定・実装済み、2026-09-27）: VNAPが「tap配線」という1つの責務を切り出した
+  のに対し、ACL強制は直交する別の関心事（配線先がLinuxブリッジかOVSかeBPFかに関わらず、
+  「何を通すか」は独立に選べるべき）と判断し、VNAPとは**別のプラグイン契約**
+  （compute-agentの`-security-backend-bin`、`internal/compute-agent/secacl`）として
+  追加した。呼び出し規約（バイナリ+stdin JSON+exit codeのみで成否判定、10秒
+  タイムアウト、プラグイン側の冪等性責務）はVNAPと同型だが、ペイロードもフラグも
+  独立しているため、tap配線とACL強制を別々に差し替えられる。
+
+  デフォルト実装（`internal/compute-agent/nftacl`）は、実機検証で判明した制約により
+  **netdevファミリではなくbridgeファミリ**を採用した: tapごとの独立したnetdev
+  ingress/egressフックという当初案は、`ct state established,related`（確立済み接続の
+  自動許可）がnetdevファミリで使えない（"Protocol error"、conntrackが確立されるより
+  前段のフックであるためで環境依存の問題ではない）ことが実機テストで判明し断念——
+  bridgeファミリのforwardフックに切り替えることでconntrackが正常に使えるようになった
+  代わりに、tapがLinuxブリッジのポートであることが前提となった。非ブリッジ配線
+  （EVPN Type-5のVNAP例等）を使う場合は、この既定実装ではなく別のセキュリティ
+  バックエンドプラグインを組み合わせる必要がある——この制約は許容し、汎用的な
+  「配線方式を問わないデフォルトACL実装」は目指さないことにした（詳細な設計・
+  実機確認結果は[network仕様](specs/network.md)「セキュリティバックエンド」参照）。
+
+  ingress_rules自体の更新（`UpdateFirewallRules`、専用RPC）は、対象VMが稼働中の
+  Hypervisorへ`network`独自のNATS JetStreamストリーム（`NETWORK_CMD`）でベスト
+  エフォート通知する形にした——VM起動時のみ有効な静的な設定ではなく、稼働中のVMに
+  対しても実際にホスト側の強制状態を追従させるため。`cmd/network`（ステートレスAPI
+  バイナリ）がこの通知のためだけにcompute/NATSへの依存を新たに持つことになったが、
+  これは`cmd/compute`が既に持つ「StreamConsole/ライブホットプラグのための同期的な
+  NATS利用」と同じ例外（reconcilerの単一レプリカ制約とは無関係、各レプリカが独立に
+  依存先へ繋ぐだけ）として扱う。
 
 - `vm create -subnets=`がtap配線されないまま起動するバグ（発見・修正済み、
   原因はNetworkInterfaceの非同期IP割り当てをcompute側が待たずにbootへ進んでいたこと、

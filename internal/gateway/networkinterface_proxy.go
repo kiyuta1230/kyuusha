@@ -37,6 +37,10 @@ func (p *NetworkInterfaceProxy) Update(ctx context.Context, req *networkv1.Updat
 	return p.backend.Update(ctx, req)
 }
 
+func (p *NetworkInterfaceProxy) UpdateFirewallRules(ctx context.Context, req *networkv1.UpdateFirewallRulesRequest) (*networkv1.NetworkInterface, error) {
+	return p.backend.UpdateFirewallRules(ctx, req)
+}
+
 func (p *NetworkInterfaceProxy) Delete(ctx context.Context, req *networkv1.DeleteNetworkInterfaceRequest) (*emptypb.Empty, error) {
 	return p.backend.Delete(ctx, req)
 }

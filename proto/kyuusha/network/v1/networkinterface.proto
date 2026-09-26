@@ -20,7 +20,8 @@ message FirewallRule {
 message NetworkInterfaceSpec {
   string vm_id = 1;
   string subnet_id = 2;
-  repeated FirewallRule ingress_rules = 3; // default-deny outside the Subnet's own CIDR; no separate SecurityGroup-like resource
+  repeated FirewallRule ingress_rules = 3; // traffic allowed *into* the VM; default-deny outside the Subnet's own CIDR; no separate SecurityGroup-like resource
+  repeated FirewallRule egress_rules = 4;  // traffic allowed *out of* the VM; same default-deny-outside-CIDR baseline
 }
 
 message NetworkInterfaceStatus {
@@ -63,6 +64,20 @@ message UpdateNetworkInterfaceRequest {
   string tenant_id = 3; // mirrors network_interface.meta.tenant_id; see vm.proto's UpdateVirtualMachineRequest for why this stays top-level
 }
 
+message UpdateFirewallRulesRequest {
+  string tenant_id = 1;
+  string id = 2; // network_interface id
+  // Both lists replace the stored value wholesale (not a delta/merge), same
+  // convention as ResizeVirtualMachineRequest's new_vcpu/new_memory_mb --
+  // no resource_version: this does its own Get-then-mutate-then-Update
+  // internally, relying on resource.Store.Update's own CAS rather than
+  // asking the caller to supply one (see vm.proto's ResizeVirtualMachineRequest
+  // for the same rationale). A caller that only wants to change one
+  // direction must resend the other direction's current value too.
+  repeated FirewallRule ingress_rules = 3;
+  repeated FirewallRule egress_rules = 4;
+}
+
 message DeleteNetworkInterfaceRequest {
   string tenant_id = 1;
   string id = 2;
@@ -92,6 +107,12 @@ service NetworkInterfaceService {
   rpc Get(GetNetworkInterfaceRequest) returns (NetworkInterface);
   rpc List(ListNetworkInterfacesRequest) returns (ListNetworkInterfacesResponse);
   rpc Update(UpdateNetworkInterfaceRequest) returns (NetworkInterface);
+  // UpdateFirewallRules is the only sanctioned way to change ingress_rules/
+  // egress_rules after Create -- Update (above) rejects any request whose
+  // spec.ingress_rules/egress_rules differ from the stored value, so this
+  // path's validation and NATS-based host propagation (see
+  // docs/specs/network.md "セキュリティバックエンド") can't be bypassed.
+  rpc UpdateFirewallRules(UpdateFirewallRulesRequest) returns (NetworkInterface);
   rpc Delete(DeleteNetworkInterfaceRequest) returns (google.protobuf.Empty);
   rpc Watch(WatchNetworkInterfacesRequest) returns (stream NetworkInterfaceEvent);
 }

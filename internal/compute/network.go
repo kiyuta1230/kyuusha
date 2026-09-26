@@ -109,10 +109,12 @@ func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetS
 			return infos, err
 		}
 		info := NetworkInterfaceInfo{
-			IfaceID:    n.GetMeta().GetId(),
-			IPAddress:  n.GetStatus().GetIpAddress(),
-			MACAddress: n.GetStatus().GetMacAddress(),
-			Primary:    a.Primary,
+			IfaceID:      n.GetMeta().GetId(),
+			IPAddress:    n.GetStatus().GetIpAddress(),
+			MACAddress:   n.GetStatus().GetMacAddress(),
+			Primary:      a.Primary,
+			IngressRules: toFirewallRuleInfos(n.GetSpec().GetIngressRules()),
+			EgressRules:  toFirewallRuleInfos(n.GetSpec().GetEgressRules()),
 		}
 		if info.IPAddress != "" {
 			sn, err := subnetClient.Get(ctx, &networkv1.GetSubnetRequest{TenantId: tenantID, Id: a.SubnetID})
@@ -151,4 +153,15 @@ func waitForAllocation(ctx context.Context, netifClient networkv1.NetworkInterfa
 		case <-time.After(netifAllocationPollInterval):
 		}
 	}
+}
+
+func toFirewallRuleInfos(rules []*networkv1.FirewallRule) []FirewallRuleInfo {
+	var out []FirewallRuleInfo
+	for _, r := range rules {
+		out = append(out, FirewallRuleInfo{
+			Protocol: r.GetProtocol(), PortRange: r.GetPortRange(),
+			SourceCIDR: r.GetSourceCidr(), Action: r.GetAction(),
+		})
+	}
+	return out
 }

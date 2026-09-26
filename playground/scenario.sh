@@ -74,7 +74,8 @@ grep -q PermissionDenied /tmp/kyuusha-tenant-admin-check.log && echo "    denied
 echo "==> creating Tenant $tenant_name via identity (admin token)"
 tenant_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha tenant create -addr=localhost:8080 \
   -name="$tenant_name" -display-name="Scenario Tenant" \
-  -max-vcpu=8 -max-memory-mb=16384 -max-volume-gb=50 -max-vms="$((count + 2))" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048)"
+  -max-vcpu=8 -max-memory-mb=16384 -max-volume-gb=50 -max-vms="$((count + 2))" -max-vcpu-per-vm=2 -max-memory-mb-per-vm=2048 \
+  -max-images=10 -max-subnets=10 -max-network-interfaces=10)"
 echo "$tenant_line"
 tenant="$(echo "$tenant_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 if [ -z "$tenant" ]; then
@@ -209,8 +210,22 @@ echo "==> creating Subnet for tenant $tenant (zone-a; real IPAM -- see docs/spec
 subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-subnet -zone=zone-a -cidr=10.0.1.0/24 -gateway-ip=10.0.1.1)"
 echo "$subnet_line"
 subnet="$(echo "$subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if [ -z "$subnet" ]; then
+  echo "!! could not parse subnet id from: $subnet_line" >&2
+  exit 1
+fi
+# CreateSubnet itself always returns Pending (vlan_id allocation is
+# network-reconciler's own async job -- see Service.CreateSubnet's doc
+# comment); poll subnet get for Ready instead of expecting the Create
+# response itself to already show it, same pattern as wait_for_volume_ready
+# below.
+for _ in $(seq 1 20); do
+  subnet_line="$(go run ./cmd/kyuusha subnet get -addr=localhost:8080 -tenant="$tenant" -id="$subnet")"
+  echo "$subnet_line" | grep -q 'phase=Ready' && break
+  sleep 1
+done
 vlan_id="$(echo "$subnet_line" | grep -o 'vlan_id=[^ ]*' | cut -d= -f2)"
-if [ -z "$subnet" ] || ! echo "$subnet_line" | grep -q 'phase=Ready' || [ -z "$vlan_id" ] || [ "$vlan_id" = "0" ]; then
+if ! echo "$subnet_line" | grep -q 'phase=Ready' || [ -z "$vlan_id" ] || [ "$vlan_id" = "0" ]; then
   echo "!! subnet was not created Ready with a real vlan_id: $subnet_line" >&2
   exit 1
 fi
@@ -253,6 +268,19 @@ grep -q InvalidArgument /tmp/kyuusha-vm-subnet-validation-check.log && echo "   
 echo "==> creating NetworkInterface for vm-1 on subnet $subnet (real IP allocated from its CIDR; see docs/specs/network.md)"
 netif_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-netif -vm="$vm1_id" -subnet="$subnet")"
 echo "$netif_line"
+netif="$(echo "$netif_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if [ -z "$netif" ]; then
+  echo "!! could not parse network interface id from: $netif_line" >&2
+  exit 1
+fi
+# CreateNetworkInterface itself always returns Pending (ip_address/
+# mac_address allocation is network-reconciler's own async job, same
+# reasoning as the Subnet fix above) -- poll netif get for Ready.
+for _ in $(seq 1 20); do
+  netif_line="$(go run ./cmd/kyuusha netif get -addr=localhost:8080 -tenant="$tenant" -id="$netif")"
+  echo "$netif_line" | grep -q 'phase=Ready' && break
+  sleep 1
+done
 netif_ip="$(echo "$netif_line" | grep -o 'ip=[^ ]*' | cut -d= -f2)"
 if ! echo "$netif_line" | grep -q 'phase=Ready' || [ "${netif_ip#10.0.1.}" = "$netif_ip" ]; then
   echo "!! network interface was not created Ready with an ip inside 10.0.1.0/24: $netif_line" >&2
@@ -290,6 +318,14 @@ if ! echo "$ranged_subnet_line" | grep -q 'mesh_group=scenario-mesh'; then
   exit 1
 fi
 ranged_netif_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-ranged-netif -vm="$vm1_id" -subnet="$ranged_subnet")"
+echo "$ranged_netif_line"
+ranged_netif="$(echo "$ranged_netif_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+# Same async-allocation reasoning as the scenario-netif poll above.
+for _ in $(seq 1 20); do
+  ranged_netif_line="$(go run ./cmd/kyuusha netif get -addr=localhost:8080 -tenant="$tenant" -id="$ranged_netif")"
+  echo "$ranged_netif_line" | grep -q 'phase=Ready' && break
+  sleep 1
+done
 echo "$ranged_netif_line"
 ranged_ip="$(echo "$ranged_netif_line" | grep -o 'ip=[^ ]*' | cut -d= -f2)"
 if [ "$ranged_ip" != "10.0.6.10" ] && [ "$ranged_ip" != "10.0.6.11" ]; then

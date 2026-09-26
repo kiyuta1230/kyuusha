@@ -212,6 +212,25 @@ type NetworkInterfaceInfo struct {
 	// docker/fc-guest-init.sh) -- a VM with several NICs would otherwise
 	// end up with an ambiguous or last-one-wins default gateway.
 	Primary bool `json:"primary,omitempty"`
+	// IngressRules/EgressRules are the NetworkInterface's own spec fields,
+	// verbatim -- compute-agent's internal/compute-agent/secacl (default
+	// nftacl) enforces them at boot time; see docs/specs/network.md
+	// 「セキュリティバックエンド」. A later UpdateFirewallRules call
+	// travels a separate path (network's own NATS command, not this one --
+	// see internal/network/nats.go), so these only need to be correct as
+	// of Boot time, not kept in sync afterward.
+	IngressRules []FirewallRuleInfo `json:"ingress_rules,omitempty"`
+	EgressRules  []FirewallRuleInfo `json:"egress_rules,omitempty"`
+}
+
+// FirewallRuleInfo mirrors network.FirewallRule/network.FirewallRuleInfo --
+// its own copy, not an import, same "no cross-service wire-type sharing"
+// convention as VolumeAttachInfo/NetworkInterfaceInfo themselves.
+type FirewallRuleInfo struct {
+	Protocol   string `json:"protocol"`
+	PortRange  string `json:"port_range,omitempty"`
+	SourceCIDR string `json:"source_cidr"`
+	Action     string `json:"action"`
 }
 
 type CreateResult struct {

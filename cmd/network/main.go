@@ -3,11 +3,21 @@
 // etcd read/write via network.Service -- Create leaves every Subnet/
 // NetworkInterface Pending, never attempting vlan_id/ip_address/
 // mac_address allocation itself (see network.Service.CreateSubnet's doc
-// comment), so this binary touches none of vlanPool/ipPool/nextMACOct, nor
-// (unlike cmd/network-reconciler) any east-west client at all -- the
-// orphan-GC sweep is this Service's only user of a compute client, and it
-// only runs from Run, which this binary never calls. Safe to run as any
-// number of replicas behind a load balancer.
+// comment), so this binary touches none of vlanPool/ipPool/nextMACOct. The
+// orphan-GC sweep is this Service's only *other* user of a compute client,
+// and only runs from Run, which this binary never calls.
+//
+// This binary does, however, dial compute and NATS/JetStream -- purely so
+// UpdateFirewallRules can resolve which hypervisor is running a
+// NetworkInterface's VM and notify it (see internal/network/nats.go's
+// publishUpdateACL). This is the same exception cmd/compute/main.go already
+// documents for itself (StreamConsole/live-hotplug: a synchronous
+// request/notify from within the stateless API process, not the
+// reconciler's exclusive-single-replica scheduling/allocation state) --
+// every replica dials compute/NATS independently and does a pure
+// request/response plus fire-and-forget publish, so no shared in-memory
+// state crosses replicas and this binary remains safe to run at any
+// replica count.
 //
 // All actual allocation (plus the orphan-GC sweep) lives in the separate
 // cmd/network-reconciler binary instead -- see its own package doc
@@ -27,6 +37,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
@@ -36,6 +48,7 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/network/grpcserver"
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
+	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
 	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
@@ -43,6 +56,8 @@ import (
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":8084", "address to serve SubnetService/NetworkInterfaceService on")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
+	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for UpdateFirewallRules to resolve which hypervisor is running a NetworkInterface's VM")
+	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL, for UpdateFirewallRules to notify the owning hypervisor")
 	metricsAddr := flag.String("metrics-addr", ":9096", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers (see internal/mtls)")
@@ -100,6 +115,16 @@ func main() {
 	}
 	defer identityConn.Close()
 
+	computeConn, err := grpc.NewClient(*computeAddr,
+		grpc.WithTransportCredentials(clientCreds),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial compute", "addr", *computeAddr, "err", err)
+		os.Exit(1)
+	}
+	defer computeConn.Close()
+
 	etcdClient, err := etcdconn.Connect(*etcdEndpoints)
 	if err != nil {
 		slog.Error("connect to etcd", "endpoints", *etcdEndpoints, "err", err)
@@ -107,10 +132,32 @@ func main() {
 	}
 	defer etcdClient.Close()
 
+	// See this package's doc comment: this is UpdateFirewallRules'
+	// notify-the-owning-hypervisor path only, not the reconciler's
+	// allocation state.
+	nc, err := nats.Connect(*natsURL)
+	if err != nil {
+		slog.Error("connect to nats", "err", err)
+		os.Exit(1)
+	}
+	defer nc.Close()
+
+	js, err := jetstream.New(nc)
+	if err != nil {
+		slog.Error("jetstream", "err", err)
+		os.Exit(1)
+	}
+	// Idempotent; defensive in case cmd/network-reconciler or a
+	// compute-agent hasn't created NETWORK_CMD yet (any of them may start
+	// first under docker-compose).
+	if err := network.EnsureStreams(ctx, js); err != nil {
+		slog.Error("ensure nats streams", "err", err)
+		os.Exit(1)
+	}
+
 	// Reconcile (vlan_id/ip_address/mac_address allocation, orphan sweep)
 	// deliberately never runs here -- see this package's doc comment.
-	// computeClient is nil since nothing in this binary ever uses it.
-	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), nil)
+	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn), js)
 	if err != nil {
 		slog.Error("new network service", "err", err)
 		os.Exit(1)

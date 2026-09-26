@@ -20,12 +20,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NetworkInterfaceService_Create_FullMethodName = "/kyuusha.network.v1.NetworkInterfaceService/Create"
-	NetworkInterfaceService_Get_FullMethodName    = "/kyuusha.network.v1.NetworkInterfaceService/Get"
-	NetworkInterfaceService_List_FullMethodName   = "/kyuusha.network.v1.NetworkInterfaceService/List"
-	NetworkInterfaceService_Update_FullMethodName = "/kyuusha.network.v1.NetworkInterfaceService/Update"
-	NetworkInterfaceService_Delete_FullMethodName = "/kyuusha.network.v1.NetworkInterfaceService/Delete"
-	NetworkInterfaceService_Watch_FullMethodName  = "/kyuusha.network.v1.NetworkInterfaceService/Watch"
+	NetworkInterfaceService_Create_FullMethodName              = "/kyuusha.network.v1.NetworkInterfaceService/Create"
+	NetworkInterfaceService_Get_FullMethodName                 = "/kyuusha.network.v1.NetworkInterfaceService/Get"
+	NetworkInterfaceService_List_FullMethodName                = "/kyuusha.network.v1.NetworkInterfaceService/List"
+	NetworkInterfaceService_Update_FullMethodName              = "/kyuusha.network.v1.NetworkInterfaceService/Update"
+	NetworkInterfaceService_UpdateFirewallRules_FullMethodName = "/kyuusha.network.v1.NetworkInterfaceService/UpdateFirewallRules"
+	NetworkInterfaceService_Delete_FullMethodName              = "/kyuusha.network.v1.NetworkInterfaceService/Delete"
+	NetworkInterfaceService_Watch_FullMethodName               = "/kyuusha.network.v1.NetworkInterfaceService/Watch"
 )
 
 // NetworkInterfaceServiceClient is the client API for NetworkInterfaceService service.
@@ -36,6 +37,12 @@ type NetworkInterfaceServiceClient interface {
 	Get(ctx context.Context, in *GetNetworkInterfaceRequest, opts ...grpc.CallOption) (*NetworkInterface, error)
 	List(ctx context.Context, in *ListNetworkInterfacesRequest, opts ...grpc.CallOption) (*ListNetworkInterfacesResponse, error)
 	Update(ctx context.Context, in *UpdateNetworkInterfaceRequest, opts ...grpc.CallOption) (*NetworkInterface, error)
+	// UpdateFirewallRules is the only sanctioned way to change ingress_rules/
+	// egress_rules after Create -- Update (above) rejects any request whose
+	// spec.ingress_rules/egress_rules differ from the stored value, so this
+	// path's validation and NATS-based host propagation (see
+	// docs/specs/network.md "セキュリティバックエンド") can't be bypassed.
+	UpdateFirewallRules(ctx context.Context, in *UpdateFirewallRulesRequest, opts ...grpc.CallOption) (*NetworkInterface, error)
 	Delete(ctx context.Context, in *DeleteNetworkInterfaceRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Watch(ctx context.Context, in *WatchNetworkInterfacesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[NetworkInterfaceEvent], error)
 }
@@ -88,6 +95,16 @@ func (c *networkInterfaceServiceClient) Update(ctx context.Context, in *UpdateNe
 	return out, nil
 }
 
+func (c *networkInterfaceServiceClient) UpdateFirewallRules(ctx context.Context, in *UpdateFirewallRulesRequest, opts ...grpc.CallOption) (*NetworkInterface, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NetworkInterface)
+	err := c.cc.Invoke(ctx, NetworkInterfaceService_UpdateFirewallRules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *networkInterfaceServiceClient) Delete(ctx context.Context, in *DeleteNetworkInterfaceRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -125,6 +142,12 @@ type NetworkInterfaceServiceServer interface {
 	Get(context.Context, *GetNetworkInterfaceRequest) (*NetworkInterface, error)
 	List(context.Context, *ListNetworkInterfacesRequest) (*ListNetworkInterfacesResponse, error)
 	Update(context.Context, *UpdateNetworkInterfaceRequest) (*NetworkInterface, error)
+	// UpdateFirewallRules is the only sanctioned way to change ingress_rules/
+	// egress_rules after Create -- Update (above) rejects any request whose
+	// spec.ingress_rules/egress_rules differ from the stored value, so this
+	// path's validation and NATS-based host propagation (see
+	// docs/specs/network.md "セキュリティバックエンド") can't be bypassed.
+	UpdateFirewallRules(context.Context, *UpdateFirewallRulesRequest) (*NetworkInterface, error)
 	Delete(context.Context, *DeleteNetworkInterfaceRequest) (*emptypb.Empty, error)
 	Watch(*WatchNetworkInterfacesRequest, grpc.ServerStreamingServer[NetworkInterfaceEvent]) error
 	mustEmbedUnimplementedNetworkInterfaceServiceServer()
@@ -148,6 +171,9 @@ func (UnimplementedNetworkInterfaceServiceServer) List(context.Context, *ListNet
 }
 func (UnimplementedNetworkInterfaceServiceServer) Update(context.Context, *UpdateNetworkInterfaceRequest) (*NetworkInterface, error) {
 	return nil, status.Error(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedNetworkInterfaceServiceServer) UpdateFirewallRules(context.Context, *UpdateFirewallRulesRequest) (*NetworkInterface, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateFirewallRules not implemented")
 }
 func (UnimplementedNetworkInterfaceServiceServer) Delete(context.Context, *DeleteNetworkInterfaceRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method Delete not implemented")
@@ -249,6 +275,24 @@ func _NetworkInterfaceService_Update_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NetworkInterfaceService_UpdateFirewallRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateFirewallRulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NetworkInterfaceServiceServer).UpdateFirewallRules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NetworkInterfaceService_UpdateFirewallRules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NetworkInterfaceServiceServer).UpdateFirewallRules(ctx, req.(*UpdateFirewallRulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _NetworkInterfaceService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteNetworkInterfaceRequest)
 	if err := dec(in); err != nil {
@@ -300,6 +344,10 @@ var NetworkInterfaceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Update",
 			Handler:    _NetworkInterfaceService_Update_Handler,
+		},
+		{
+			MethodName: "UpdateFirewallRules",
+			Handler:    _NetworkInterfaceService_UpdateFirewallRules_Handler,
 		},
 		{
 			MethodName: "Delete",
