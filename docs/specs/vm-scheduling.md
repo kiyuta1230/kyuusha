@@ -48,6 +48,9 @@ sequenceDiagram
    （`vendor_id`/`device_id`一致、`count`分の数量）が`status.available_devices`
    に十分な数だけ存在する（`spec.pci_devices`が空のVMには影響しない。
    [VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照）
+9. `spec.numa_pinned`が`true`の場合、`status.numa_nodes`のうち**いずれか1つ**が
+   要求vcpu/memory_mbを満たす（`spec.numa_pinned`が`false`のVMには影響しない。
+   [VirtualMachine仕様](virtual-machine.md)「NUMA/CPUピニング」参照）
 
 `requiredZone`は`spec.network_interfaces`が参照するSubnetのzoneから導出する
 （[network.md](network.md)「compute側の統合」参照）。マルチAZにまたがる
@@ -82,14 +85,21 @@ Hypervisorへ移すことはない。`network_interfaces`が空のVMと同様、
   `true`にする（オールオアナッシング——一部だけ確保して残りが足りない状態には
   しない）。失敗した場合は直前のvcpu/memory_mb予約を解放してから
   `ErrUnschedulable`を返す
+- `spec.numa_pinned`が`true`なら、続けて`reserveNumaNode`が同じHypervisorの
+  `numa_nodes`のうち要求を満たす**1つ**を選び、その`allocated_vcpu`/
+  `allocated_memory_mb`に要求量を加算する（PCIデバイスと違い複数ノードへの分散は
+  そもそも意味がないため、常にちょうど1つを選ぶ）。失敗した場合は直前の
+  vcpu/memory_mb・PCIデバイスの予約を解放してから`ErrUnschedulable`を返す
 - 予約の後にVMの`Scheduled`遷移（Update）を行う。VM側のUpdateが失敗した場合、
-  直前の予約（vcpu/memory_mbとPCIデバイスの両方）を解放（ロールバック）する
+  直前の予約（vcpu/memory_mb・PCIデバイス・NUMAノードのすべて）を解放（ロールバック）する
 
 ## 解放（capacity release）
 
 以下のいずれかのタイミングで、該当VMの`spec.vcpu`/`spec.memory_mb`分を
 `allocated_vcpu`/`allocated_memory_mb`から減算し、`status.allocated_pci_devices`
-の各アドレスの`allocated`を`false`に戻す。
+の各アドレスの`allocated`を`false`に戻し、`status.allocated_numa_node`が
+未固定（`-1`）でなければそのノードの`allocated_vcpu`/`allocated_memory_mb`からも
+同じ分を減算する。
 
 - VMが削除された時（`status.hypervisor`が設定済み、すなわち一度でもスケジュールされていた場合のみ）
 - VM作成が失敗し`Error`へ遷移する時。このとき`status.hypervisor`を空文字列にクリアし、
@@ -100,7 +110,9 @@ Hypervisorへ移すことはない。`network_interfaces`が空のVMと同様、
 確保していた**同じ**アドレスをそのまま`allocated=true`へ戻す専用の
 `restorePciDevices`を使う——VMオブジェクト自体は書き換わっていない
 （`Update`が失敗している）ため、ロールバックの結果が別の物理アドレスに
-なってしまうと不整合になるため。
+なってしまうと不整合になるため。NUMAノードも同じ理由で、直前まで固定していた
+**同じ**ノードIDへそのまま加算し直す専用の`restoreNumaNode`を使う（新規予約と
+同じ`reserveNumaNode`で改めて選び直すと別のノードになりうる）。
 
 ## リサイズ時の容量調整
 
@@ -128,6 +140,11 @@ Hypervisorへ移すことはない。`network_interfaces`が空のVMと同様、
   リトライループ）を再利用する。成功後にVM側の`store.Update`が失敗した場合、
   適用したデルタと同じ値で逆方向の調整（`releaseHypervisorCapacity`相当）を行い
   ロールバックする
+- `status.allocated_numa_node`が未固定（`-1`）でなければ、`resizeNumaNodeCapacity`が
+  同じデルタ調整をその固定先ノードに対しても行う（`resizeHypervisorCapacity`の
+  ノード単位版）——ノードの物理CPU数/メモリ量を超える成長は、Hypervisor全体の
+  空き容量に関わらず拒否される（例: Hypervisor全体は空きがあっても、固定先ノードの
+  CPU数自体が足りない）
 
 ## スケジュール失敗時の挙動
 

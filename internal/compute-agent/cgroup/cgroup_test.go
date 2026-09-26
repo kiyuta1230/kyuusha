@@ -32,7 +32,7 @@ func TestApplyAndRemove(t *testing.T) {
 	}()
 
 	const vmID = "test-vm-cgroup-1"
-	if err := Apply(vmID, 2, 512, cmd.Process.Pid); err != nil {
+	if err := Apply(vmID, 2, 512, cmd.Process.Pid, nil); err != nil {
 		t.Skipf("skipping: cgroup delegation not usable in this environment: %v", err)
 	}
 	defer Remove(vmID)
@@ -92,13 +92,58 @@ func TestApply_Idempotent(t *testing.T) {
 	}()
 
 	const vmID = "test-vm-cgroup-2"
-	if err := Apply(vmID, 1, 256, cmd.Process.Pid); err != nil {
+	if err := Apply(vmID, 1, 256, cmd.Process.Pid, nil); err != nil {
 		t.Skipf("skipping: cgroup delegation not usable in this environment: %v", err)
 	}
 	defer Remove(vmID)
 
-	if err := Apply(vmID, 1, 256, cmd.Process.Pid); err != nil {
+	if err := Apply(vmID, 1, 256, cmd.Process.Pid, nil); err != nil {
 		t.Fatalf("re-Apply: %v", err)
+	}
+}
+
+// TestApply_NumaPin exercises the cpuset.cpus/cpuset.mems path a
+// spec.numa_pinned VM takes -- see NumaPin's doc comment. Uses this
+// process's own current CPU (sched_getaffinity via runtime, approximated
+// here by just picking CPU 0, present on any host) and NUMA node 0, both
+// of which exist on any machine regardless of how many real NUMA nodes it
+// has -- the point is verifying Apply writes what it's given, not that a
+// real multi-node host is available in CI.
+func TestApply_NumaPin(t *testing.T) {
+	if !Available() {
+		t.Skip("skipping: cgroup v2 not available in this environment")
+	}
+
+	cmd := exec.Command("sleep", "5")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	const vmID = "test-vm-cgroup-numa"
+	pin := &NumaPin{NodeID: 0, CPUs: []int32{0}}
+	if err := Apply(vmID, 1, 256, cmd.Process.Pid, pin); err != nil {
+		t.Skipf("skipping: cgroup delegation not usable in this environment: %v", err)
+	}
+	defer Remove(vmID)
+
+	dir := vmDir(vmID)
+	cpus, err := os.ReadFile(filepath.Join(dir, "cpuset.cpus"))
+	if err != nil {
+		t.Skipf("skipping: cpuset controller not delegated in this environment: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(cpus)), "0"; got != want {
+		t.Fatalf("cpuset.cpus = %q, want %q", got, want)
+	}
+	mems, err := os.ReadFile(filepath.Join(dir, "cpuset.mems"))
+	if err != nil {
+		t.Fatalf("read cpuset.mems: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(mems)), "0"; got != want {
+		t.Fatalf("cpuset.mems = %q, want %q", got, want)
 	}
 }
 

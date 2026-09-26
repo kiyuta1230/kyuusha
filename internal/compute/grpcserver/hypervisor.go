@@ -53,7 +53,7 @@ func (s *HypervisorServer) Register(ctx context.Context, req *computev1.Register
 	if claims.HypervisorID != "" && claims.HypervisorID != req.GetHypervisor() {
 		return nil, status.Errorf(codes.PermissionDenied, "bootstrap_token is scoped to hypervisor %q, not %q", claims.HypervisorID, req.GetHypervisor())
 	}
-	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), claims.Zone, req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers(), fromStorageConnectionsProto(req.GetStorageConnections()), fromPciDevicesProto(req.GetAvailableDevices()))
+	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), claims.Zone, req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers(), fromStorageConnectionsProto(req.GetStorageConnections()), fromPciDevicesProto(req.GetAvailableDevices()), fromNumaNodesProto(req.GetNumaNodes()))
 	if err != nil {
 		return nil, toHypervisorStatus(err)
 	}
@@ -149,8 +149,10 @@ func toHypervisorStatusProto(st compute.HypervisorStatus) *computev1.HypervisorS
 			VendorId:   d.VendorID,
 			DeviceId:   d.DeviceID,
 			Allocated:  d.Allocated,
+			NumaNode:   d.NumaNode,
 		})
 	}
+	out.NumaNodes = toNumaNodesProto(st.NumaNodes)
 	for _, c := range st.StorageConnections {
 		out.StorageConnections = append(out.StorageConnections, &computev1.StorageConnection{
 			Name:      c.Name,
@@ -181,7 +183,41 @@ func fromPciDevicesProto(in []*computev1.PciDevice) []compute.PciDevice {
 	}
 	out := make([]compute.PciDevice, len(in))
 	for i, d := range in {
-		out[i] = compute.PciDevice{PCIAddress: d.GetPciAddress(), VendorID: d.GetVendorId(), DeviceID: d.GetDeviceId()}
+		out[i] = compute.PciDevice{PCIAddress: d.GetPciAddress(), VendorID: d.GetVendorId(), DeviceID: d.GetDeviceId(), NumaNode: d.GetNumaNode()}
+	}
+	return out
+}
+
+// fromNumaNodesProto ignores each entry's allocated_vcpu/allocated_memory_mb
+// on input, the same way fromPciDevicesProto ignores allocated: those are
+// server-managed scheduling state RegisterHypervisor derives itself by
+// matching NodeID against the previous registration, never from what the
+// agent self-reports (see hypervisor.proto's RegisterHypervisorRequest.
+// numa_nodes).
+func fromNumaNodesProto(in []*computev1.NumaNode) []compute.NumaNode {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]compute.NumaNode, len(in))
+	for i, n := range in {
+		out[i] = compute.NumaNode{NodeID: n.GetNodeId(), CPUs: n.GetCpus(), MemoryMB: n.GetMemoryMb()}
+	}
+	return out
+}
+
+func toNumaNodesProto(in []compute.NumaNode) []*computev1.NumaNode {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*computev1.NumaNode, len(in))
+	for i, n := range in {
+		out[i] = &computev1.NumaNode{
+			NodeId:            n.NodeID,
+			Cpus:              n.CPUs,
+			MemoryMb:          n.MemoryMB,
+			AllocatedVcpu:     n.AllocatedVCPU,
+			AllocatedMemoryMb: n.AllocatedMemoryMB,
+		}
 	}
 	return out
 }

@@ -223,7 +223,7 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 
 	out, err := s.store.Create(ctx, tenantID, name, VirtualMachine{
 		Spec:   spec,
-		Status: VirtualMachineStatus{Phase: PhasePending},
+		Status: VirtualMachineStatus{Phase: PhasePending, AllocatedNumaNode: UnpinnedNumaNode},
 	})
 	if err != nil {
 		return nil, err
@@ -578,6 +578,10 @@ func (s *Service) Resize(ctx context.Context, tenantID, id string, vcpu int32, m
 	if err := s.resizeHypervisorCapacity(ctx, vm.Status.Hypervisor, deltaVCPU, deltaMemoryMB); err != nil {
 		return nil, err
 	}
+	if err := s.resizeNumaNodeCapacity(ctx, vm.Status.Hypervisor, vm.Status.AllocatedNumaNode, deltaVCPU, deltaMemoryMB); err != nil {
+		s.releaseHypervisorCapacity(ctx, vm.Status.Hypervisor, deltaVCPU, deltaMemoryMB)
+		return nil, err
+	}
 
 	vm.Spec.VCPU = vcpu
 	vm.Spec.MemoryMB = memoryMB
@@ -589,6 +593,7 @@ func (s *Service) Resize(ctx context.Context, tenantID, id string, vcpu int32, m
 		// released), same Saga-style compensating-action shape
 		// releaseHypervisorCapacity/reconcile() already use elsewhere.
 		s.releaseHypervisorCapacity(ctx, vm.Status.Hypervisor, deltaVCPU, deltaMemoryMB)
+		s.resizeNumaNodeCapacity(ctx, vm.Status.Hypervisor, vm.Status.AllocatedNumaNode, -deltaVCPU, -deltaMemoryMB)
 		return nil, err
 	}
 

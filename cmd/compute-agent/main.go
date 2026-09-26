@@ -9,11 +9,13 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -91,6 +93,10 @@ func main() {
 
 	connections, connectionProtos := parseStorageConnections(*storageConnections)
 	availableDevices := parsePciDevices(*pciDevices)
+	numaNodes, numaTopology, err := detectNumaTopology()
+	if err != nil {
+		slog.Warn("compute-agent: NUMA topology detection failed, spec.numa_pinned VMs will never be schedulable on this host", "err", err)
+	}
 
 	// Built once, before Agent and before /metrics/resources' collector,
 	// since both need the exact same map[string]vmm.VMM: the collector
@@ -114,6 +120,7 @@ func main() {
 			JailGID:            uint32(*fcJailGID),
 			StorageConnections: connections,
 			NetworkAttachBin:   *networkAttachBin,
+			NumaTopology:       numaTopology,
 		},
 		string(compute.VmmDriverCloudHypervisor): &chvmm.Manager{
 			BinPath:            *chBin,
@@ -122,6 +129,7 @@ func main() {
 			RunDir:             *chRunDir,
 			StorageConnections: connections,
 			NetworkAttachBin:   *networkAttachBin,
+			NumaTopology:       numaTopology,
 		},
 	}
 
@@ -247,6 +255,7 @@ func main() {
 		StorageConnections:      connectionProtos,
 		LocalStorageConnections: connections,
 		AvailableDevices:        availableDevices,
+		NumaNodes:               numaNodes,
 		Drivers:                 vmmDrivers,
 	}
 	slog.Info("compute-agent: starting", "hypervisor", *hypervisor)
@@ -363,7 +372,121 @@ func parsePciDevices(raw string) []*computev1.PciDevice {
 			slog.Warn("compute-agent: dropping declared pci device, not bound to vfio-pci", "pci_address", pciAddress, "bound_driver", filepath.Base(driverLink))
 			continue
 		}
-		devices = append(devices, &computev1.PciDevice{PciAddress: pciAddress, VendorId: vendorID, DeviceId: deviceID})
+		devices = append(devices, &computev1.PciDevice{PciAddress: pciAddress, VendorId: vendorID, DeviceId: deviceID, NumaNode: readPCINumaNode(pciAddress)})
 	}
 	return devices
+}
+
+// readPCINumaNode reads /sys/bus/pci/devices/<addr>/numa_node -- best-effort
+// input to NUMA-pinned scheduling (see hypervisor.proto's PciDevice.
+// numa_node), so a missing/malformed file is not fatal to declaring the
+// device at all, just to co-locating it with a NUMA-pinned VM's vCPUs.
+// The kernel itself reports -1 for "no NUMA affinity known" (a single-node
+// host, or a bus that doesn't expose one), which is also this function's
+// own fallback for a read/parse failure -- same sentinel either way.
+func readPCINumaNode(pciAddress string) int32 {
+	b, err := os.ReadFile("/sys/bus/pci/devices/" + pciAddress + "/numa_node")
+	if err != nil {
+		return -1
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return -1
+	}
+	return int32(n)
+}
+
+// detectNumaTopology reads /sys/devices/system/node/node<N>/{cpulist,meminfo}
+// for every NUMA node the host kernel reports, building both the
+// self-report compute-agent sends at Register (numaNodes) and the local
+// node-id -> host-CPU-list map fcvmm/chvmm need to actually pin a VM's
+// cgroup (topology, see fcvmm.Manager/chvmm.Manager's NumaTopology field).
+// Best-effort: a host without /sys/devices/system/node at all (a container
+// without it mounted, or a non-Linux/unusual kernel) returns (nil, nil, err)
+// -- callers should log and continue with NUMA pinning simply unavailable,
+// the same "host already has it, agent just reports it" trust level as
+// every other self-report in this file, not a fatal startup error.
+func detectNumaTopology() ([]*computev1.NumaNode, map[int32][]int32, error) {
+	const sysNode = "/sys/devices/system/node"
+	entries, err := os.ReadDir(sysNode)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %s: %w", sysNode, err)
+	}
+	var nodes []*computev1.NumaNode
+	topology := make(map[int32][]int32)
+	for _, e := range entries {
+		nodeID, ok := strings.CutPrefix(e.Name(), "node")
+		if !ok {
+			continue
+		}
+		id, err := strconv.Atoi(nodeID)
+		if err != nil {
+			continue
+		}
+		dir := filepath.Join(sysNode, e.Name())
+		cpus, err := parseCPUList(dir + "/cpulist")
+		if err != nil {
+			slog.Warn("compute-agent: reading NUMA node cpulist failed, dropping this node from self-report", "node_id", id, "err", err)
+			continue
+		}
+		memoryMB, err := parseNodeMemTotalMB(dir + "/meminfo")
+		if err != nil {
+			slog.Warn("compute-agent: reading NUMA node meminfo failed, dropping this node from self-report", "node_id", id, "err", err)
+			continue
+		}
+		nodes = append(nodes, &computev1.NumaNode{NodeId: int32(id), Cpus: cpus, MemoryMb: memoryMB})
+		topology[int32(id)] = cpus
+	}
+	return nodes, topology, nil
+}
+
+// parseCPUList reads a /sys cpulist-format file ("0-3,8,10-11") and expands
+// it to individual logical CPU ids.
+func parseCPUList(path string) ([]int32, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cpus []int32
+	for _, part := range strings.Split(strings.TrimSpace(string(b)), ",") {
+		if part == "" {
+			continue
+		}
+		lo, hi, isRange := strings.Cut(part, "-")
+		loN, err := strconv.Atoi(lo)
+		if err != nil {
+			return nil, fmt.Errorf("malformed cpulist entry %q: %w", part, err)
+		}
+		if !isRange {
+			cpus = append(cpus, int32(loN))
+			continue
+		}
+		hiN, err := strconv.Atoi(hi)
+		if err != nil {
+			return nil, fmt.Errorf("malformed cpulist entry %q: %w", part, err)
+		}
+		for c := loN; c <= hiN; c++ {
+			cpus = append(cpus, int32(c))
+		}
+	}
+	return cpus, nil
+}
+
+// parseNodeMemTotalMB reads a NUMA node's meminfo file's first line
+// ("Node <N> MemTotal:       <kB> kB") and converts it to MB.
+func parseNodeMemTotalMB(path string) (int64, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	firstLine, _, _ := strings.Cut(string(b), "\n")
+	fields := strings.Fields(firstLine)
+	if len(fields) < 4 || fields[2] != "MemTotal:" {
+		return 0, fmt.Errorf("malformed meminfo first line %q", firstLine)
+	}
+	kB, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("malformed MemTotal value in %q: %w", firstLine, err)
+	}
+	return kB / 1024, nil
 }

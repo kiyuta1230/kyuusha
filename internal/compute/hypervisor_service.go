@@ -50,7 +50,7 @@ const (
 // agent's own separate claim. See docs/specs/hypervisor-bootstrap.md for
 // what's still open beyond that (individual hypervisor identity/revocation
 // -- see ErrHypervisorRevoked below -- and single-use tokens).
-func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone string, allocatableVCPU int32, allocatableMemoryMB int64, supportedDrivers []string, storageConnections []StorageConnection, availableDevices []PciDevice) (*Hypervisor, error) {
+func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone string, allocatableVCPU int32, allocatableMemoryMB int64, supportedDrivers []string, storageConnections []StorageConnection, availableDevices []PciDevice, numaNodes []NumaNode) (*Hypervisor, error) {
 	existing, err := s.hypervisors.Get(ctx, "", hypervisor)
 	hadExisting := err == nil
 	if hadExisting && existing.Spec.Revoked {
@@ -76,6 +76,7 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 		SupportedDrivers:    supportedDrivers,
 		StorageConnections:  storageConnections,
 		AvailableDevices:    availableDevices,
+		NumaNodes:           numaNodes,
 	}
 	if hadExisting {
 		status.AllocatedVCPU = existing.Status.AllocatedVCPU
@@ -100,6 +101,23 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 			if prevAllocated[status.AvailableDevices[i].PCIAddress] {
 				status.AvailableDevices[i].Allocated = true
 			}
+		}
+
+		// Same preservation, keyed by NodeID instead of pci_address: a
+		// restarting agent re-detects its own NUMA topology fresh every
+		// time (node/cpu/memory facts don't change across a restart), but
+		// has no idea how much of each node is already claimed by a
+		// running NUMA-pinned VM's reservation.
+		prevAllocatedVCPU := make(map[int32]int32, len(existing.Status.NumaNodes))
+		prevAllocatedMemoryMB := make(map[int32]int64, len(existing.Status.NumaNodes))
+		for _, n := range existing.Status.NumaNodes {
+			prevAllocatedVCPU[n.NodeID] = n.AllocatedVCPU
+			prevAllocatedMemoryMB[n.NodeID] = n.AllocatedMemoryMB
+		}
+		for i := range status.NumaNodes {
+			nodeID := status.NumaNodes[i].NodeID
+			status.NumaNodes[i].AllocatedVCPU = prevAllocatedVCPU[nodeID]
+			status.NumaNodes[i].AllocatedMemoryMB = prevAllocatedMemoryMB[nodeID]
 		}
 	}
 
@@ -230,6 +248,12 @@ type scheduleConstraints struct {
 	// actual reservation (picking which specific pci_address(es)) happens
 	// in reservePciDevices, after Pick.
 	PciDevices []PciDeviceRequest
+	// NumaPinned is spec.numa_pinned verbatim. Requires a candidate to
+	// self-report at least one NumaNode with enough spare vcpu/memory_mb
+	// (see hasQualifyingNumaNode) -- only a dry-run check here; the actual
+	// reservation (picking which specific node) happens in reserveNumaNode,
+	// after Pick, same two-phase shape as PciDevices/reservePciDevices.
+	NumaPinned bool
 	// Exclude, when non-empty, drops that one Hypervisor from the
 	// candidate list before Pick sees it -- Migrate's auto-pick path
 	// (scheduleMigration) uses this so a migration can never "succeed" by
@@ -241,14 +265,16 @@ type scheduleConstraints struct {
 // scheduleVM picks a Hypervisor satisfying spec's hard constraints plus c
 // (see "フィルタ（ハード制約）"), reserves vcpu/memory and any requested
 // PCI devices against it, and returns its id plus the specific PCI
-// pci_address(es) reserved (see VirtualMachineStatus.AllocatedPciDevices).
+// pci_address(es) reserved (see VirtualMachineStatus.AllocatedPciDevices)
+// and, if c.NumaPinned, the NUMA node id reserved (see
+// VirtualMachineStatus.AllocatedNumaNode; UnpinnedNumaNode otherwise).
 // Callers are responsible for then transitioning the VM to Scheduled and
-// releasing the reservation (releaseHypervisorCapacity/releasePciDevices)
-// if anything after this fails.
-func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c scheduleConstraints) (hypervisorID string, allocatedPciDevices []string, err error) {
+// releasing the reservation (releaseHypervisorCapacity/releasePciDevices/
+// releaseNumaNode) if anything after this fails.
+func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c scheduleConstraints) (hypervisorID string, allocatedPciDevices []string, numaNode int32, err error) {
 	candidates, err := s.hypervisors.List(ctx, "")
 	if err != nil {
-		return "", nil, err
+		return "", nil, UnpinnedNumaNode, err
 	}
 	driver := spec.DriverHint
 	if driver == VmmDriverUnspecified {
@@ -257,18 +283,27 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c sch
 	filtered := filterSchedulable(candidates, driver, spec.VCPU, spec.MemoryMB, c)
 	picked, err := s.scheduler.Pick(filtered)
 	if err != nil {
-		return "", nil, err
+		return "", nil, UnpinnedNumaNode, err
 	}
 
 	if err := s.reserveHypervisorCapacity(ctx, picked.Meta.ID, spec.VCPU, spec.MemoryMB); err != nil {
-		return "", nil, err
+		return "", nil, UnpinnedNumaNode, err
 	}
 	devices, err := s.reservePciDevices(ctx, picked.Meta.ID, c.PciDevices)
 	if err != nil {
 		s.releaseHypervisorCapacity(ctx, picked.Meta.ID, spec.VCPU, spec.MemoryMB)
-		return "", nil, err
+		return "", nil, UnpinnedNumaNode, err
 	}
-	return picked.Meta.ID, devices, nil
+	node := UnpinnedNumaNode
+	if c.NumaPinned {
+		node, err = s.reserveNumaNode(ctx, picked.Meta.ID, spec.VCPU, spec.MemoryMB)
+		if err != nil {
+			s.releasePciDevices(ctx, picked.Meta.ID, devices)
+			s.releaseHypervisorCapacity(ctx, picked.Meta.ID, spec.VCPU, spec.MemoryMB)
+			return "", nil, UnpinnedNumaNode, err
+		}
+	}
+	return picked.Meta.ID, devices, node, nil
 }
 
 // scheduleMigration picks (and reserves capacity plus any requested PCI
@@ -281,33 +316,42 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c sch
 // connections/PCI devices/capacity) rather than trusted blindly --
 // ErrUnschedulable if it doesn't qualify, ErrValidation if it names the
 // VM's current Hypervisor (migrating to the same place is never valid).
-func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, requiredZone, currentHypervisor, target string, requiredConnections []string) (hypervisorID string, allocatedPciDevices []string, err error) {
+func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, requiredZone, currentHypervisor, target string, requiredConnections []string) (hypervisorID string, allocatedPciDevices []string, numaNode int32, err error) {
 	if target == "" {
-		return s.scheduleVM(ctx, spec, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, PciDevices: spec.PciDevices, Exclude: currentHypervisor})
+		return s.scheduleVM(ctx, spec, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, PciDevices: spec.PciDevices, NumaPinned: spec.NumaPinned, Exclude: currentHypervisor})
 	}
 	if target == currentHypervisor {
-		return "", nil, fmt.Errorf("%w: target_hypervisor %q is the vm's current Hypervisor", ErrValidation, target)
+		return "", nil, UnpinnedNumaNode, fmt.Errorf("%w: target_hypervisor %q is the vm's current Hypervisor", ErrValidation, target)
 	}
 	h, err := s.hypervisors.Get(ctx, "", target)
 	if err != nil {
-		return "", nil, err
+		return "", nil, UnpinnedNumaNode, err
 	}
 	driver := spec.DriverHint
 	if driver == VmmDriverUnspecified {
 		driver = VmmDriverFirecracker
 	}
-	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, PciDevices: spec.PciDevices})) == 0 {
-		return "", nil, ErrUnschedulable
+	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, PciDevices: spec.PciDevices, NumaPinned: spec.NumaPinned})) == 0 {
+		return "", nil, UnpinnedNumaNode, ErrUnschedulable
 	}
 	if err := s.reserveHypervisorCapacity(ctx, target, spec.VCPU, spec.MemoryMB); err != nil {
-		return "", nil, err
+		return "", nil, UnpinnedNumaNode, err
 	}
 	devices, err := s.reservePciDevices(ctx, target, spec.PciDevices)
 	if err != nil {
 		s.releaseHypervisorCapacity(ctx, target, spec.VCPU, spec.MemoryMB)
-		return "", nil, err
+		return "", nil, UnpinnedNumaNode, err
 	}
-	return target, devices, nil
+	node := UnpinnedNumaNode
+	if spec.NumaPinned {
+		node, err = s.reserveNumaNode(ctx, target, spec.VCPU, spec.MemoryMB)
+		if err != nil {
+			s.releasePciDevices(ctx, target, devices)
+			s.releaseHypervisorCapacity(ctx, target, spec.VCPU, spec.MemoryMB)
+			return "", nil, UnpinnedNumaNode, err
+		}
+	}
+	return target, devices, node, nil
 }
 
 func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, memoryMB int64, c scheduleConstraints) []Hypervisor {
@@ -338,6 +382,9 @@ func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, me
 			continue
 		}
 		if !hasEnoughPciDevices(h.Status.AvailableDevices, c.PciDevices) {
+			continue
+		}
+		if c.NumaPinned && !hasQualifyingNumaNode(h.Status.NumaNodes, vcpu, memoryMB) {
 			continue
 		}
 		out = append(out, h)
@@ -417,6 +464,18 @@ func hasEnoughPciDevices(available []PciDevice, want []PciDeviceRequest) bool {
 		free[key] -= need // a later request for the same model sees what's left
 	}
 	return true
+}
+
+// hasQualifyingNumaNode reports whether at least one of nodes has enough
+// spare vcpu/memory_mb for a NUMA-pinned request -- a dry-run check only
+// (which specific node gets used is decided later, by reserveNumaNode).
+func hasQualifyingNumaNode(nodes []NumaNode, vcpu int32, memoryMB int64) bool {
+	for _, n := range nodes {
+		if int32(len(n.CPUs))-n.AllocatedVCPU >= vcpu && n.MemoryMB-n.AllocatedMemoryMB >= memoryMB {
+			return true
+		}
+	}
+	return false
 }
 
 // reservePciDevices picks specific, currently-unallocated PCI devices out
@@ -505,6 +564,71 @@ func (s *Service) setPciDevicesAllocated(ctx context.Context, id string, address
 	}
 }
 
+// reserveNumaNode picks the first of Hypervisor id's self-reported NumaNodes
+// with enough spare vcpu/memory_mb, adds vcpu/memoryMB to its
+// AllocatedVCPU/AllocatedMemoryMB, and returns its NodeID -- the NUMA
+// counterpart to reserveHypervisorCapacity, using the same Get→mutate→
+// Update optimistic-concurrency retry loop (updateHypervisor). Unlike
+// reservePciDevices (which picks possibly-several specific addresses),
+// exactly one node is ever picked: the whole point is pinning a VM to a
+// single node, not spreading it across several.
+func (s *Service) reserveNumaNode(ctx context.Context, id string, vcpu int32, memoryMB int64) (int32, error) {
+	var picked int32 = UnpinnedNumaNode
+	err := s.updateHypervisor(ctx, id, func(h *Hypervisor) error {
+		for i := range h.Status.NumaNodes {
+			n := &h.Status.NumaNodes[i]
+			if int32(len(n.CPUs))-n.AllocatedVCPU >= vcpu && n.MemoryMB-n.AllocatedMemoryMB >= memoryMB {
+				n.AllocatedVCPU += vcpu
+				n.AllocatedMemoryMB += memoryMB
+				picked = n.NodeID
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: no NUMA node on hypervisor %q has room for vcpu=%d memory_mb=%d", ErrUnschedulable, id, vcpu, memoryMB)
+	})
+	if err != nil {
+		return UnpinnedNumaNode, err
+	}
+	return picked, nil
+}
+
+// adjustNumaNode adds deltaVCPU/deltaMemoryMB to nodeID's AllocatedVCPU/
+// AllocatedMemoryMB on Hypervisor id -- release (negative deltas) and
+// restore (positive deltas, undoing a rollback the same way
+// restorePciDevices undoes releasePciDevices) share this one function,
+// since unlike PCI addresses there's no "which specific thing" to
+// re-search for: nodeID is already known from the original reserveNumaNode
+// call. Best-effort, same reasoning as releasePciDevices/restorePciDevices.
+func (s *Service) adjustNumaNode(ctx context.Context, id string, nodeID int32, deltaVCPU int32, deltaMemoryMB int64) {
+	if nodeID == UnpinnedNumaNode {
+		return
+	}
+	err := s.updateHypervisor(ctx, id, func(h *Hypervisor) error {
+		for i := range h.Status.NumaNodes {
+			if h.Status.NumaNodes[i].NodeID == nodeID {
+				h.Status.NumaNodes[i].AllocatedVCPU += deltaVCPU
+				h.Status.NumaNodes[i].AllocatedMemoryMB += deltaMemoryMB
+				return nil
+			}
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, ErrHypervisorNotFound) {
+		_ = err
+	}
+}
+
+// releaseNumaNode releases a NUMA-pinned VM's reservation on Hypervisor id.
+func (s *Service) releaseNumaNode(ctx context.Context, id string, nodeID int32, vcpu int32, memoryMB int64) {
+	s.adjustNumaNode(ctx, id, nodeID, -vcpu, -memoryMB)
+}
+
+// restoreNumaNode undoes a rollback of releaseNumaNode -- see
+// adjustNumaNode's doc comment.
+func (s *Service) restoreNumaNode(ctx context.Context, id string, nodeID int32, vcpu int32, memoryMB int64) {
+	s.adjustNumaNode(ctx, id, nodeID, vcpu, memoryMB)
+}
+
 // SchedulingStrategy picks among candidates that already satisfy every hard
 // constraint. See docs/architecture.md "ピック（デフォルト戦略）": kept as an
 // interface so a future strategy can be swapped in without touching the
@@ -591,6 +715,35 @@ func (s *Service) resizeHypervisorCapacity(ctx context.Context, id string, delta
 		h.Status.AllocatedVCPU += deltaVCPU
 		h.Status.AllocatedMemoryMB += deltaMemoryMB
 		return nil
+	})
+}
+
+// resizeNumaNodeCapacity is resizeHypervisorCapacity's NUMA-pinned
+// counterpart: Resize's in-place path never re-picks a Hypervisor OR a
+// node, it only adjusts the delta against whichever node the VM is already
+// pinned to (nodeID == UnpinnedNumaNode is a no-op, for a VM that isn't
+// NUMA-pinned at all).
+func (s *Service) resizeNumaNodeCapacity(ctx context.Context, id string, nodeID int32, deltaVCPU int32, deltaMemoryMB int64) error {
+	if nodeID == UnpinnedNumaNode {
+		return nil
+	}
+	return s.updateHypervisor(ctx, id, func(h *Hypervisor) error {
+		for i := range h.Status.NumaNodes {
+			n := &h.Status.NumaNodes[i]
+			if n.NodeID != nodeID {
+				continue
+			}
+			if deltaVCPU > 0 && int32(len(n.CPUs))-n.AllocatedVCPU < deltaVCPU {
+				return ErrHypervisorCapacityExceeded
+			}
+			if deltaMemoryMB > 0 && n.MemoryMB-n.AllocatedMemoryMB < deltaMemoryMB {
+				return ErrHypervisorCapacityExceeded
+			}
+			n.AllocatedVCPU += deltaVCPU
+			n.AllocatedMemoryMB += deltaMemoryMB
+			return nil
+		}
+		return fmt.Errorf("%w: numa node %d no longer reported by hypervisor %q", ErrHypervisorCapacityExceeded, nodeID, id)
 	})
 }
 

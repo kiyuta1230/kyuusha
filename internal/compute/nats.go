@@ -156,6 +156,11 @@ type CreateCommand struct {
 	// never sees this: CLOUD_HYPERVISOR-only, enforced at Create time --
 	// see docs/architecture.md「PCIデバイス(GPU等)パススルー」).
 	PciDevices []string `json:"pci_devices,omitempty"`
+	// NumaNode is vm.Status.AllocatedNumaNode verbatim -- UnpinnedNumaNode
+	// (-1) if spec.numa_pinned is false. Both fcvmm and chvmm consume this
+	// (unlike PciDevices, not restricted to either driver) via
+	// internal/compute-agent/cgroup's cpuset pinning.
+	NumaNode int32 `json:"numa_node"`
 }
 
 // VolumeAttachInfo is one VM Volume attachment: the protocol/connection/

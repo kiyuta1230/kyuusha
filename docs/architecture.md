@@ -1218,7 +1218,7 @@ compute-agentが`-pci-devices`フラグ（`pci_address:vendor_id:device_id`の�
 
 スケジューラの`filterSchedulable`は、`spec.pci_devices`が要求する`vendor_id`/`device_id`の
 組・数量を満たす未割当の`PciDevice`が候補Hypervisorに十分あるかを検証するフィルタを持つ
-（フィルタ8種の1つ、[VMスケジュール仕様](specs/vm-scheduling.md)参照）。予約は
+（フィルタ9種の1つ、[VMスケジュール仕様](specs/vm-scheduling.md)参照）。予約は
 vCPU/メモリと同じGet→mutate→Updateの楽観的並行性制御で、対象の具体的なアドレスを選んで
 `allocated`を`true`にする——GPUは同時に1台のVirtualMachineにしかパススルーできないため
 （VolumeAttachmentの排他制御と同じ発想、上記「予約とレース対策」参照）。ロールバック時は
@@ -1252,6 +1252,83 @@ ASMedia USB 3.1コントローラ（デスクトップ用途に使われてい�
 （`pci 0000:00:03.0: [1b21:1242] ... PCIe Endpoint`、class 0x0c0330=USB/XHCI）が
 そのまま見える、という一連の経路を実機で確認した（発見された実装ギャップの修正履歴は
 [docs/release-notes.md](release-notes.md)参照）。
+
+## NUMA/CPUピニング
+
+GPU/PCIパススルーはNUMAローカルなvCPU・メモリに固定して初めて本来の性能が出る
+（デバイスと異なるNUMAノードのvCPUから触るとリモートメモリアクセスのレイテンシが乗る）
+——という動機で着手したが、最終的には**PCIパススルーに限らない、全VM共通の一般機能**
+として実装した（`spec.pci_devices`と違ってドライバも限定しない）。DBのような
+キャッシュ局所性に敏感なワークロード全般に使える、という判断。
+
+### モデル: VM全体を1つの物理NUMAノードへ固定
+
+kyuushaのVMは1つの仮想NUMAノードとしてゲストに見える単純な構成のまま
+（複数ホストNUMAノードにまたがる仮想トポロジをゲストへ見せる、というより高度な機能は
+非対応——`docs/specs/vm-scheduling.md`参照）。`spec.numa_pinned=true`は「スケジューラが
+空きのある物理NUMAノードを1つ選び、このVMの全vCPU・全メモリをそのノードへ固定する」
+という意味のみを持つ。粒度は個々のvCPU単位のピニング（`taskset`でvCPU0→物理CPU3、
+vCPU1→物理CPU7、のような細かい割当）ではなく、ノード単位——「このVMはこのノードの
+中のどこかのCPUで動く」という制約に留める。より細かいvCPU単位のピニングは、複雑さに
+見合う需要が出てから検討する。
+
+### 実装機構: VMM固有のCLIフラグではなくcgroup v2のcpusetコントローラ
+
+当初cloud-hypervisor固有の`--numa`/`--memory-zone ...,host_numa_node=<N>`/
+`--cpus ...,affinity=[...]`という組み込みNUMA機構の採用を検討したが、「全VM共通の
+一般機能」という決定と噛み合わない——これらのフラグはcloud-hypervisor専用で、
+Firecrackerには対応する仕組みが無い。
+
+代わりに、`internal/compute-agent/cgroup`が既に両ドライバのVMMプロセスへ
+`cpu.max`/`memory.max`を無条件で適用している既存の仕組み（cgroup v2、
+docs/specs/firecracker-boot.md「この実装がカバーしないもの」参照）へ
+`cpuset.cpus`/`cpuset.mems`を追加する形で実装した——libvirt/QEMUがデフォルトで
+採用しているのと同じ「VMMプロセスの全スレッドをcgroupのcpusetで縛る」方式。
+これはVMMドライバに一切依存しない: `cgroup.Apply`が`*cgroup.NumaPin`
+（ノードID+ホストCPUリスト）を受け取り、渡されていれば`cpuset.cpus`/`cpuset.mems`を
+追加で書き込むだけで、Firecracker/cloud-hypervisorどちらのVMMプロセスにもそのまま効く。
+ライブリサイズ（`chvmm`の`LiveResize`）は`cgroup.Apply`を再度呼ぶため、
+ピニング情報（`runningVM.numaPin`）をBoot時から保持しておき、サイズ変更のたびに
+一緒に再適用する（さもないと再適用のたびにcpuset制約が消える）。
+
+### 自己申告と予約
+
+compute-agentは起動時に`/sys/devices/system/node/node<N>/{cpulist,meminfo}`を読み、
+ホストのNUMAトポロジ（ノードID・所属する論理CPU・ノード合計メモリ）を
+`RegisterHypervisorRequest.numa_nodes`で自己申告する——`-storage-connections`/
+`-pci-devices`と違ってオプトインのフラグは無い（危険でも稀少でもない、単なるホストの
+事実の申告のため、常時実行）。PCIデバイス側にも`PciDevice.numa_node`
+（`/sys/bus/pci/devices/<addr>/numa_node`）を追加してあるが、これはv1では
+ベストエフォートな情報に留め、NUMAピニングとPCIパススルーの物理的な同居を
+スケジューラが強制することはしない（両方を同時に要求されたVMが、たまたま別ノードの
+デバイスを掴む可能性は残る——実際の需要が出てから、デバイスのnuma_nodeとVMの
+固定先ノードを一致させる制約を追加検討する）。
+
+スケジューラの`filterSchedulable`は`spec.numa_pinned`のとき候補Hypervisorの
+`status.numa_nodes`のうち**いずれか1つ**が要求されたvcpu/memory_mbを満たすかを
+検証するフィルタを持つ（フィルタ9種の1つ）。予約（`reserveNumaNode`）は
+vCPU/メモリ・PCIデバイスと全く同じGet→mutate→Updateの楽観的並行性制御で、
+具体的にどのノードを使うか1つ選んで`NumaNode.allocated_vcpu`/
+`allocated_memory_mb`に加算する——PCIデバイスと違い複数ノードにまたがる分散は
+そもそも意味がない（1VMを1ノードに閉じ込めるのが目的）ため、常にちょうど1つ選ぶ。
+Resizeの在地リサイズ（Hypervisorを変えない経路）でも、固定先ノードに対して
+同じデルタ調整（`resizeNumaNodeCapacity`）を行う——vcpu/memory_mbの
+`resizeHypervisorCapacity`と対になる、ノード単位版。Migrate/`allow_migrate`併用の
+Resizeでは、PCIデバイスと同じ「要求（`numa_pinned`）は引き継ぐが、固定先の具体的な
+ノードは移行先で選び直す」扱い。
+
+compute-agentの再登録（プロセス再起動）では、`node_id`が一致する既存ノードの
+`allocated_vcpu`/`allocated_memory_mb`を引き継ぐ——`allocated_vcpu`（Hypervisor全体）や
+PCIデバイスの`allocated`と同じ「agentの再起動でin-flightな予約を静かに解除しない」
+という保護。
+
+実機確認済み（この開発ホスト自体はNUMAノード1個の構成だが、cpuset機構自体の動作は
+ノード数に依存しない）: `spec.numa_pinned=true`のVMを作成し、実際に起動した
+Firecracker/cloud-hypervisorどちらのプロセスも、そのcgroup（`/sys/fs/cgroup/kyuusha/
+<vm_id>/`）の`cpuset.cpus`/`cpuset.mems`がホストの申告したノードのCPUリスト/
+ノードIDと一致していることを確認した。Resizeでノードの`allocated_vcpu`/
+`allocated_memory_mb`が正しく増減すること、Deleteで解放されること、
+compute-agent再起動後もin-flightな予約が保持されることも確認した。
 
 ## ハイパーバイザー死活監視とリカバリ、およびpet/cattleの区別の廃止
 
@@ -2259,6 +2336,17 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 設計レベルの論点はほぼ出し切った。残りは実行タスクと、明示的に先送りした非ゴールのみ。
 
 1. **I/Oベンチマークの実施**（方針は「Compute実装メモ」節「I/Oベンチマーク計画」参照、実行はTODO）
+2. **SR-IOV VFのライフサイクル管理**: `spec.pci_devices`は「GPUだけでなくSR-IOV NICにも
+   使い回せる汎用設計」だが、VF自体の生成（`sriov_numvfs`操作）は自動化しておらず、
+   オペレータが事前にVFを作りPCIアドレスを1個ずつ`-pci-devices`へ手動で並べる前提のまま
+3. **Image/Subnet/NetworkInterfaceへのQuota適用**: `QuotaSpec`はvcpu/memory/volume_gb/
+   vms/pci_devicesまでカバーしたが、Image数・Subnet数・NetworkInterface数には上限が無く、
+   1テナントが無制限に作成できる
+4. **グラフィカルコンソール（VNC/SPICE相当）**: シリアルコンソールのみで、Windows等
+   シリアル操作に頼れないゲストへの対応手段が無い（Harvester/KubeVirtの`virtctl vnc`相当）
+5. **コールドマイグレーション後もroot diskの中身は毎回作り直し**: 「マイグレーション」節の
+   通り意図的な設計だが、いずれroot diskの実データを転送する経路を追加する構想がある
+   （まだ設計していない）
 
 ### 解決済み（参考: 決定の経緯は各セクション本文を参照）
 
@@ -2361,8 +2449,9 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - NetworkInterface/Volume/VolumeAttachmentのライフサイクルphase
 - Volume/NetworkInterfaceの排他制御・フェンシング問題への対処方針
 - VLAN IDの割り当て方式（networkサービスが設定済みプールから同期・排他で払い出し）
-- スケジューラ設計（フィルタ8種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む。Volumeが要求するstorage_connectionによるフィルタ、`spec.pci_devices`によるPCIデバイスフィルタ、[VMスケジュール仕様](specs/vm-scheduling.md)「フィルタ（ハード制約）」参照）
+- スケジューラ設計（フィルタ9種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む。Volumeが要求するstorage_connectionによるフィルタ、`spec.pci_devices`によるPCIデバイスフィルタ、`spec.numa_pinned`によるNUMAノードフィルタ、[VMスケジュール仕様](specs/vm-scheduling.md)「フィルタ（ハード制約）」参照）
 - PCIデバイス(GPU等)パススルー（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターンで実装済み。テナント単位の`(vendor_id, device_id)`数量クォータ（明示許可制、上限リストに無い組は上限0）も実装済み。実機でのVFIOパススルー動作も確認済み（ASMedia USB 3.1コントローラでのゲスト内PCI列挙まで確認）、[VirtualMachine仕様](specs/virtual-machine.md)「PCIデバイスパススルー」参照）
+- NUMA/CPUピニング（`spec.numa_pinned`、PCIパススルーに限らない全VM共通の一般機能として実装済み。cloud-hypervisor固有のCLIフラグではなくcgroup v2のcpuset controllerで実現——`internal/compute-agent/cgroup`が既に両ドライバへ適用しているcpu.max/memory.maxの仕組みへcpuset.cpus/cpuset.memsを足しただけなので、Firecracker/cloud-hypervisorどちらのVMMプロセスにも同じ経路で効く。実機確認済み（このホストはNUMAノード1個の構成だが、cpuset自体の動作確認はノード数に依存しない）、「NUMA/CPUピニング」節参照）
 - pet/cattleの区別（`recovery_policy`/`persistent_root_disk`/`root_volume_ref`）を廃止（実質未使用だったフィールドを削除し、ハイパーバイザー喪失時の自動リカバリはKaaS層/オペレータに委ねる判断。「pet/cattleの区別を廃止」節参照）
 - UI方針（自前のWeb UIは作らずCLI＋Grafanaに任せる。OpenStack Horizonを反面教師に）
 - テナント間VRF分離の実配線ドキュメント化（`docs/network-deployment-guide.md`としてネットワーク運用チーム向けに独立した文書を作成。VLANプール/VRF/ルートリークポリシー/デプロイ前チェックリストを含む）

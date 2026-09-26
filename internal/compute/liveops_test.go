@@ -110,7 +110,7 @@ func startFakeHotplugAgent(t *testing.T, ctx context.Context, nc *nats.Conn, js 
 func runningVMWithHypervisor(t *testing.T, ctx context.Context, svc *Service, tenant, hypervisorID string, allocatableVCPU int32, allocatableMemoryMB int64, spec VirtualMachineSpec) *VirtualMachine {
 	t.Helper()
 	spec.DriverHint = VmmDriverCloudHypervisor
-	if _, err := svc.RegisterHypervisor(ctx, hypervisorID, "zone-a", allocatableVCPU, allocatableMemoryMB, []string{"CLOUD_HYPERVISOR"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, hypervisorID, "zone-a", allocatableVCPU, allocatableMemoryMB, []string{"CLOUD_HYPERVISOR"}, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor: %v", err)
 	}
 	vm, err := svc.Create(ctx, tenant, "", spec)

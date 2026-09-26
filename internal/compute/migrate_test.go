@@ -116,7 +116,7 @@ func TestReconciler_MigrateAutoPicksDifferentHypervisor(t *testing.T) {
 
 	spec := VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 1024}
 	vm := stoppedVMWithHypervisor(t, ctx, svc, "tenant-a", "hypervisor-1", 8, 16384, spec)
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor hypervisor-2: %v", err)
 	}
 	deletesTo1 := subscribeDeleteCommands(t, ctx, r.js, "hypervisor-1")
@@ -169,7 +169,7 @@ func TestReconciler_MigrateToExplicitTargetSucceeds(t *testing.T) {
 
 	spec := VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 1024}
 	vm := stoppedVMWithHypervisor(t, ctx, svc, "tenant-a", "hypervisor-1", 8, 16384, spec)
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor hypervisor-2: %v", err)
 	}
 
@@ -196,7 +196,7 @@ func TestReconciler_MigrateRejectsTargetLackingCapacity(t *testing.T) {
 	spec := VirtualMachineSpec{ImageID: "img-abc", VCPU: 4, MemoryMB: 8192}
 	vm := stoppedVMWithHypervisor(t, ctx, svc, "tenant-a", "hypervisor-1", 8, 16384, spec)
 	// hypervisor-2 exists but is too small for this VM's spec.
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 2, 2048, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 2, 2048, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor hypervisor-2: %v", err)
 	}
 

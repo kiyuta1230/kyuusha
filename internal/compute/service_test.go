@@ -61,7 +61,7 @@ func TestPlayground_VirtualMachineLifecycleOverWatch(t *testing.T) {
 		t.Fatalf("idempotent Create minted a new ID: %s vs %s", again.Meta.ID, m.Meta.ID)
 	}
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor: %v", err)
 	}
 
@@ -411,7 +411,7 @@ func TestService_StartRequiresStopped(t *testing.T) {
 // capacity delta check has a realistic baseline to work against.
 func stoppedVMWithHypervisor(t *testing.T, ctx context.Context, svc *Service, tenant, hypervisorID string, allocatableVCPU int32, allocatableMemoryMB int64, spec VirtualMachineSpec) VirtualMachine {
 	t.Helper()
-	if _, err := svc.RegisterHypervisor(ctx, hypervisorID, "zone-a", allocatableVCPU, allocatableMemoryMB, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, hypervisorID, "zone-a", allocatableVCPU, allocatableMemoryMB, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor: %v", err)
 	}
 	vm, err := svc.Create(ctx, tenant, "", spec)
@@ -455,7 +455,7 @@ func TestService_ResizeRequiresStopped(t *testing.T) {
 		t.Fatalf("Resize on Running VM: got %v, want ErrInvalidPhase", err)
 	}
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor: %v", err)
 	}
 	running.Status.Phase = PhaseStopped

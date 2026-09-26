@@ -53,18 +53,36 @@ func Available() bool {
 	return err == nil
 }
 
+// NumaPin is spec.numa_pinned's resolved host placement -- see
+// docs/architecture.md's NUMA/CPUピニング section. Apply uses it to
+// constrain vmID's cgroup to a single host NUMA node via the cpuset
+// controller, the same mechanism libvirt/QEMU use by default (no
+// VMM-specific CLI flags needed -- it applies identically whichever driver
+// booted the process).
+type NumaPin struct {
+	NodeID int32
+	CPUs   []int32
+}
+
 // Apply creates (or reuses) vmID's cgroup, sets cpu.max/memory.max from
 // vcpu/memoryMB, and moves pid into it. vcpu becomes a hard CPU quota of
 // vcpu full cores (a <n>*100000us quota per 100000us period) -- the same
 // number Firecracker was given as the guest's vcpu_count, now also an
-// enforced host-side ceiling. memoryMB becomes memory.max in bytes.
+// enforced host-side ceiling. memoryMB becomes memory.max in bytes. If pin
+// is non-nil, cpuset.cpus/cpuset.mems additionally restrict every thread in
+// this cgroup (vCPU threads included) to pin.CPUs and pin.NodeID -- the
+// actual host-side enforcement of NUMA pinning; a nil pin leaves cpuset
+// untouched (today's behavior, no NUMA constraint).
 //
 // Callers should treat a non-nil error as best-effort-failed (log a warning
 // and let the VM boot unconstrained) rather than fatal: cgroup v2
 // availability and delegation vary across hosts/containers, and this is
 // resource *limiting* on top of an already-working VM, not isolation
-// jailer would additionally provide.
-func Apply(vmID string, vcpu int32, memoryMB int64, pid int) error {
+// jailer would additionally provide. The cpuset controller specifically may
+// be unavailable even when cpu/memory are (a delegated subtree isn't
+// guaranteed to carry every controller) -- that failure is likewise
+// best-effort: cpu.max/memory.max still apply, only NUMA locality is lost.
+func Apply(vmID string, vcpu int32, memoryMB int64, pid int, pin *NumaPin) error {
 	if !Available() {
 		return fmt.Errorf("cgroup: cgroup v2 not available at %s", root)
 	}
@@ -94,6 +112,19 @@ func Apply(vmID string, vcpu int32, memoryMB int64, pid int) error {
 	memMax := strconv.FormatInt(memoryMB*1024*1024, 10)
 	if err := os.WriteFile(filepath.Join(dir, "memory.max"), []byte(memMax), 0o644); err != nil {
 		return fmt.Errorf("cgroup: writing memory.max: %w", err)
+	}
+
+	if pin != nil && len(pin.CPUs) > 0 {
+		cpuList := make([]string, len(pin.CPUs))
+		for i, c := range pin.CPUs {
+			cpuList[i] = strconv.Itoa(int(c))
+		}
+		if err := os.WriteFile(filepath.Join(dir, "cpuset.cpus"), []byte(strings.Join(cpuList, ",")), 0o644); err != nil {
+			return fmt.Errorf("cgroup: writing cpuset.cpus: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "cpuset.mems"), []byte(strconv.Itoa(int(pin.NodeID))), 0o644); err != nil {
+			return fmt.Errorf("cgroup: writing cpuset.mems: %w", err)
+		}
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
@@ -204,10 +235,15 @@ func Init() error {
 	return os.WriteFile(filepath.Join(initDir, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0o644)
 }
 
-// enableControllers turns on cpu/memory for dir's children via
-// subtree_control, for whichever of those two are actually listed in dir's
-// own cgroup.controllers (a delegated subtree may not carry both). A no-op
-// if they're already enabled.
+// enableControllers turns on cpu/memory/cpuset for dir's children via
+// subtree_control, for whichever of those three are actually listed in
+// dir's own cgroup.controllers (a delegated subtree may not carry all of
+// them -- cpuset in particular, needed only for NUMA pinning, is the one
+// most likely missing). A no-op for whichever are already enabled.
+// cpuset's absence is not an error here: Apply's own cpuset.cpus/
+// cpuset.mems writes are what actually surface that as a (best-effort)
+// failure, exactly when a caller asked for NUMA pinning and it can't be
+// honored -- not before, when nothing may have asked for it at all.
 func enableControllers(dir string) error {
 	available, err := os.ReadFile(filepath.Join(dir, "cgroup.controllers"))
 	if err != nil {
@@ -216,7 +252,7 @@ func enableControllers(dir string) error {
 	existing, _ := os.ReadFile(filepath.Join(dir, "cgroup.subtree_control"))
 
 	var need []string
-	for _, c := range []string{"cpu", "memory"} {
+	for _, c := range []string{"cpu", "memory", "cpuset"} {
 		if strings.Contains(string(available), c) && !strings.Contains(string(existing), c) {
 			need = append(need, "+"+c)
 		}

@@ -174,7 +174,20 @@ type BootSpec struct {
 	// validatePciDevicesForDriver rejects any other combination at Create
 	// time), so fcvmm never sees a non-empty PciDevices.
 	PciDevices []string
+	// NumaNode is the host NUMA node id spec.numa_pinned reserved this VM's
+	// vCPUs/memory against (compute's scheduleVM/scheduleMigration --
+	// verbatim VirtualMachineStatus.AllocatedNumaNode), or UnpinnedNumaNode
+	// if the VM isn't NUMA-pinned. Both fcvmm and chvmm consume this (unlike
+	// PciDevices, not restricted to either driver) via
+	// internal/compute-agent/cgroup's NumaPin -- see each Manager's own
+	// numaPin helper.
+	NumaNode int32
 }
+
+// UnpinnedNumaNode mirrors compute.UnpinnedNumaNode -- vmm has no
+// dependency on the compute package, so this is its own copy of the same
+// sentinel convention, not a shared constant.
+const UnpinnedNumaNode int32 = -1
 
 // VolumeAttachInfo is one already-resolved Volume attachment: the
 // protocol/connection/identifier a Volume's spec carries, letting

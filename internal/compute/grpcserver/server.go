@@ -249,6 +249,7 @@ func fromSpec(s *computev1.VirtualMachineSpec) compute.VirtualMachineSpec {
 		MemoryMB:   s.GetMemoryMb(),
 		UserData:   s.GetUserData(),
 		DriverHint: fromDriver(s.GetDriverHint()),
+		NumaPinned: s.GetNumaPinned(),
 	}
 	for _, n := range s.GetNetworkInterfaces() {
 		spec.NetworkInterfaces = append(spec.NetworkInterfaces, compute.NetworkAttachment{
@@ -279,6 +280,7 @@ func toSpec(s compute.VirtualMachineSpec) *computev1.VirtualMachineSpec {
 		MemoryMb:   s.MemoryMB,
 		UserData:   s.UserData,
 		DriverHint: toDriver(s.DriverHint),
+		NumaPinned: s.NumaPinned,
 	}
 	for _, n := range s.NetworkInterfaces {
 		out.NetworkInterfaces = append(out.NetworkInterfaces, &computev1.NetworkAttachment{
@@ -309,6 +311,7 @@ func toStatusProto(st compute.VirtualMachineStatus) *computev1.VirtualMachineSta
 		InterfaceRefs:        st.InterfaceRefs,
 		VolumeAttachmentRefs: st.VolumeAttachmentRefs,
 		AllocatedPciDevices:  st.AllocatedPciDevices,
+		AllocatedNumaNode:    st.AllocatedNumaNode,
 	}
 	for _, c := range st.Conditions {
 		out.Conditions = append(out.Conditions, &resourcev1.Condition{
@@ -329,6 +332,7 @@ func fromStatusProto(st *computev1.VirtualMachineStatus) compute.VirtualMachineS
 		InterfaceRefs:        st.GetInterfaceRefs(),
 		VolumeAttachmentRefs: st.GetVolumeAttachmentRefs(),
 		AllocatedPciDevices:  st.GetAllocatedPciDevices(),
+		AllocatedNumaNode:    st.GetAllocatedNumaNode(),
 	}
 	for _, c := range st.GetConditions() {
 		out.Conditions = append(out.Conditions, resource.Condition{

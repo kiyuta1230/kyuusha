@@ -211,7 +211,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			return
 		}
 
-		hypervisorID, allocatedPciDevices, err := r.svc.scheduleVM(ctx, vm.Spec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, PciDevices: vm.Spec.PciDevices})
+		hypervisorID, allocatedPciDevices, numaNode, err := r.svc.scheduleVM(ctx, vm.Spec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, PciDevices: vm.Spec.PciDevices, NumaPinned: vm.Spec.NumaPinned})
 		if err != nil {
 			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 				Type:             "Unschedulable",
@@ -229,6 +229,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 		vm.Status.Phase = PhaseScheduled
 		vm.Status.Hypervisor = hypervisorID
 		vm.Status.AllocatedPciDevices = allocatedPciDevices
+		vm.Status.AllocatedNumaNode = numaNode
 		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 			Type:             "Unschedulable",
 			Status:           resource.ConditionFalse,
@@ -239,6 +240,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			slog.Error("schedule: update failed", "vm_id", vm.Meta.ID, "err", err)
 			r.svc.releaseHypervisorCapacity(ctx, hypervisorID, vm.Spec.VCPU, vm.Spec.MemoryMB)
 			r.svc.releasePciDevices(ctx, hypervisorID, allocatedPciDevices)
+			r.svc.releaseNumaNode(ctx, hypervisorID, numaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
 		}
 
 	case PhaseScheduled, PhaseStarting:
@@ -308,7 +310,8 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 
 	oldHypervisor := vm.Status.Hypervisor
 	oldPciDevices := vm.Status.AllocatedPciDevices
-	newHypervisor, newPciDevices, err := r.svc.scheduleMigration(ctx, vm.Spec, zone, oldHypervisor, vm.Status.MigrateTarget, storageConnections)
+	oldNumaNode := vm.Status.AllocatedNumaNode
+	newHypervisor, newPciDevices, newNumaNode, err := r.svc.scheduleMigration(ctx, vm.Spec, zone, oldHypervisor, vm.Status.MigrateTarget, storageConnections)
 	if err != nil {
 		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 			Type:             "Unmigratable",
@@ -325,6 +328,7 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 
 	r.svc.releaseHypervisorCapacity(ctx, oldHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
 	r.svc.releasePciDevices(ctx, oldHypervisor, oldPciDevices)
+	r.svc.releaseNumaNode(ctx, oldHypervisor, oldNumaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
 	payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
 	msg := nats.NewMsg(CmdSubjectDelete(oldHypervisor))
 	msg.Data = payload
@@ -334,6 +338,7 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 
 	vm.Status.Hypervisor = newHypervisor
 	vm.Status.AllocatedPciDevices = newPciDevices
+	vm.Status.AllocatedNumaNode = newNumaNode
 	vm.Status.MigrateTarget = ""
 	vm.Status.Phase = PhaseScheduled
 	vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
@@ -346,6 +351,7 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 		slog.Error("migrate: update failed", "vm_id", vm.Meta.ID, "err", err)
 		r.svc.releaseHypervisorCapacity(ctx, newHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
 		r.svc.releasePciDevices(ctx, newHypervisor, newPciDevices)
+		r.svc.releaseNumaNode(ctx, newHypervisor, newNumaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
 	}
 }
 
@@ -433,16 +439,18 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 
 	oldHypervisor := vm.Status.Hypervisor
 	oldPciDevices := vm.Status.AllocatedPciDevices
+	oldNumaNode := vm.Status.AllocatedNumaNode
 	newSpec := vm.Spec
 	newSpec.VCPU = vcpu
 	newSpec.MemoryMB = memoryMB
-	newHypervisor, newPciDevices, err := r.svc.scheduleVM(ctx, newSpec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, PciDevices: newSpec.PciDevices, Exclude: oldHypervisor})
+	newHypervisor, newPciDevices, newNumaNode, err := r.svc.scheduleVM(ctx, newSpec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, PciDevices: newSpec.PciDevices, NumaPinned: newSpec.NumaPinned, Exclude: oldHypervisor})
 	if err != nil {
 		return nil, fmt.Errorf("%w: no other hypervisor has room for the new size either", ErrHypervisorCapacityExceeded)
 	}
 
 	r.svc.releaseHypervisorCapacity(ctx, oldHypervisor, oldVCPU, oldMemoryMB)
 	r.svc.releasePciDevices(ctx, oldHypervisor, oldPciDevices)
+	r.svc.releaseNumaNode(ctx, oldHypervisor, oldNumaNode, oldVCPU, oldMemoryMB)
 	payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
 	msg := nats.NewMsg(CmdSubjectDelete(oldHypervisor))
 	msg.Data = payload
@@ -454,6 +462,7 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 	vm.Spec.MemoryMB = memoryMB
 	vm.Status.Hypervisor = newHypervisor
 	vm.Status.AllocatedPciDevices = newPciDevices
+	vm.Status.AllocatedNumaNode = newNumaNode
 	out, err := r.svc.store.Update(ctx, vm)
 	if err != nil {
 		// Compensate both sides of the reservation swap so accounting
@@ -462,10 +471,12 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 		// Resize's own rollback and reconcile() already use elsewhere.
 		r.svc.releaseHypervisorCapacity(ctx, newHypervisor, vcpu, memoryMB)
 		r.svc.releasePciDevices(ctx, newHypervisor, newPciDevices)
+		r.svc.releaseNumaNode(ctx, newHypervisor, newNumaNode, vcpu, memoryMB)
 		if rerr := r.svc.reserveHypervisorCapacity(ctx, oldHypervisor, oldVCPU, oldMemoryMB); rerr != nil {
 			slog.Error("resize: failed to restore old hypervisor reservation after Update failure", "vm_id", vm.Meta.ID, "err", rerr)
 		}
 		r.svc.restorePciDevices(ctx, oldHypervisor, oldPciDevices)
+		r.svc.restoreNumaNode(ctx, oldHypervisor, oldNumaNode, oldVCPU, oldMemoryMB)
 		return nil, err
 	}
 
@@ -566,6 +577,7 @@ func (r *Reconciler) provisionAndPublish(ctx context.Context, vm VirtualMachine)
 		UserData:   vm.Spec.UserData,
 		Volumes:    volInfos,
 		PciDevices: vm.Status.AllocatedPciDevices,
+		NumaNode:   vm.Status.AllocatedNumaNode,
 	}
 	// Resolve the Image to concrete boot inputs now (not at Create time:
 	// the Image could have changed, and compute-agent has no image
@@ -624,6 +636,7 @@ func (r *Reconciler) releaseIfReserved(ctx context.Context, vm VirtualMachine) {
 	if vm.Status.Hypervisor != "" {
 		r.svc.releaseHypervisorCapacity(ctx, vm.Status.Hypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
 		r.svc.releasePciDevices(ctx, vm.Status.Hypervisor, vm.Status.AllocatedPciDevices)
+		r.svc.releaseNumaNode(ctx, vm.Status.Hypervisor, vm.Status.AllocatedNumaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
 
 		payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
 		msg := nats.NewMsg(CmdSubjectDelete(vm.Status.Hypervisor))

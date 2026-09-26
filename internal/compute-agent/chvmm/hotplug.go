@@ -106,7 +106,7 @@ func (m *Manager) LiveResize(ctx context.Context, vmID string, vcpu int32, memor
 	rv, ok := m.running[vmID]
 	m.mu.Unlock()
 	if ok {
-		if err := cgroup.Apply(vmID, vcpu, memoryMB, rv.pid); err != nil {
+		if err := cgroup.Apply(vmID, vcpu, memoryMB, rv.pid, rv.numaPin); err != nil {
 			slog.Warn("chvmm: cgroup limits not updated after live resize", "vm_id", vmID, "err", err)
 		}
 	}

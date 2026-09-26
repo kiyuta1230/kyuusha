@@ -202,6 +202,7 @@ func vmCreate(args []string) {
 	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
 	volumes := fs.String("volumes", "", "comma-separated Volume IDs to attach at boot (see docs/specs/volume.md; attach-before-boot only -- a Volume added after the VM is already Running is not attached)")
 	pciDevices := fs.String("pci-devices", "", "comma-separated PCI passthrough requests, vendor_id:device_id[:count] (count defaults to 1, e.g. 10de:1c03 or 10de:1c03:2) -- requires -driver-hint=cloud-hypervisor; see docs/specs/virtual-machine.md \"PCIデバイスパススルー\"")
+	numaPinned := fs.Bool("numa-pinned", false, "pin this VM's vCPUs/memory to a single host NUMA node the scheduler picks (see docs/architecture.md's NUMA/CPUピニング section); rejected if no Hypervisor has a node with enough spare vcpu/memory_mb")
 	userDataFile := fs.String("user-data-file", "", "path to a cloud-init user-data file (NoCloud seed disk; see docs/architecture.md \"UserData注入\"); empty means don't inject anything")
 	wait := fs.Bool("wait", false, "block until the VM reaches Running or Error")
 	fs.Parse(args)
@@ -272,6 +273,7 @@ func vmCreate(args []string) {
 			NetworkInterfaces: netifs,
 			Volumes:           volRequests,
 			PciDevices:        pciDeviceRequests,
+			NumaPinned:        *numaPinned,
 			UserData:          userData,
 		},
 	})
@@ -711,11 +713,16 @@ func printVM(vm *computev1.VirtualMachine) {
 	for i, f := range vm.GetMeta().GetFinalizers() {
 		finalizerNames[i] = f.GetName()
 	}
-	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s pci_devices=%s finalizers=%s deleted_at=%s rv=%d\n",
+	numaNode := "-"
+	if n := vm.GetStatus().GetAllocatedNumaNode(); n >= 0 {
+		numaNode = strconv.Itoa(int(n))
+	}
+	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s pci_devices=%s numa_node=%s finalizers=%s deleted_at=%s rv=%d\n",
 		vm.GetMeta().GetId(), vm.GetMeta().GetName(), vm.GetMeta().GetTenantId(),
 		vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(),
 		strings.Join(vm.GetStatus().GetInterfaceRefs(), ","),
 		strings.Join(vm.GetStatus().GetAllocatedPciDevices(), ","),
+		numaNode,
 		strings.Join(finalizerNames, ","), deletedAtString(vm.GetMeta().GetDeletedAt()),
 		vm.GetMeta().GetResourceVersion())
 }

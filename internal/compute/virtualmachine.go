@@ -85,6 +85,11 @@ type VirtualMachineSpec struct {
 	UserData          string
 	DriverHint        VmmDriver
 	PciDevices        []PciDeviceRequest
+	// NumaPinned requests the scheduler pick a single host NUMA node with
+	// enough spare vcpu/memory_mb and pin this VM's vCPUs/memory to it (see
+	// docs/architecture.md's NUMA/CPUピニング section) -- unlike PciDevices,
+	// not restricted to any particular driver_hint.
+	NumaPinned bool
 }
 
 type Phase string
@@ -144,7 +149,18 @@ type VirtualMachineStatus struct {
 	// compute-agent passes these straight through as cloud-hypervisor
 	// --device flags (see nats.go's CreateCommand.PciDevices).
 	AllocatedPciDevices []string
+	// AllocatedNumaNode is the host NUMA node id spec.numa_pinned reserved
+	// this VM's vCPUs/memory against (see hypervisor_service.go's
+	// reserveNumaNode) -- read-only. -1 means not pinned; proto3 has no
+	// scalar "unset" of its own, so every VirtualMachineStatus literal this
+	// package constructs must set this explicitly (Go's own int32 zero
+	// value, 0, would otherwise be misread as "pinned to node 0").
+	AllocatedNumaNode int32
 }
+
+// UnpinnedNumaNode is AllocatedNumaNode's "not pinned" sentinel -- see that
+// field's doc comment.
+const UnpinnedNumaNode int32 = -1
 
 type VirtualMachine struct {
 	Meta   resource.ObjectMeta

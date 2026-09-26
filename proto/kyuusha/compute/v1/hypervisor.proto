@@ -19,6 +19,28 @@ message PciDevice {
   string vendor_id = 2;   // e.g. "10de" (NVIDIA)
   string device_id = 3;   // e.g. "20b0" (A100)
   bool allocated = 4;
+  // Host NUMA node this device is attached to (from
+  // /sys/bus/pci/devices/<addr>/numa_node), or -1 if the kernel doesn't
+  // report one (single-NUMA-node host, or an unsupported bus). Best-effort
+  // input to NUMA-pinned scheduling (see NumaNode) -- never a hard
+  // requirement, since not every device reports this.
+  int32 numa_node = 5;
+}
+
+// NumaNode is one host NUMA node this Hypervisor self-reports, letting a
+// VirtualMachine with spec.numa_pinned=true be scheduled onto (and its
+// vCPUs/memory pinned to) a single node rather than left to the host
+// kernel's own scheduler/memory placement -- see docs/architecture.md's
+// NUMA/CPUピニング section. cpus/memory_mb are facts read from
+// /sys/devices/system/node/<id>/{cpulist,meminfo} at compute-agent startup,
+// the same "host already has it, agent just reports it" trust level as
+// available_devices/storage_connections.
+message NumaNode {
+  int32 node_id = 1;
+  repeated int32 cpus = 2;    // host logical CPU ids belonging to this node
+  int64 memory_mb = 3;        // this node's own total physical memory
+  int32 allocated_vcpu = 4;   // sum of vCPUs pinned here by NUMA-pinned VMs
+  int64 allocated_memory_mb = 5;
 }
 
 // StorageConnection is one storage backend session this Hypervisor already
@@ -65,6 +87,7 @@ message HypervisorStatus {
   repeated string supported_drivers = 8; // e.g. ["FIRECRACKER", "CLOUD_HYPERVISOR"]
   repeated PciDevice available_devices = 9;
   repeated StorageConnection storage_connections = 10;
+  repeated NumaNode numa_nodes = 11;
 }
 
 message Hypervisor {
@@ -87,6 +110,12 @@ message RegisterHypervisorRequest {
   // holds), and a newly-seen pci_address always starts unallocated; see
   // hypervisor_service.go's RegisterHypervisor.
   repeated PciDevice available_devices = 8;
+  // Host NUMA topology self-report (see NumaNode's doc comment) --
+  // node_id/cpus/memory_mb are trusted from input; allocated_vcpu/
+  // allocated_memory_mb are ignored on input the same way PciDevice's
+  // `allocated` is (server-managed scheduling state, preserved by node_id
+  // across a re-register -- see hypervisor_service.go's RegisterHypervisor).
+  repeated NumaNode numa_nodes = 9;
   // Required: a zone-scoped JWT minted by `kyuusha hypervisor bootstrap-token
   // create -zone=...` (internal/bootstraptoken). Its `zone` claim -- not any
   // self-reported value from the agent -- becomes the registered

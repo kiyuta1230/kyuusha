@@ -201,12 +201,25 @@ func hypervisorSetRevoked(args []string) {
 
 func printHypervisor(h *computev1.Hypervisor) {
 	st := h.GetStatus()
-	fmt.Printf("id=%s phase=%s schedulable=%t revoked=%t zone=%s drivers=%v allocated=%d/%dvcpu %d/%dMB pci_devices=%s rv=%d\n",
+	fmt.Printf("id=%s phase=%s schedulable=%t revoked=%t zone=%s drivers=%v allocated=%d/%dvcpu %d/%dMB pci_devices=%s numa_nodes=%s rv=%d\n",
 		h.GetMeta().GetId(), st.GetPhase(), h.GetSpec().GetSchedulable(), h.GetSpec().GetRevoked(), st.GetZone(), st.GetSupportedDrivers(),
 		st.GetAllocatedVcpu(), st.GetAllocatableVcpu(),
 		st.GetAllocatedMemoryMb(), st.GetAllocatableMemoryMb(),
 		formatPciDevices(st.GetAvailableDevices()),
+		formatNumaNodes(st.GetNumaNodes()),
 		h.GetMeta().GetResourceVersion())
+}
+
+// formatNumaNodes renders each self-reported NumaNode as
+// "id:allocated_vcpu/cpu_count@allocated_memory_mb/memory_mb" -- compact
+// enough for the same single-line-per-Hypervisor output formatPciDevices
+// already uses.
+func formatNumaNodes(nodes []*computev1.NumaNode) string {
+	parts := make([]string, len(nodes))
+	for i, n := range nodes {
+		parts[i] = fmt.Sprintf("%d:%d/%dvcpu@%d/%dMB", n.GetNodeId(), n.GetAllocatedVcpu(), len(n.GetCpus()), n.GetAllocatedMemoryMb(), n.GetMemoryMb())
+	}
+	return strings.Join(parts, ",")
 }
 
 // formatPciDevices renders each self-reported PciDevice as

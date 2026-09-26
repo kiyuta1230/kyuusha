@@ -314,9 +314,18 @@ type VirtualMachineSpec struct {
 	// (e.g. Cluster API's MachineHealthCheck), making kyuusha-side recovery
 	// redundant for that case; a genuinely persistent root disk is a
 	// separate, still-undesigned "volume boot" feature, not this field.
-	UserData      string              `protobuf:"bytes,8,opt,name=user_data,json=userData,proto3" json:"user_data,omitempty"`
-	DriverHint    VmmDriver           `protobuf:"varint,9,opt,name=driver_hint,json=driverHint,proto3,enum=kyuusha.compute.v1.VmmDriver" json:"driver_hint,omitempty"`
-	PciDevices    []*PciDeviceRequest `protobuf:"bytes,10,rep,name=pci_devices,json=pciDevices,proto3" json:"pci_devices,omitempty"`
+	UserData   string              `protobuf:"bytes,8,opt,name=user_data,json=userData,proto3" json:"user_data,omitempty"`
+	DriverHint VmmDriver           `protobuf:"varint,9,opt,name=driver_hint,json=driverHint,proto3,enum=kyuusha.compute.v1.VmmDriver" json:"driver_hint,omitempty"`
+	PciDevices []*PciDeviceRequest `protobuf:"bytes,10,rep,name=pci_devices,json=pciDevices,proto3" json:"pci_devices,omitempty"`
+	// When true, the scheduler picks a single host NUMA node with enough
+	// spare vcpu/memory_mb and pins this VM's vCPUs and memory to it (see
+	// docs/architecture.md's NUMA/CPUピニング section) instead of leaving
+	// placement to the host kernel's own NUMA balancing. Best-effort
+	// co-location with pci_devices (a passthrough device's own NUMA
+	// affinity, if the host reports one, is not a hard requirement here --
+	// see NumaNode's doc comment). CLOUD_HYPERVISOR and FIRECRACKER both
+	// support this (unlike pci_devices, not driver-restricted).
+	NumaPinned    bool `protobuf:"varint,11,opt,name=numa_pinned,json=numaPinned,proto3" json:"numa_pinned,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -407,6 +416,13 @@ func (x *VirtualMachineSpec) GetPciDevices() []*PciDeviceRequest {
 	return nil
 }
 
+func (x *VirtualMachineSpec) GetNumaPinned() bool {
+	if x != nil {
+		return x.NumaPinned
+	}
+	return false
+}
+
 type VirtualMachineStatus struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Phase      string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"`
@@ -421,8 +437,12 @@ type VirtualMachineStatus struct {
 	// available_devices -- read-only, see internal/compute/
 	// hypervisor_service.go's reservePciDevices.
 	AllocatedPciDevices []string `protobuf:"bytes,7,rep,name=allocated_pci_devices,json=allocatedPciDevices,proto3" json:"allocated_pci_devices,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Host NUMA node id spec.numa_pinned reserved this VM's vCPUs/memory
+	// against -- read-only, see internal/compute/hypervisor_service.go's
+	// reserveNumaNode. -1 (the default) means not pinned.
+	AllocatedNumaNode int32 `protobuf:"varint,8,opt,name=allocated_numa_node,json=allocatedNumaNode,proto3" json:"allocated_numa_node,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *VirtualMachineStatus) Reset() {
@@ -495,6 +515,13 @@ func (x *VirtualMachineStatus) GetAllocatedPciDevices() []string {
 		return x.AllocatedPciDevices
 	}
 	return nil
+}
+
+func (x *VirtualMachineStatus) GetAllocatedNumaNode() int32 {
+	if x != nil {
+		return x.AllocatedNumaNode
+	}
+	return 0
 }
 
 type VirtualMachine struct {
@@ -1571,7 +1598,7 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x10PciDeviceRequest\x12\x1b\n" +
 	"\tvendor_id\x18\x01 \x01(\tR\bvendorId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\x05R\x05count\"\x97\x03\n" +
+	"\x05count\x18\x03 \x01(\x05R\x05count\"\xb8\x03\n" +
 	"\x12VirtualMachineSpec\x12\x19\n" +
 	"\bimage_id\x18\x01 \x01(\tR\aimageId\x12\x12\n" +
 	"\x04vcpu\x18\x02 \x01(\x05R\x04vcpu\x12\x1b\n" +
@@ -1583,7 +1610,9 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"driverHint\x12E\n" +
 	"\vpci_devices\x18\n" +
 	" \x03(\v2$.kyuusha.compute.v1.PciDeviceRequestR\n" +
-	"pciDevices\"\x9d\x02\n" +
+	"pciDevices\x12\x1f\n" +
+	"\vnuma_pinned\x18\v \x01(\bR\n" +
+	"numaPinned\"\xcd\x02\n" +
 	"\x14VirtualMachineStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -1594,7 +1623,8 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"hypervisor\x12%\n" +
 	"\x0einterface_refs\x18\x05 \x03(\tR\rinterfaceRefs\x124\n" +
 	"\x16volume_attachment_refs\x18\x06 \x03(\tR\x14volumeAttachmentRefs\x122\n" +
-	"\x15allocated_pci_devices\x18\a \x03(\tR\x13allocatedPciDevices\"\xc3\x01\n" +
+	"\x15allocated_pci_devices\x18\a \x03(\tR\x13allocatedPciDevices\x12.\n" +
+	"\x13allocated_numa_node\x18\b \x01(\x05R\x11allocatedNumaNode\"\xc3\x01\n" +
 	"\x0eVirtualMachine\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x12:\n" +
 	"\x04spec\x18\x02 \x01(\v2&.kyuusha.compute.v1.VirtualMachineSpecR\x04spec\x12@\n" +

@@ -65,6 +65,28 @@
   `tenant update`に`-pci-device-quota`フラグを追加（それまでこのquotaを設定する
   CLI手段が存在しなかった）
 
+- **NUMA/CPUピニング**（`spec.numa_pinned`）を実装。GPU/PCIパススルーの性能問題
+  （デバイスと異なるNUMAノードのvCPUから触るとリモートメモリアクセスのレイテンシが
+  乗る）がきっかけだったが、最終的にはPCIパススルーに限らない全VM共通の一般機能とし、
+  ドライバも問わない形にした。compute-agentが`/sys/devices/system/node`から
+  ホストのNUMAトポロジ（ノードID・所属CPU・メモリ量）を起動時に自動検出し
+  `RegisterHypervisorRequest.numa_nodes`で自己申告、スケジューラ
+  （`filterSchedulable`のフィルタ9種目、`reserveNumaNode`/`resizeNumaNodeCapacity`/
+  `releaseNumaNode`/`restoreNumaNode`）がvCPU/メモリ・PCIデバイスと同じ
+  Get→mutate→Updateパターンで単一ノードへの固定を予約・解放する。実装機構は
+  cloud-hypervisor固有のCLIフラグ（`--numa`/`--memory-zone`/`--cpus affinity=`）では
+  なく、`internal/compute-agent/cgroup`が既に両ドライバへ適用しているcpu.max/
+  memory.maxの仕組みへ`cpuset.cpus`/`cpuset.mems`を足す形にした——libvirt/QEMUが
+  既定で使うのと同じcgroup v2 cpusetアプローチで、Firecracker/cloud-hypervisor
+  どちらのVMMプロセスにも同じ経路で効く。`kyuusha vm create -numa-pinned`/
+  `hypervisor get`のnuma_nodes表示を追加。実機確認済み: このホスト自体はNUMAノード
+  1個の構成だが、`spec.numa_pinned=true`のVMを両ドライバで作成し、実際に起動した
+  プロセスのcgroup（`cpuset.cpus`/`cpuset.mems`）がホストの申告したノードと
+  一致すること、Resizeでノードの`allocated_vcpu`/`allocated_memory_mb`が
+  正しく増減すること、Deleteで解放されること、compute-agent再起動後もin-flightな
+  予約が保持されることを確認した（[VirtualMachine仕様](specs/virtual-machine.md)
+  「NUMA/CPUピニング」、[VMスケジュール仕様](specs/vm-scheduling.md)参照）
+
 ## 2026-09-25
 
 - `VirtualMachineService.Create`向けのAdmission Webhook（Kubernetesの

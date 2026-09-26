@@ -58,6 +58,15 @@ message VirtualMachineSpec {
   string user_data = 8;
   VmmDriver driver_hint = 9;
   repeated PciDeviceRequest pci_devices = 10;
+  // When true, the scheduler picks a single host NUMA node with enough
+  // spare vcpu/memory_mb and pins this VM's vCPUs and memory to it (see
+  // docs/architecture.md's NUMA/CPUピニング section) instead of leaving
+  // placement to the host kernel's own NUMA balancing. Best-effort
+  // co-location with pci_devices (a passthrough device's own NUMA
+  // affinity, if the host reports one, is not a hard requirement here --
+  // see NumaNode's doc comment). CLOUD_HYPERVISOR and FIRECRACKER both
+  // support this (unlike pci_devices, not driver-restricted).
+  bool numa_pinned = 11;
 }
 
 message VirtualMachineStatus {
@@ -73,6 +82,10 @@ message VirtualMachineStatus {
   // available_devices -- read-only, see internal/compute/
   // hypervisor_service.go's reservePciDevices.
   repeated string allocated_pci_devices = 7;
+  // Host NUMA node id spec.numa_pinned reserved this VM's vCPUs/memory
+  // against -- read-only, see internal/compute/hypervisor_service.go's
+  // reserveNumaNode. -1 (the default) means not pinned.
+  int32 allocated_numa_node = 8;
 }
 
 message VirtualMachine {

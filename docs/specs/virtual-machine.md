@@ -38,6 +38,7 @@ VMが`Scheduled`→`Provisioning`へ遷移する際（[VMスケジュール仕�
 | `volumes` | `volumes`から作られたVolumeAttachmentのうち、実際に`Attached`まで到達したものについて、そのVolume自身が持つ`protocol`/`storage_connection`/`identifier`（[Volume仕様](volume.md)参照。kyuushaはここで何もログイン/マウントしない——compute-agentが起動時にこの情報から既に見えているデバイス/ファイルを探すだけ）。空配列ならVolumeなしで起動する——アタッチが`Pending`のまま（排他制御待ち）だったものはここに含まれない |
 | `user_data` | `VirtualMachineSpec.user_data`そのまま。空なら何も注入しない（下記「UserData注入」参照） |
 | `pci_devices` | スケジュール時に予約された具体的なPCIアドレス（`status.allocated_pci_devices`と同じ値）。空配列ならPCIパススルーなし。`chvmm`のみが消費する——下記「PCIデバイスパススルー」参照 |
+| `numa_node` | スケジュール時に固定されたNUMAノードID（`status.allocated_numa_node`と同じ値）。`-1`なら固定なし。`fcvmm`/`chvmm`どちらも消費する——下記「NUMA/CPUピニング」参照 |
 
 `kernel_url`+`rootfs_url`と`disk_url`のどちらも空、または`driver_hint`に対応する
 登録済みドライバがない場合（`internal/compute-agent/agent.go`の`Drivers`マップに
@@ -119,6 +120,53 @@ fcvmm/chvmm共通の仕組み。VMMプロセスの起動直後（`cmd.Start()`�
   静的バイナリ(共有ライブラリのchroot問題がそもそも発生しない)+組み込みseccomp
   (既定で有効)という別の形で相応の防御を持つ——
   [cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照
+- **`spec.numa_pinned=true`の場合**、`cpu.max`/`memory.max`に加えて
+  `cpuset.cpus`（スケジューラが選んだNUMAノードの所属CPUリスト）/`cpuset.mems`
+  （そのノードID）も同じcgroupへ書き込む——VMMプロセスの全スレッド（vCPUスレッド
+  含む）をそのノードだけに縛る、libvirt/QEMUが既定で使うのと同じ機構。cpuset
+  controllerは委譲されているcpu/memoryとは独立に有効化を試み、失敗しても
+  best-effort（cpu.max/memory.maxは適用されたまま、NUMA局所性だけ失う）。
+  下記「NUMA/CPUピニング」参照
+
+## NUMA/CPUピニング（`spec.numa_pinned`）
+
+`true`にすると、スケジューラがこのVMの全vCPU・全メモリを1つの物理NUMAノードへ
+固定する（GPU/PCIパススルーに限らない、全VM共通の一般機能——
+`docs/architecture.md`「NUMA/CPUピニング」参照）。粒度はノード単位のみ:
+「vCPU0をホストCPU3に、vCPU1をホストCPU7に」のような個々のvCPU単位のピニングは
+対応しない。ゲストから見える仮想NUMAトポロジも単純な単一ノードのままで変わらない
+（複数ホストノードにまたがる仮想トポロジをゲストへ見せる機能は無い）。
+
+- **自己申告**: compute-agentが起動時に`/sys/devices/system/node/node<N>/
+  {cpulist,meminfo}`を読み、`RegisterHypervisorRequest.numa_nodes`
+  （ノードID・所属論理CPU・ノード合計メモリ）で自己申告する。オプトインの
+  フラグは無く常時実行——`-pci-devices`と違い危険でも稀少でもない、単なるホストの
+  事実の申告のため
+- **スケジューリング**: `filterSchedulable`が、候補Hypervisorの`status.numa_nodes`の
+  いずれか1つが要求vcpu/memory_mbを満たすかを検証するフィルタを持つ（フィルタ9種の1つ、
+  [VMスケジュール仕様](vm-scheduling.md)「フィルタ（ハード制約）」参照）。予約
+  （`reserveNumaNode`）はvCPU/メモリ・PCIデバイスと同じGet→mutate→Updateの
+  楽観的並行性制御で、具体的にどのノードを使うか1つ選んで`NumaNode.allocated_vcpu`/
+  `allocated_memory_mb`に加算する。実際に選ばれたノードは`status.allocated_numa_node`
+  に読み取り専用で反映される（未固定なら`-1`）
+- **Resize**: 在地リサイズ（Hypervisorを変えない経路）でも、固定先ノードに対して
+  同じデルタ調整（`resizeNumaNodeCapacity`）を行う——ノードの物理CPU数/メモリ量を
+  超える成長は、Hypervisor全体の空き容量に関わらず`ResourceExhausted`で拒否される
+- **Migrate/allow_migrate**: `spec.numa_pinned`という要求自体は引き継ぐが、固定先の
+  具体的なノードはPCIデバイスと同じく移行先で選び直される（同じ物理ノードIDが
+  再利用される保証はない）
+- **実装機構**: cloud-hypervisor固有の`--numa`/`--memory-zone`/`--cpus affinity=`
+  ではなく、`internal/compute-agent/cgroup`の`cpuset.cpus`/`cpuset.mems`で実現
+  （上記「cgroupリソース制限」参照）——Firecracker/cloud-hypervisorどちらのVMM
+  プロセスにも同じ経路で効く。cloud-hypervisorのライブリサイズ（`LiveResize`）は
+  cgroup適用を再実行するため、ピニング情報をBoot時から保持しておき、サイズ変更の
+  たびに一緒に再適用する
+- **実機確認済み**: このホストはNUMAノード1個の構成だが、cpuset機構自体の動作は
+  ノード数に依存しない。`spec.numa_pinned=true`のVMを作成し、実際に起動した
+  Firecracker/cloud-hypervisorどちらのプロセスのcgroupでも`cpuset.cpus`/
+  `cpuset.mems`がホストの申告したノードと一致すること、Resizeでノードの
+  `allocated_vcpu`/`allocated_memory_mb`が正しく増減すること、Deleteで解放されること、
+  compute-agent再起動後もin-flightな予約が保持されることを確認した
 
 ## 停止/起動（`Stop`/`Start`）
 

@@ -119,6 +119,13 @@ type Manager struct {
 	// means this host has none -- any VM with Volumes then fails to boot,
 	// same as a missing kernel/rootfs URL would.
 	StorageConnections volumeref.Connections
+	// NumaTopology maps this host's self-reported NUMA node ids to their
+	// host logical CPU lists (the same facts sent to RegisterHypervisor's
+	// numa_nodes) -- Boot uses it to resolve a scheduled spec.NumaNode into
+	// the cgroup.NumaPin cgroup.Apply needs, since compute-agent already
+	// has this data locally and there's no reason to round-trip it back
+	// out through etcd/NATS (see numaPin).
+	NumaTopology map[int32][]int32
 	// NetworkAttachBin, if set, is the external VNAP plugin binary
 	// netsetup.Wire/DeleteTap delegate the local tap-to-switch attach/
 	// detach step to, instead of the built-in Linux bridge implementation
@@ -215,6 +222,23 @@ func (m *Manager) jailGID() uint32 {
 		return m.JailGID
 	}
 	return 100
+}
+
+// numaPin resolves a scheduled BootSpec.NumaNode into the cgroup.NumaPin
+// cgroup.Apply needs, via this Manager's own detected NumaTopology -- nil
+// (no pinning) for vmm.UnpinnedNumaNode or a node id NumaTopology doesn't
+// recognize (topology detection failed or changed since scheduling; Apply
+// then just boots unconstrained on that axis, same best-effort spirit as
+// every other cgroup.Apply failure).
+func (m *Manager) numaPin(nodeID int32) *cgroup.NumaPin {
+	if nodeID < 0 {
+		return nil
+	}
+	cpus, ok := m.NumaTopology[nodeID]
+	if !ok {
+		return nil
+	}
+	return &cgroup.NumaPin{NodeID: nodeID, CPUs: cpus}
 }
 
 // ConsoleLogPath is where Boot(vmID's spec) captures Firecracker's stdout/
@@ -635,7 +659,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// Best-effort: a host/container without usable cgroup v2 delegation just
 	// boots this VM unconstrained, same as before this existed -- see
 	// internal/compute-agent/cgroup's doc comment.
-	if err := cgroup.Apply(spec.VMID, spec.VCPU, spec.MemoryMB, cmd.Process.Pid); err != nil {
+	if err := cgroup.Apply(spec.VMID, spec.VCPU, spec.MemoryMB, cmd.Process.Pid, m.numaPin(spec.NumaNode)); err != nil {
 		slog.Warn("fcvmm: cgroup limits not applied, VM will boot unconstrained", "vm_id", spec.VMID, "err", err)
 	}
 

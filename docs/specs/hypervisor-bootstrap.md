@@ -22,7 +22,8 @@ Hypervisorはcompute内部のスケジューリング対象であり、KaaS向�
 | `status.allocated_vcpu` / `allocated_memory_mb` | スケジューラによる予約合計 |
 | `status.supported_drivers` | 対応VMMドライバ一覧（例: `["FIRECRACKER", "CLOUD_HYPERVISOR"]`） |
 | `status.storage_connections` | このHypervisorが既に確立済みのストレージ接続一覧（`{name, local_path}`）。自己申告——kyuusha自身はここに何も接続しない。`spec.volumes`が要求する`storage_connection`によるスケジューラのフィルタ制約に使われる（[VMスケジュール仕様](vm-scheduling.md)「フィルタ（ハード制約）」参照） |
-| `status.available_devices` | vfio-pci束縛済みのPCIデバイス在庫（`{pci_address, vendor_id, device_id, allocated}`）。自己申告——`-pci-devices`フラグで宣言し、実際にvfio-pciへ束縛されているか起動時に検証される。`spec.pci_devices`によるスケジューラのフィルタ制約・予約に使われる（[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照） |
+| `status.available_devices` | vfio-pci束縛済みのPCIデバイス在庫（`{pci_address, vendor_id, device_id, allocated, numa_node}`）。自己申告——`-pci-devices`フラグで宣言し、実際にvfio-pciへ束縛されているか起動時に検証される。`spec.pci_devices`によるスケジューラのフィルタ制約・予約に使われる（[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照） |
+| `status.numa_nodes` | ホストのNUMAトポロジ（`{node_id, cpus, memory_mb, allocated_vcpu, allocated_memory_mb}`）。自己申告——`/sys/devices/system/node`から起動時に自動検出（オプトインのフラグは無く常時実行）。`spec.numa_pinned`によるスケジューラのフィルタ制約・予約に使われる（[VirtualMachine仕様](virtual-machine.md)「NUMA/CPUピニング」参照） |
 
 ## 登録フロー
 
@@ -33,7 +34,7 @@ sequenceDiagram
 
     Note over A: 起動
     loop 最大30回・1秒間隔でリトライ
-        A->>C: Register(hypervisor, bootstrap_token, allocatable_vcpu,<br/>allocatable_memory_mb, supported_drivers, storage_connections,<br/>available_devices)
+        A->>C: Register(hypervisor, bootstrap_token, allocatable_vcpu,<br/>allocatable_memory_mb, supported_drivers, storage_connections,<br/>available_devices, numa_nodes)
         C->>C: bootstrap_tokenを検証、zoneクレームを採用<br/>hypervisor_idクレームがあれば一致確認、revoked確認
         C-->>A: Hypervisor (成功時break)
     end
@@ -53,13 +54,17 @@ sequenceDiagram
   `PermissionDenied`で拒否される（下記「個体識別と失効」参照）
 - 既存のhypervisor IDが`spec.revoked=true`の場合、`PermissionDenied`で拒否される（下記参照）
 - 冪等（upsert）: 同じhypervisor IDでの再登録は zone（トークン由来）/capacity/supported_drivers/
-  storage_connections/available_devicesを最新の値に上書きするが、以下は前回の値を保持する:
+  storage_connections/available_devices/numa_nodesを最新の値に上書きするが、以下は前回の値を保持する:
   - `status.allocated_vcpu` / `allocated_memory_mb`（既存のスケジューラ予約）
   - `status.available_devices[].allocated`（`pci_address`が一致する既存エントリのみ。
     compute-agent自身はどのデバイスがどのVMで使用中か知らないため、新規に申告された
     在庫リストへ`pci_address`単位で前回の`allocated=true`を移し替える——上記
     `allocated_vcpu`と同じ「agentの再起動でin-flightな予約を静かに解除しない」という
     保護。新しく見えたアドレスは常に`allocated=false`から始まる）
+  - `status.numa_nodes[].allocated_vcpu` / `allocated_memory_mb`（`node_id`が一致する
+    既存エントリのみ、同じ「in-flightな予約を静かに解除しない」保護。ノードの
+    cpus/memory_mb自体は毎回の自己申告を信用する——ホストの物理トポロジが再起動の
+    間に変わることは通常無いが、変わった場合は新しい申告が優先される）
   - `spec.schedulable`（オペレーターが設定した意図。agentの再起動で意図せず解除されない）
   - `spec.revoked`（`Register`は常に`false`のままにする——このフィールド自体を`true`に
     することはない。すでに`true`なら上記の通りそもそも拒否される）

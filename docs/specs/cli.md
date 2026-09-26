@@ -23,7 +23,7 @@
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-driver-hint`(`firecracker`\|`cloud-hypervisor`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`cloud-hypervisor`必須。[Image仕様](image.md)参照) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-volumes`(カンマ区切りVolume ID。起動時にattach——attach-before-bootのみ、[Volume仕様](volume.md)参照) `-pci-devices`(カンマ区切り`vendor_id:device_id[:count]`。`cloud-hypervisor`限定、[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-driver-hint`(`firecracker`\|`cloud-hypervisor`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`cloud-hypervisor`必須。[Image仕様](image.md)参照) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-volumes`(カンマ区切りVolume ID。起動時にattach——attach-before-bootのみ、[Volume仕様](volume.md)参照) `-pci-devices`(カンマ区切り`vendor_id:device_id[:count]`。`cloud-hypervisor`限定、[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照) `-numa-pinned`(スケジューラが選んだ1つの物理NUMAノードへ全vCPU/メモリを固定する。ドライバを問わず使える、[VirtualMachine仕様](virtual-machine.md)「NUMA/CPUピニング」参照) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` `-finalizer-name`(指定すると`meta.finalizers`にその名前を含むVMだけに絞り込む。[外部システム連携仕様](external-integration.md)「大量Watch対策」参照) |

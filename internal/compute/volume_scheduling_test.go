@@ -15,15 +15,15 @@ func TestService_ScheduleVMFiltersByStorageConnection(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-no-conn", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-no-conn", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("Register hypervisor-no-conn: %v", err)
 	}
 	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-has-conn", "zone-a", 8, 16384, []string{"FIRECRACKER"},
-		[]StorageConnection{{Name: "test-connection"}}, nil); err != nil {
+		[]StorageConnection{{Name: "test-connection"}}, nil, nil); err != nil {
 		t.Fatalf("Register hypervisor-has-conn: %v", err)
 	}
 
-	picked, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{StorageConnections: []string{"test-connection"}})
+	picked, _, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{StorageConnections: []string{"test-connection"}})
 	if err != nil {
 		t.Fatalf("scheduleVM: %v", err)
 	}
@@ -36,11 +36,11 @@ func TestService_ScheduleVMUnschedulableWhenNoHypervisorHasRequiredConnection(t 
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	if _, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{StorageConnections: []string{"missing-connection"}}); !errors.Is(err, ErrUnschedulable) {
+	if _, _, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{StorageConnections: []string{"missing-connection"}}); !errors.Is(err, ErrUnschedulable) {
 		t.Fatalf("scheduleVM with no matching connection: got %v, want ErrUnschedulable", err)
 	}
 }
@@ -57,12 +57,12 @@ func TestReconciler_PhasePendingSkipsHypervisorMissingStorageConnection(t *testi
 	const tenant = "tenant-a"
 
 	// More free capacity, but no storage connection -- must be skipped.
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-roomy-no-conn", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-roomy-no-conn", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("Register hypervisor-roomy-no-conn: %v", err)
 	}
 	// Less free capacity, but has the connection -- must be picked.
 	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-tight-has-conn", "zone-a", 2, 4096, []string{"FIRECRACKER"},
-		[]StorageConnection{{Name: "test-connection"}}, nil); err != nil {
+		[]StorageConnection{{Name: "test-connection"}}, nil, nil); err != nil {
 		t.Fatalf("Register hypervisor-tight-has-conn: %v", err)
 	}
 
@@ -100,11 +100,11 @@ func TestReconciler_MigrateSkipsHypervisorMissingStorageConnection(t *testing.T)
 
 	spec := VirtualMachineSpec{ImageID: "img-abc", VCPU: 1, MemoryMB: 512, Volumes: []VolumeRequest{{VolumeID: "vol-1"}}}
 	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 8, 16384, spec)
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-no-conn", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-no-conn", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("Register hypervisor-no-conn: %v", err)
 	}
 	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-has-conn", "zone-a", 8, 16384, []string{"FIRECRACKER"},
-		[]StorageConnection{{Name: "test-connection"}}, nil); err != nil {
+		[]StorageConnection{{Name: "test-connection"}}, nil, nil); err != nil {
 		t.Fatalf("Register hypervisor-has-conn: %v", err)
 	}
 
@@ -129,7 +129,7 @@ func TestReconciler_PhasePendingUnschedulableWhenNoHypervisorHasStorageConnectio
 	r := newTestReconciler(t, ctx, svc)
 	const tenant = "tenant-a"
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

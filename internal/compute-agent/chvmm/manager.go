@@ -104,6 +104,10 @@ type Manager struct {
 	// docs/architecture.md「VMのネットワーク接続をCNIのようにプラガブルに
 	// すべきか」. Empty (the default) keeps today's behavior unchanged.
 	NetworkAttachBin string
+	// NumaTopology maps this host's self-reported NUMA node ids to their
+	// host logical CPU lists -- see fcvmm.Manager's identical field for the
+	// full doc comment (this Manager's numaPin helper mirrors that one).
+	NumaTopology map[int32][]int32
 
 	mu      sync.Mutex
 	running map[string]*runningVM
@@ -132,7 +136,17 @@ type runningVM struct {
 	// or vmm.BootRecord.TenantID for one Reconcile adopted) -- carried only
 	// for Running's RunningVM.TenantID label.
 	tenantID string
-	taps     []string
+	// numaPin is what Boot resolved from BootSpec.NumaNode (nil if unpinned,
+	// or topology detection didn't recognize the node) -- kept so
+	// LiveResize's own cgroup.Apply call (which must re-specify every
+	// argument, not just the ones that changed) doesn't drop the pinning a
+	// live vcpu/memory resize has nothing to do with. Not set for a VM
+	// Reconcile adopted from a previous process (no BootSpec to resolve it
+	// from) -- LiveResize on an adopted VM simply can't restore pinning
+	// until it's rebooted, an accepted gap for a feature that's itself
+	// best-effort throughout.
+	numaPin *cgroup.NumaPin
+	taps    []string
 	// ifaceIDs are the NetworkInterface ids taps was wired from, in the
 	// same order -- see vmm.RunningVM.NetworkInterfaces.
 	ifaceIDs []string
@@ -171,6 +185,20 @@ func (m *Manager) runDir() string {
 		return m.RunDir
 	}
 	return "/var/lib/kyuusha/ch-run"
+}
+
+// numaPin resolves a scheduled BootSpec.NumaNode into the cgroup.NumaPin
+// cgroup.Apply needs -- see fcvmm.Manager's identical method for the full
+// doc comment.
+func (m *Manager) numaPin(nodeID int32) *cgroup.NumaPin {
+	if nodeID < 0 {
+		return nil
+	}
+	cpus, ok := m.NumaTopology[nodeID]
+	if !ok {
+		return nil
+	}
+	return &cgroup.NumaPin{NodeID: nodeID, CPUs: cpus}
 }
 
 // ConsoleLogPath is where Boot(vmID's spec) captures cloud-hypervisor's
@@ -530,7 +558,8 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	// Best-effort: a host/container without usable cgroup v2 delegation just
 	// boots this VM unconstrained -- see internal/compute-agent/cgroup's doc
 	// comment.
-	if err := cgroup.Apply(spec.VMID, spec.VCPU, spec.MemoryMB, cmd.Process.Pid); err != nil {
+	numaPin := m.numaPin(spec.NumaNode)
+	if err := cgroup.Apply(spec.VMID, spec.VCPU, spec.MemoryMB, cmd.Process.Pid, numaPin); err != nil {
 		slog.Warn("chvmm: cgroup limits not applied, VM will boot unconstrained", "vm_id", spec.VMID, "err", err)
 	}
 
@@ -548,7 +577,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 
 	exeBasename := filepath.Base(m.binPath())
-	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, taps: taps, ifaceIDs: ifaceIDs, attached: attached, pinnedKeys: pinnedKeys, done: make(chan struct{})}
+	rv := &runningVM{pid: cmd.Process.Pid, exeBasename: exeBasename, tenantID: spec.TenantID, numaPin: numaPin, taps: taps, ifaceIDs: ifaceIDs, attached: attached, pinnedKeys: pinnedKeys, done: make(chan struct{})}
 	m.mu.Lock()
 	if m.running == nil {
 		m.running = make(map[string]*runningVM)

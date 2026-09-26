@@ -24,6 +24,25 @@ type PciDevice struct {
 	VendorID   string
 	DeviceID   string
 	Allocated  bool
+	// NumaNode is the host NUMA node this device is attached to (from
+	// /sys/bus/pci/devices/<addr>/numa_node), or -1 if the kernel doesn't
+	// report one. Best-effort input to NUMA-pinned scheduling (see
+	// NumaNode's own doc comment) -- never a hard requirement.
+	NumaNode int32
+}
+
+// NumaNode is one host NUMA node a Hypervisor self-reports -- see
+// hypervisor.proto's NumaNode message for the full doc comment (this type
+// mirrors it 1:1, same pattern as PciDevice/StorageConnection).
+// AllocatedVCPU/AllocatedMemoryMB are server-managed scheduling state
+// (reserveNumaNode), preserved by NodeID across a re-register the same way
+// PciDevice.Allocated is preserved by PCIAddress -- see RegisterHypervisor.
+type NumaNode struct {
+	NodeID            int32
+	CPUs              []int32
+	MemoryMB          int64
+	AllocatedVCPU     int32
+	AllocatedMemoryMB int64
 }
 
 // StorageConnection is one storage connection this Hypervisor self-reports
@@ -69,6 +88,10 @@ type HypervisorStatus struct {
 	// block-storage dialing compute directly (kept one-way: compute already
 	// depends on block-storage for Volume validation).
 	StorageConnections []StorageConnection
+	// NumaNodes is this Hypervisor's self-reported host NUMA topology, used
+	// by NUMA-pinned scheduling (see docs/architecture.md's NUMA/CPUピニング
+	// section, and reserveNumaNode).
+	NumaNodes []NumaNode
 }
 
 type Hypervisor struct {

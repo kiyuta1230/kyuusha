@@ -82,6 +82,17 @@ type Agent struct {
 	// cmd/compute-agent/main.go builds this from the -pci-devices flag,
 	// after verifying each address is actually vfio-pci-bound.
 	AvailableDevices []*computev1.PciDevice
+	// NumaNodes declares this host's NUMA topology (node id, host logical
+	// CPUs, total memory) -- sent at self-registration so compute can
+	// schedule a spec.numa_pinned VM onto a node with enough spare
+	// vcpu/memory_mb (internal/compute/hypervisor_service.go's
+	// reserveNumaNode). allocated_vcpu/allocated_memory_mb are ignored by
+	// the server on input, same as PciDevice.allocated -- see
+	// hypervisor.proto's RegisterHypervisorRequest.numa_nodes.
+	// cmd/compute-agent/main.go builds this from /sys/devices/system/node
+	// (detectNumaTopology), unconditionally (no flag: unlike pci_devices,
+	// there's nothing to opt into -- it's just facts about the host).
+	NumaNodes []*computev1.NumaNode
 
 	// Drivers boots/tears down VMs, keyed by driver_hint (e.g.
 	// string(compute.VmmDriverFirecracker), string(compute.VmmDriverCloudHypervisor)).
@@ -246,6 +257,7 @@ func (a *Agent) register(ctx context.Context) error {
 		SupportedDrivers:    a.SupportedDrivers,
 		StorageConnections:  a.StorageConnections,
 		AvailableDevices:    a.AvailableDevices,
+		NumaNodes:           a.NumaNodes,
 	}
 	var lastErr error
 	for attempt := 0; attempt < 30; attempt++ {
@@ -308,6 +320,7 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 			UserData:          cmd.UserData,
 			Volumes:           buildVolumeInfos(cmd.TenantID, cmd.Volumes),
 			PciDevices:        cmd.PciDevices,
+			NumaNode:          cmd.NumaNode,
 		})
 		if err != nil {
 			span.RecordError(err)
