@@ -179,7 +179,7 @@ func (s *Server) DetachVolume(ctx context.Context, req *computev1.DetachVolumeRe
 }
 
 func (s *Server) Migrate(ctx context.Context, req *computev1.MigrateVirtualMachineRequest) (*computev1.VirtualMachine, error) {
-	vm, err := s.svc.Migrate(ctx, req.GetTenantId(), req.GetId(), req.GetTargetHypervisor())
+	vm, err := s.svc.Migrate(ctx, req.GetTenantId(), req.GetId(), req.GetTargetHypervisor(), req.GetTransferRootDisk())
 	if err != nil {
 		return nil, toStatus(err)
 	}

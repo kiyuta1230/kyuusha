@@ -458,6 +458,7 @@ func vmMigrate(args []string) {
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	id := fs.String("id", "", "VM ID (required)")
 	targetHypervisor := fs.String("target-hypervisor", "", "specific Hypervisor to migrate to (default: let the scheduler auto-pick, excluding the VM's current Hypervisor)")
+	transferRootDisk := fs.Bool("transfer-root-disk", false, "transfer the VM's actual current root disk content to the new Hypervisor instead of re-cloning a fresh copy from the Image -- costs a real transfer proportional to disk size and requires -migration-registry configured on both Hypervisors (see docs/specs/virtual-machine.md \"ルートディスク転送\")")
 	fs.Parse(args)
 	if *tenant == "" {
 		*tenant = resolveTenant(*token)
@@ -469,7 +470,7 @@ func vmMigrate(args []string) {
 	client := dial(*addr)
 	ctx := authedContext(context.Background(), *token)
 	vm, err := client.Migrate(ctx, &computev1.MigrateVirtualMachineRequest{
-		TenantId: *tenant, Id: *id, TargetHypervisor: *targetHypervisor,
+		TenantId: *tenant, Id: *id, TargetHypervisor: *targetHypervisor, TransferRootDisk: *transferRootDisk,
 	})
 	if err != nil {
 		fatal("migrate: %v", err)

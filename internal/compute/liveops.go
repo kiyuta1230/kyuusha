@@ -94,6 +94,75 @@ func (r *Reconciler) roundTripHotplug(ctx context.Context, hypervisor string, cm
 	return nil
 }
 
+// pushRootDiskTimeout bounds how long migrateVM blocks waiting for the old
+// Hypervisor's push reply -- much longer than hotplugTimeout, since this is
+// a real file read + network upload proportional to root disk size, not a
+// quick device-model call.
+const pushRootDiskTimeout = 5 * time.Minute
+
+// roundTripPushRootDisk asks hypervisor (the VM's *old* Hypervisor) to push
+// vmID's current root disk to the configured migration-artifact registry,
+// and blocks for the resulting oci:// URL+digest on a fresh per-request
+// reply-subject inbox -- same pattern as roundTripHotplug/ConsoleRequest.
+// See migrateVM (reconciler.go) for how the result then gets threaded into
+// the new Hypervisor's CreateCommand.
+func (r *Reconciler) roundTripPushRootDisk(ctx context.Context, hypervisor, vmID, driverHint string) (url, digest string, err error) {
+	replySubject := r.nc.NewInbox()
+	sub, err := r.nc.SubscribeSync(replySubject)
+	if err != nil {
+		return "", "", err
+	}
+	defer sub.Unsubscribe()
+
+	payload, err := json.Marshal(MigrateArtifactCommand{
+		Op: MigrateArtifactOpPush, ReplySubject: replySubject, VMID: vmID, DriverHint: driverHint,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	msg := nats.NewMsg(CmdSubjectMigrateArtifact(hypervisor))
+	msg.Data = payload
+	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+		return "", "", err
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, pushRootDiskTimeout)
+	defer cancel()
+	reply, err := sub.NextMsgWithContext(waitCtx)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: %s", ErrLiveOpUnavailable, err)
+	}
+	var res MigrateArtifactResult
+	if err := json.Unmarshal(reply.Data, &res); err != nil {
+		return "", "", err
+	}
+	if !res.Success {
+		return "", "", fmt.Errorf("%w: %s", ErrValidation, res.Error)
+	}
+	return res.URL, res.Digest, nil
+}
+
+// deleteMigrationArtifact fire-and-forgets a cleanup DELETE for url to
+// hypervisor (the VM's *new* Hypervisor, which shares the same
+// -migration-registry configuration -- see MigrateArtifactCommand's doc
+// comment on why it doesn't need to be the one that pushed it). Best-effort
+// like DeleteCommand: no reply, no retry -- a leaked artifact is a registry
+// storage/cost concern, not a correctness one, and some registries disable
+// manifest deletion by default (see docs/specs/virtual-machine.md「ルート
+// ディスク転送」).
+func (r *Reconciler) deleteMigrationArtifact(ctx context.Context, hypervisor, url string) {
+	payload, err := json.Marshal(MigrateArtifactCommand{Op: MigrateArtifactOpDelete, URL: url})
+	if err != nil {
+		slog.Error("migrate-artifact: marshal delete command failed", "url", url, "err", err)
+		return
+	}
+	msg := nats.NewMsg(CmdSubjectMigrateArtifact(hypervisor))
+	msg.Data = payload
+	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+		slog.Error("migrate-artifact: publish delete command failed", "url", url, "hypervisor", hypervisor, "err", err)
+	}
+}
+
 // LiveResize changes a Running+CLOUD_HYPERVISOR VM's vcpu/memory without a
 // reboot, via cloud-hypervisor's --api-socket (see
 // internal/compute-agent/chvmm's Hotplugger implementation). Reuses the

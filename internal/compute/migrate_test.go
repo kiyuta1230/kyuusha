@@ -38,7 +38,7 @@ func TestService_MigrateRequiresStopped(t *testing.T) {
 		t.Fatalf("phase = %q, want Pending", vm.Status.Phase)
 	}
 
-	if _, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, ""); !errors.Is(err, ErrInvalidPhase) {
+	if _, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "", false); !errors.Is(err, ErrInvalidPhase) {
 		t.Fatalf("Migrate on a Pending vm: got %v, want ErrInvalidPhase", err)
 	}
 }
@@ -49,7 +49,7 @@ func TestService_MigrateRejectsSameHypervisorAsTarget(t *testing.T) {
 	spec := VirtualMachineSpec{ImageID: "img-abc", VCPU: 1, MemoryMB: 512}
 	vm := stoppedVMWithHypervisor(t, ctx, svc, "tenant-a", "hypervisor-1", 8, 16384, spec)
 
-	if _, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "hypervisor-1"); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "hypervisor-1", false); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Migrate with target == current hypervisor: got %v, want ErrValidation", err)
 	}
 }
@@ -60,7 +60,7 @@ func TestService_MigrateSetsPhaseAndTarget(t *testing.T) {
 	spec := VirtualMachineSpec{ImageID: "img-abc", VCPU: 1, MemoryMB: 512}
 	vm := stoppedVMWithHypervisor(t, ctx, svc, "tenant-a", "hypervisor-1", 8, 16384, spec)
 
-	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "hypervisor-2")
+	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "hypervisor-2", false)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestReconciler_MigrateAutoPicksDifferentHypervisor(t *testing.T) {
 	}
 	deletesTo1 := subscribeDeleteCommands(t, ctx, r.js, "hypervisor-1")
 
-	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "")
+	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "", false)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestReconciler_MigrateToExplicitTargetSucceeds(t *testing.T) {
 		t.Fatalf("RegisterHypervisor hypervisor-2: %v", err)
 	}
 
-	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "hypervisor-2")
+	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "hypervisor-2", false)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestReconciler_MigrateRejectsTargetLackingCapacity(t *testing.T) {
 		t.Fatalf("RegisterHypervisor hypervisor-2: %v", err)
 	}
 
-	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "hypervisor-2")
+	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "hypervisor-2", false)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestReconciler_MigrateNoCapacityAnywhereReportsCondition(t *testing.T) {
 	// the VM's current one), leaving nothing to schedule onto.
 	vm := stoppedVMWithHypervisor(t, ctx, svc, "tenant-a", "hypervisor-1", 8, 16384, spec)
 
-	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "")
+	migrating, err := svc.Migrate(ctx, "tenant-a", vm.Meta.ID, "", false)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}

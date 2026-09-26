@@ -87,6 +87,33 @@
   予約が保持されることを確認した（[VirtualMachine仕様](specs/virtual-machine.md)
   「NUMA/CPUピニング」、[VMスケジュール仕様](specs/vm-scheduling.md)参照）
 
+- **ルートディスク転送**（`Migrate(transfer_root_disk=true)`）を実装。
+  `docs/open-questions.md`が長らく「未着手」としていた、コールドマイグレーション
+  後にroot diskの中身（Imageからクローンした後にゲストが書いた差分）が
+  失われる制限への対応。既定`false`のままなら従来通り（オプトイン、実ディスク
+  サイズ相応のコスト増を伴うため）。転送経路はHypervisor間の新規データパスでは
+  なく、既存のImage配布経路（OCIレジストリ）を再利用する形にした（ユーザー
+  確認の上での決定）——`internal/compute-agent/imagestore`に`PushOCIBlob`/
+  `DeleteOCIRef`を追加（`kyuusha image build`の既存push実装
+  `orasPushFile`と同じ形）、`vmm.VMM`に`RootDiskPath`を追加してfcvmm/chvmmの
+  現在のroot diskファイルパスを純粋関数として取得可能にし、
+  `MigrateArtifactCommand`（PUSH/DELETE）という新しいNATSコマンドで
+  旧HypervisorにpushさせてからmigrateVMが新Hypervisorのスケジューリングへ
+  進み、新Hypervisorはこれを普通のImage取得と区別せず`EnsureCached`でpullする。
+  失敗時はMigrate自体を`Unmigratable`/`RootDiskTransferFailed`で失敗させ、
+  安い経路へ黙ってフォールバックしない。新VM起動確認後（成功・失敗いずれの
+  `CreateResult`でも）にレジストリ上の一時アーティファクトを削除するfire-and-
+  forgetクリーンアップも実装（ベストエフォート）。`kyuusha vm migrate
+  -transfer-root-disk`、compute-agentの新しい`-migration-registry`/
+  `-migration-registry-ref`/`-migration-registry-plain-http`フラグを追加。
+  playgroundで実機確認済み: 実際にFirecracker VMを起動し、ホスト側のroot
+  diskファイルへ直接書き込んだマーカーバイトが、転送後に移行先Hypervisorの
+  新しいroot diskファイルの同じオフセットにそのまま存在すること、レジストリに
+  一時アーティファクトが実際にpushされ新VM起動確認後に削除されること
+  （`REGISTRY_STORAGE_DELETE_ENABLED=true`を設定したplayground用
+  `registry:2`で確認）を確認した（[VirtualMachine仕様]
+  (specs/virtual-machine.md)「ルートディスク転送」参照）
+
 ## 2026-09-25
 
 - `VirtualMachineService.Create`向けのAdmission Webhook（Kubernetesの

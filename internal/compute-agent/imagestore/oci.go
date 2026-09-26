@@ -65,3 +65,83 @@ func fetchOCIBlob(ctx context.Context, ref string, plainHTTP bool) (io.ReadClose
 	}
 	return blobRC, nil
 }
+
+// PushOCIBlob pushes blob to registryAddr/repo:tag as a single-layer OCI
+// artifact -- the exact same push shape cmd/kyuusha's `image build` uses
+// (orasPushFile there, duplicated rather than shared: that's a CLI-only
+// command this package can't import), so the result is byte-for-byte the
+// same artifact shape fetchOCIBlob already knows how to pull back
+// (manifest with exactly one layer). Used by Migrate(transfer_root_disk=
+// true)'s push handler (agent.go) to publish a VM's current root disk;
+// registryRef, if non-empty, is what gets embedded in the returned URL
+// instead of registryAddr -- the same "push via one address, but the
+// consuming side reaches the registry at a different address" split
+// -registry/-registry-ref gives `kyuusha image build` (e.g. compute-agent
+// containers resolve the registry via internal Docker DNS, this process
+// may not). Loading the whole file into memory (like orasPushFile already
+// does) is a known limitation for very large root disks -- see
+// docs/open-questions.md.
+func PushOCIBlob(ctx context.Context, registryAddr, registryRef, repo, tag string, plainHTTP bool, blob []byte) (url, digest string, err error) {
+	repository, err := remote.NewRepository(registryAddr + "/" + repo)
+	if err != nil {
+		return "", "", fmt.Errorf("open OCI repository %s/%s: %w", registryAddr, repo, err)
+	}
+	repository.PlainHTTP = plainHTTP
+
+	layerDesc, err := oras.PushBytes(ctx, repository, "application/octet-stream", blob)
+	if err != nil {
+		return "", "", fmt.Errorf("push OCI blob to %s/%s:%s: %w", registryAddr, repo, tag, err)
+	}
+	manifestDesc, err := oras.PackManifest(ctx, repository, oras.PackManifestVersion1_1, "application/vnd.kyuusha.rootdisk.v1", oras.PackManifestOptions{
+		Layers: []ocispec.Descriptor{layerDesc},
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("pack OCI manifest for %s/%s:%s: %w", registryAddr, repo, tag, err)
+	}
+	if err := repository.Tag(ctx, manifestDesc, tag); err != nil {
+		return "", "", fmt.Errorf("tag OCI manifest %s/%s:%s: %w", registryAddr, repo, tag, err)
+	}
+
+	scheme := "oci://"
+	if plainHTTP {
+		scheme = "oci+http://"
+	}
+	ref := registryRef
+	if ref == "" {
+		ref = registryAddr
+	}
+	return fmt.Sprintf("%s%s/%s:%s", scheme, ref, repo, tag), layerDesc.Digest.String(), nil
+}
+
+// DeleteOCIRef removes the manifest ref names ("<registry>/<repository>:
+// <tag-or-digest>", the scheme already stripped by the caller) from its
+// registry -- the cleanup counterpart to PushOCIBlob, used once a migrated
+// VM is confirmed booted from a pushed root disk artifact (see
+// reconciler.go's handleCreateResult). Best-effort by design at the call
+// site: many registries disable manifest deletion by default (e.g. the
+// stock Docker Registry image needs REGISTRY_STORAGE_DELETE_ENABLED=true),
+// and a failure here only leaks registry storage, never correctness.
+func DeleteOCIRef(ctx context.Context, ref string, plainHTTP bool) error {
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		return fmt.Errorf("parse OCI reference %q: %w", ref, err)
+	}
+	if err := parsed.ValidateReference(); err != nil {
+		return fmt.Errorf("OCI reference %q has no tag or digest: %w", ref, err)
+	}
+
+	repo, err := remote.NewRepository(parsed.Registry + "/" + parsed.Repository)
+	if err != nil {
+		return fmt.Errorf("open OCI repository %s/%s: %w", parsed.Registry, parsed.Repository, err)
+	}
+	repo.PlainHTTP = plainHTTP
+
+	desc, err := repo.Resolve(ctx, parsed.ReferenceOrDefault())
+	if err != nil {
+		return fmt.Errorf("resolve OCI manifest %s: %w", ref, err)
+	}
+	if err := repo.Manifests().Delete(ctx, desc); err != nil {
+		return fmt.Errorf("delete OCI manifest %s: %w", ref, err)
+	}
+	return nil
+}

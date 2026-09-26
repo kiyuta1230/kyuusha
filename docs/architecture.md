@@ -1330,6 +1330,91 @@ Firecracker/cloud-hypervisorどちらのプロセスも、そのcgroup（`/sys/f
 `allocated_memory_mb`が正しく増減すること、Deleteで解放されること、
 compute-agent再起動後もin-flightな予約が保持されることも確認した。
 
+## ルートディスク転送
+
+「マイグレーション」節の通り、`Migrate`は既定でroot disk（Imageからクローンした後に
+ゲストが書き込んだ差分）を移行先へ引き継がない——移行先で同じImageから作り直すだけ。
+`transfer_root_disk=true`を明示した場合のみ、実際の中身を転送する。
+
+**常にオプトイン、既定falseのまま**: 通常の`Migrate`はコストの小さい「同じImageから
+作り直す」動作のままにしておく——`transfer_root_disk=true`は実ディスクサイズに
+比例したネットワーク転送＋レジストリのストレージ消費という実コストを伴うため、
+明示的に望んだ場合のみ課す（PCIデバイスパススルーの`spec.pci_devices`やResizeの
+`allow_migrate`と同じ「既定は安い/安全な経路のまま、高コストな経路は明示フラグ
+必須」という一貫した設計判断）。
+
+**転送経路: Hypervisor間の新規データパスではなく、既存のImage配布経路（OCIレジストリ）
+を再利用**。当初は「旧compute-agentが新規HTTPエンドポイントでroot diskを公開し、
+新compute-agentが直接fetchする」という直接通信案も検討したが、以下の理由で
+既存経路の再利用を選んだ（ユーザー確認の上、2026-09-26決定）:
+
+- compute-agentは今のところ`/metrics/resources`以外にサーバー側のHTTP受け口を
+  一切持たない（「ハイパーバイザー間の軽量ピアフェッチ」は設計のみでまだ未実装
+  ——直接通信案を採ると、これと同じ種類の新しい受け口・認証モデルをこの機能
+  専用に作ることになる）
+- 一方でcompute-agentは`internal/compute-agent/imagestore`経由で**OCIレジストリからの
+  pull**は既に実装済み（`oras-go/v2`）。`kyuusha image build`（`cmd/kyuusha/imagebuild.go`の
+  `orasPushFile`）にはpush側の実装も既にある——CLIツールから直接シェルアウトする
+  `docker build`部分を除けば、pushそのものはoras-go/v2の薄いラッパーで、
+  compute-agent側にそのまま持ち込める
+- 新Hypervisorは、転送されたroot diskを「pull元のURLが通常のImageか、この一時的な
+  移行アーティファクトか」を一切区別せず、既存の`imagestore.EnsureCached`の
+  ダウンロード・digest検証ロジックをそのまま通す——新しい受け口はcompute-agent側に
+  一切増えない
+
+**フロー**（`internal/compute/reconciler.go`の`migrateVM`/`provisionAndPublish`/
+`handleCreateResult`、`internal/compute-agent/migrateartifact.go`）:
+
+1. `migrateVM`が新Hypervisorのスケジューリングに成功した後、旧Hypervisorの容量解放・
+   `DeleteCommand`送出（旧Hypervisorのjail/runディレクトリ、＝root diskの実体を破棄する）
+   より**前**に、旧Hypervisorへ`MigrateArtifactCommand{Op: PUSH}`をNATS経由の
+   request-reply（`roundTripHotplug`と同じ、専用reply-subjectでの同期待ち）で送る
+2. 旧compute-agentは`vmm.VMM.RootDiskPath(vm_id)`（fcvmm/chvmmそれぞれの現在の
+   root diskファイルパスを返す、純粋関数——`Stop`後もHypervisor死活監視や
+   稼働状態に一切依存しない）でファイルを見つけ、丸ごと読み込んで
+   `internal/compute-agent/imagestore.PushOCIBlob`で`-migration-registry`
+   （`kyuusha image build`の`-registry`/`-registry-ref`と同じ、push先と
+   参照先アドレスを分けられる設定）へ、VM単位で一意なタグ
+   （`kyuusha-migration/<vm_id>:migrate-<vm_id>-<timestamp>`、同じVMが
+   複数回移行されても過去のpushを上書きしない）でpushし、
+   結果の`oci://`URL+digestを返す
+3. 失敗した場合、**新Hypervisorへの予約をロールバックし、Migrate自体を
+   `Unmigratable`/`RootDiskTransferFailed`として失敗させる**——明示的に要求した
+   転送が失敗したのに、黙って「作り直すだけ」の安い経路へ引き返すことはしない
+   （オプトインの安全な経路が失敗した時に、確認なくロッシーな経路へフォール
+   バックしない、という一貫した設計判断）
+4. 成功した場合、pushされたURL/digestを`VirtualMachineStatus`の非公開フィールド
+   （`PendingRootDiskURL`/`PendingRootDiskDigest`、`MigrateTarget`/`StopForce`と
+   同じ「wireには出さない一時的なリクエストパラメータの運び役」）に載せて
+   `Scheduled`へ遷移する
+5. 次のreconcileパス（`PhaseScheduled`の`provisionAndPublish`）が、Imageから
+   解決した`kernel_url`/`rootfs_url`/`disk_url`のうち、root disk側
+   （`KERNEL_ROOTFS`なら`rootfs_url`、`QCOW2`なら`disk_url`）だけを
+   `PendingRootDiskURL`/`Digest`で上書きする。新Hypervisorのcompute-agentは
+   これが移行アーティファクトだと知る必要すらなく、普段通り`EnsureCached`で
+   ダウンロード・クローンするだけ
+6. 新VMの起動が`CreateResult{Success: true}`として確認できたら
+   （`handleCreateResult`）、新Hypervisorへ`MigrateArtifactCommand{Op: DELETE}`を
+   fire-and-forgetで送り、レジストリ上の一時アーティファクトを削除する
+   （失敗してもベストエフォート——一部のレジストリは既定でmanifest削除を
+   無効化している。取り残されてもレジストリのストレージ消費という運用上の
+   問題に留まり、正しさには影響しない）。`CreateResult{Success: false}`
+   （新VMが結局起動できなかった場合）でも同様に削除する——どちらにせよ
+   このアーティファクトはもう要らない
+
+実機確認済み: 実際にFirecracker VMを起動し、ホスト側のroot diskファイルへ
+直接書き込んだマーカーバイトが、`transfer_root_disk=true`でのMigrate後、
+移行先Hypervisorの新しいroot diskファイルの同じオフセットにそのまま
+存在すること（＝Imageからの作り直しではなく実際の転送であること）、
+レジストリに一時アーティファクトが実際にpushされ、新VMが起動確認された後に
+削除される（`REGISTRY_STORAGE_DELETE_ENABLED=true`を設定したplayground用
+`registry:2`で確認）ことを確認した。
+
+**既知の制約**: `PushOCIBlob`は対象ファイルを丸ごとメモリに読み込む
+（`kyuusha image build`の既存実装と同じ制約）——非常に大きなroot diskでは
+compute-agentのメモリを圧迫しうる。ストリーミングpushへの最適化は
+将来の課題として残す（[docs/open-questions.md](open-questions.md)参照）。
+
 ## ハイパーバイザー死活監視とリカバリ、およびpet/cattleの区別の廃止
 
 ハイパーバイザーの死活監視自体は実装済み（`sweepHypervisorHealth`、

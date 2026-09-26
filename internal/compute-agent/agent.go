@@ -94,6 +94,25 @@ type Agent struct {
 	// there's nothing to opt into -- it's just facts about the host).
 	NumaNodes []*computev1.NumaNode
 
+	// MigrationRegistry is the OCI registry host[:port] this compute-agent
+	// pushes a VM's current root disk to (Migrate(transfer_root_disk=true),
+	// see internal/compute-agent/imagestore.PushOCIBlob) and deletes
+	// temporary migration artifacts from afterward. Empty (the default)
+	// means this host can't serve either half of that feature -- a PUSH
+	// command then fails with an explicit error (surfaced as a failed
+	// Migrate, never a silent fallback to the lossy re-clone-from-Image
+	// path) rather than being silently accepted and doing nothing.
+	MigrationRegistry string
+	// MigrationRegistryRef, if set, is what gets embedded in a pushed
+	// artifact's URL instead of MigrationRegistry -- same
+	// push-via-one-address/reference-a-different-one split as
+	// `kyuusha image build`'s -registry/-registry-ref (see cmd/compute-agent/
+	// main.go). Empty means same as MigrationRegistry.
+	MigrationRegistryRef string
+	// MigrationRegistryPlainHTTP pushes/deletes over plain HTTP instead of
+	// HTTPS -- same meaning as `kyuusha image build`'s -plain-http.
+	MigrationRegistryPlainHTTP bool
+
 	// Drivers boots/tears down VMs, keyed by driver_hint (e.g.
 	// string(compute.VmmDriverFirecracker), string(compute.VmmDriverCloudHypervisor)).
 	// cmd/compute-agent/main.go always populates both in production;
@@ -193,6 +212,20 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	defer hotplugConsumeCtx.Stop()
+
+	migrateArtifactCons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "compute-agent-" + a.Hypervisor + "-migrate-artifact",
+		FilterSubject: compute.CmdSubjectMigrateArtifact(a.Hypervisor),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	migrateArtifactConsumeCtx, err := migrateArtifactCons.Consume(a.handleMigrateArtifact)
+	if err != nil {
+		return err
+	}
+	defer migrateArtifactConsumeCtx.Stop()
 
 	// block-storage's verify-volume command (internal/block-storage/
 	// verification.go) -- a separate stream block-storage owns/creates,

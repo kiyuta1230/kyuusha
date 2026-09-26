@@ -3,24 +3,35 @@
 docs/architecture.md の「未決事項」は設計レベルの論点用。こちらは実装を進める中で
 出てきた、まだ判断を保留している細かい話を随時追加していくメモ。
 
-## コールドマイグレーションのroot disk転送（未着手、将来やる予定）
+## コールドマイグレーションのroot disk転送（解決済み・実装済み、2026-09-26）
 
-`VirtualMachineService.Migrate`（2026-09-23実装、[VirtualMachine仕様]
-(specs/virtual-machine.md)「マイグレーション」参照）は、root disk（Imageから
-クローンした後にゲストが書き込んだ差分）を移行先Hypervisorへ引き継がない
-——移行先で同じImageから作り直すだけ。NetworkInterface/VolumeAttachmentは
-引き継がれる。
+`Migrate(transfer_root_disk=true)`として実装済み——既定`false`のまま
+（オプトイン）なら従来通りroot diskは移行先で同じImageから作り直すだけで、
+`true`を明示した場合のみ実際の中身（Imageからクローンした後にゲストが
+書き込んだ差分）を移行先Hypervisorへ転送する。詳細な設計は
+`docs/architecture.md`「ルートディスク転送」、仕様は
+[VirtualMachine仕様](specs/virtual-machine.md)「ルートディスク転送」参照。
 
-ユーザー確認の上、まずはこの制限付きで実装し、root disk自体の転送は
-別途着手する方針（2026-09-23決定）。着手する場合の論点:
+着手前に検討していた論点への回答:
 
-- Hypervisor間でVM単位の生ディスクファイルを転送する経路自体がまだ存在しない
-  （kyuushaに既存のHypervisor間データパスは、Image blobの読み取り専用ピア
-  フェッチ（`docs/architecture.md`「ハイパーバイザー間の軽量ピアフェッチ」）
-  のみ）。書き込み可能な個別VMディスクの転送は別の設計が要る
-- VM稼働中（`Stopped`にする前）の差分をどこまで正確に転送するか（コールドの
-  ままdiskファイルだけ丸ごとコピーするのか、実質ライブマイグレーションの
-  一部——メモリ状態の転送——まで踏み込むのかは別問題として切り分ける）
+- 転送経路は新設のHypervisor間直接通信ではなく、**既存のImage配布経路
+  （OCIレジストリ）を再利用**する形にした（ユーザー確認の上、2026-09-26決定）。
+  旧Hypervisorが現在のroot diskをOCIアーティファクトとしてレジストリへpushし、
+  新Hypervisorは通常のImage取得と全く同じ経路でpullする——compute-agentに
+  新しいサーバー側の受け口を作らずに済んだ
+- VM稼働中の差分転送やメモリ状態の転送（実質ライブマイグレーション）は
+  スコープ外のまま——`Migrate`はコールドのみ（`Stopped`必須）という既存の
+  制約は変わらない。転送するのはdiskファイルの中身だけ
+
+## ルートディスク転送のストリーミングpush化（未着手）
+
+`internal/compute-agent/imagestore.PushOCIBlob`は対象ファイルを丸ごと
+メモリへ読み込んでからpushする（`kyuusha image build`の既存実装
+`orasPushFile`と同じ制約をそのまま踏襲）。非常に大きなroot diskでは
+compute-agentのメモリを圧迫しうる。oras-go/v2の低レベルAPI
+（事前にdigest/sizeを計算した`content.Descriptor`＋`io.Reader`を直接
+`Repository.Push`へ渡す）を使えばファイル全体を一度に保持せずに済むはずだが、
+実際の需要が出るまで着手しない。
 
 ## CLIの `-tenant` フラグをトークンのクレームからデフォルトすべきか（解決済み・実装済み、2026-09-19）
 

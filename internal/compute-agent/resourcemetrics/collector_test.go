@@ -26,6 +26,7 @@ func (f fakeVMM) Stop(string, bool)                                             
 func (f fakeVMM) Destroy(string)                                                   {}
 func (f fakeVMM) ConsoleLogPath(string) string                                     { return "" }
 func (f fakeVMM) Running() []vmm.RunningVM                                         { return f.running }
+func (f fakeVMM) RootDiskPath(string) (string, error)                              { return "", nil }
 
 func TestCollector_EmitsMetricsForRunningVMs(t *testing.T) {
 	c := &Collector{
@@ -110,7 +111,9 @@ kyuusha_vm_memory_usage_bytes{hypervisor="hypervisor-1",tenant_id="tenant-a",vm_
 	}
 }
 
-func noStats(string) (cgroup.VMStats, error) { return cgroup.VMStats{}, errors.New("not used in this test") }
+func noStats(string) (cgroup.VMStats, error) {
+	return cgroup.VMStats{}, errors.New("not used in this test")
+}
 
 // TestCollector_EmitsVMDiskIO covers kyuusha_vm_disk_{read,write}_bytes_total
 // -- the /proc/<pid>/io-based figure that works for a VM regardless of its

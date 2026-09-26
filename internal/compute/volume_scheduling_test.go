@@ -108,7 +108,7 @@ func TestReconciler_MigrateSkipsHypervisorMissingStorageConnection(t *testing.T)
 		t.Fatalf("Register hypervisor-has-conn: %v", err)
 	}
 
-	migrating, err := svc.Migrate(ctx, tenant, vm.Meta.ID, "")
+	migrating, err := svc.Migrate(ctx, tenant, vm.Meta.ID, "", false)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}

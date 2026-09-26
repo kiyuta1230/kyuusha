@@ -326,6 +326,35 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 		return
 	}
 
+	// Transfer must happen before old_hypervisor's capacity is released and
+	// its DeleteCommand sent below: that command tears down old_hypervisor's
+	// jail/run directory (the root disk file this reads from) once
+	// delivered. An opt-in request that fails is reported as a failed
+	// migration, not silently downgraded to the cheap re-clone-from-Image
+	// path -- same "explicit request must fail loud, not silently fall
+	// back to the lossy default" reasoning as this feature's own opt-in
+	// design (see docs/specs/virtual-machine.md「ルートディスク転送」).
+	var pendingRootDiskURL, pendingRootDiskDigest string
+	if vm.Status.TransferRootDisk {
+		pendingRootDiskURL, pendingRootDiskDigest, err = r.roundTripPushRootDisk(ctx, oldHypervisor, vm.Meta.ID, string(vm.Spec.DriverHint))
+		if err != nil {
+			r.svc.releaseHypervisorCapacity(ctx, newHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
+			r.svc.releasePciDevices(ctx, newHypervisor, newPciDevices)
+			r.svc.releaseNumaNode(ctx, newHypervisor, newNumaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
+			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+				Type:             "Unmigratable",
+				Status:           resource.ConditionTrue,
+				Reason:           "RootDiskTransferFailed",
+				Message:          err.Error(),
+				LastTransitionAt: time.Now(),
+			})
+			if _, uerr := r.svc.Update(ctx, &vm); uerr != nil {
+				slog.Error("migrate: report condition failed", "vm_id", vm.Meta.ID, "err", uerr)
+			}
+			return
+		}
+	}
+
 	r.svc.releaseHypervisorCapacity(ctx, oldHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
 	r.svc.releasePciDevices(ctx, oldHypervisor, oldPciDevices)
 	r.svc.releaseNumaNode(ctx, oldHypervisor, oldNumaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
@@ -340,6 +369,9 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 	vm.Status.AllocatedPciDevices = newPciDevices
 	vm.Status.AllocatedNumaNode = newNumaNode
 	vm.Status.MigrateTarget = ""
+	vm.Status.TransferRootDisk = false
+	vm.Status.PendingRootDiskURL = pendingRootDiskURL
+	vm.Status.PendingRootDiskDigest = pendingRootDiskDigest
 	vm.Status.Phase = PhaseScheduled
 	vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 		Type:             "Unmigratable",
@@ -600,6 +632,24 @@ func (r *Reconciler) provisionAndPublish(ctx context.Context, vm VirtualMachine)
 	cmd.DiskDigest = img.GetSpec().GetDisk().GetDigest()
 	cmd.BootArgs = img.GetSpec().GetBootArgs()
 
+	// A prior Migrate(transfer_root_disk=true) pushed this VM's actual
+	// current root disk (not a fresh Image copy) to the migration-artifact
+	// registry -- clone from that instead of the Image's own rootfs/disk,
+	// so the guest's writes since its last boot survive the move. See
+	// migrateVM's own doc comment on ordering/why this rides on Status;
+	// left set (not cleared here) so handleCreateResult can still use it
+	// to clean up the temporary artifact once this Create is confirmed to
+	// have succeeded.
+	if vm.Status.PendingRootDiskURL != "" {
+		if img.GetSpec().GetFormat() == imagev1.ImageFormat_QCOW2 {
+			cmd.DiskURL = vm.Status.PendingRootDiskURL
+			cmd.DiskDigest = vm.Status.PendingRootDiskDigest
+		} else {
+			cmd.RootfsURL = vm.Status.PendingRootDiskURL
+			cmd.RootfsDigest = vm.Status.PendingRootDiskDigest
+		}
+	}
+
 	payload, _ := json.Marshal(cmd)
 	msg := nats.NewMsg(CmdSubjectCreate(vm.Status.Hypervisor))
 	msg.Data = payload
@@ -724,11 +774,27 @@ func (r *Reconciler) handleCreateResult(ctx context.Context, res CreateResult) {
 
 	if res.Success {
 		vm.Status.Phase = PhaseRunning
+		// A prior Migrate(transfer_root_disk=true) left a temporary artifact
+		// in the migration registry (see provisionAndPublish); now that this
+		// Create is confirmed to have actually booted from it, clean it up.
+		// Sent to this VM's (new) Hypervisor, not the old one that pushed
+		// it -- see MigrateArtifactCommand's doc comment on why either
+		// works. Best-effort, not blocking this phase transition.
+		if vm.Status.PendingRootDiskURL != "" {
+			r.deleteMigrationArtifact(ctx, vm.Status.Hypervisor, vm.Status.PendingRootDiskURL)
+			vm.Status.PendingRootDiskURL = ""
+			vm.Status.PendingRootDiskDigest = ""
+		}
 	} else {
 		// Creation failed: the reservation this VM made at Scheduled time is
 		// released now, since it will never actually run. Clearing Hypervisor
 		// also marks the reservation as already released, so a later Delete
 		// of this Error VM (releaseIfReserved) doesn't release it again.
+		if vm.Status.PendingRootDiskURL != "" {
+			r.deleteMigrationArtifact(ctx, vm.Status.Hypervisor, vm.Status.PendingRootDiskURL)
+			vm.Status.PendingRootDiskURL = ""
+			vm.Status.PendingRootDiskDigest = ""
+		}
 		r.svc.releaseHypervisorCapacity(ctx, vm.Status.Hypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
 		vm.Status.Hypervisor = ""
 		vm.Status.Phase = PhaseError

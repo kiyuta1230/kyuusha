@@ -72,6 +72,9 @@ func main() {
 	storageConnections := flag.String("storage-connections", "", "comma-separated storage connections this host already has established, name[:local_path][,name[:local_path]...] -- an iSCSI/NVMe-oF session already logged in (no local_path needed: Volumes on it are discovered under /dev/disk/by-id/) or an NFS export already mounted (local_path is its mount point). Sent to compute at self-registration and used locally by internal/compute-agent/volumeref to find each Volume's already-visible device/file at boot time; kyuusha never logs in, mounts, or exports anything itself (see docs/architecture.md「訂正: 責務の境界を...」)")
 	pciDevices := flag.String("pci-devices", "", "comma-separated PCI devices this host has already bound to vfio-pci and makes available for passthrough, pci_address:vendor_id:device_id[,pci_address:vendor_id:device_id...] (e.g. 0000:3b:00.0:10de:1c03) -- only meaningful with CLOUD_HYPERVISOR in -drivers (Firecracker has no PCI bus). Sent to compute at self-registration (see internal/compute/hypervisor_service.go's reservePciDevices); each address is verified to actually be vfio-pci-bound and dropped (with a warning) otherwise, same defensive spirit as -storage-connections' local_path check")
 	networkAttachBin := flag.String("network-attach-bin", "", "path to an external VNAP plugin binary (see internal/compute-agent/netsetup and docs/architecture.md \"VMのネットワーク接続をCNIのようにプラガブルにすべきか\") that Wire/DeleteTap delegate the local tap-to-switch attach/detach step to, invoked as '<bin> attach|detach' with a JSON payload on stdin. Empty (the default) keeps the built-in Linux bridge implementation")
+	migrationRegistry := flag.String("migration-registry", "", "OCI registry host[:port] this compute-agent pushes a VM's current root disk to for Migrate(transfer_root_disk=true), and deletes temporary migration artifacts from afterward. Empty (the default) disables root disk transfer on this host -- a push request then fails explicitly rather than silently doing nothing (see docs/specs/virtual-machine.md \"ルートディスク転送\")")
+	migrationRegistryRef := flag.String("migration-registry-ref", "", "OCI registry host[:port] to embed in a pushed artifact's URL, if different from -migration-registry -- same split as `kyuusha image build`'s -registry/-registry-ref (default: same as -migration-registry)")
+	migrationRegistryPlainHTTP := flag.Bool("migration-registry-plain-http", false, "push/delete against -migration-registry over plain HTTP instead of HTTPS")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -243,20 +246,23 @@ func main() {
 	defer computeConn.Close()
 
 	agent := &computeagent.Agent{
-		Hypervisor:              *hypervisor,
-		NC:                      nc,
-		JS:                      js,
-		HeartbeatInterval:       *heartbeat,
-		Hypervisors:             computev1.NewHypervisorServiceClient(computeConn),
-		BootstrapToken:          bootstrapToken,
-		AllocatableVCPU:         int32(*vcpu),
-		AllocatableMemoryMB:     *memoryMB,
-		SupportedDrivers:        strings.Split(*drivers, ","),
-		StorageConnections:      connectionProtos,
-		LocalStorageConnections: connections,
-		AvailableDevices:        availableDevices,
-		NumaNodes:               numaNodes,
-		Drivers:                 vmmDrivers,
+		Hypervisor:                 *hypervisor,
+		NC:                         nc,
+		JS:                         js,
+		HeartbeatInterval:          *heartbeat,
+		Hypervisors:                computev1.NewHypervisorServiceClient(computeConn),
+		BootstrapToken:             bootstrapToken,
+		AllocatableVCPU:            int32(*vcpu),
+		AllocatableMemoryMB:        *memoryMB,
+		SupportedDrivers:           strings.Split(*drivers, ","),
+		StorageConnections:         connectionProtos,
+		LocalStorageConnections:    connections,
+		AvailableDevices:           availableDevices,
+		NumaNodes:                  numaNodes,
+		MigrationRegistry:          *migrationRegistry,
+		MigrationRegistryRef:       *migrationRegistryRef,
+		MigrationRegistryPlainHTTP: *migrationRegistryPlainHTTP,
+		Drivers:                    vmmDrivers,
 	}
 	slog.Info("compute-agent: starting", "hypervisor", *hypervisor)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {

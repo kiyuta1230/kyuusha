@@ -365,6 +365,13 @@ services:
     image: registry:2
     ports:
       - "5000:5000"
+    environment:
+      # Lets compute-agent's Migrate(transfer_root_disk=true) cleanup
+      # (internal/compute-agent/imagestore.DeleteOCIRef) actually remove its
+      # temporary migration artifacts -- the stock image disables manifest
+      # deletion by default. Playground-only: production operators choose
+      # this themselves for their own registry.
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:5000/v2/"]
       interval: 2s
@@ -398,6 +405,8 @@ services:
       - "-hypervisor=hypervisor-1"
       - "-drivers=FIRECRACKER,CLOUD_HYPERVISOR"
       - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"
+      - "-migration-registry=registry:5000"
+      - "-migration-registry-plain-http"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
     devices:
@@ -443,6 +452,8 @@ services:
       - "-hypervisor=hypervisor-2"
       - "-drivers=FIRECRACKER,CLOUD_HYPERVISOR"
       - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"
+      - "-migration-registry=registry:5000"
+      - "-migration-registry-plain-http"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
     devices:
@@ -488,6 +499,8 @@ services:
       - "-hypervisor=hypervisor-3"
       - "-drivers=FIRECRACKER,CLOUD_HYPERVISOR"
       - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"
+      - "-migration-registry=registry:5000"
+      - "-migration-registry-plain-http"
       - "-metrics-addr=:9094"
       - "-otlp-endpoint=jaeger:4317"
     devices:

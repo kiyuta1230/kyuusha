@@ -140,6 +140,23 @@ type VirtualMachineStatus struct {
 	// somewhere, so a later plain Migrate (auto-pick) on the same VM
 	// doesn't inherit a stale target.
 	MigrateTarget string
+	// TransferRootDisk carries Migrate's optional transfer_root_disk
+	// argument through to migrateVM -- same one-shot-parameter-on-Status
+	// reasoning as StopForce/MigrateTarget, not exposed over the wire.
+	TransferRootDisk bool
+	// PendingRootDiskURL/PendingRootDiskDigest are set by migrateVM once
+	// TransferRootDisk succeeded in pushing this VM's current root disk to
+	// the configured migration-artifact registry (see nats.go's
+	// MigrateArtifactCommand) -- provisionAndPublish's next reconcile pass
+	// (PhaseScheduled) reads these to override the Image-derived
+	// rootfs/disk URL+digest it would otherwise resolve, so the new
+	// Hypervisor clones from the transferred artifact instead of a fresh
+	// Image copy. Left set through Provisioning/Running (not cleared at
+	// consumption) so handleCreateResult can use PendingRootDiskURL to
+	// clean up the temporary registry artifact once the new VM is
+	// confirmed booted -- cleared only there. Not exposed over the wire.
+	PendingRootDiskURL    string
+	PendingRootDiskDigest string
 	// AllocatedPciDevices are the specific PCI addresses (e.g.
 	// "0000:3b:00.0") scheduleVM/scheduleMigration reserved against
 	// spec.pci_devices out of the current Hypervisor's self-reported

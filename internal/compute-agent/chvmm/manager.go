@@ -201,6 +201,22 @@ func (m *Manager) numaPin(nodeID int32) *cgroup.NumaPin {
 	return &cgroup.NumaPin{NodeID: nodeID, CPUs: cpus}
 }
 
+// RootDiskPath implements vmm.VMM -- see that interface's doc comment.
+// vmDir/rootfs.raw or vmDir/disk.qcow2, whichever Boot actually created for
+// vmID (KERNEL_ROOTFS vs QCOW2 -- a pure function of vmID and this
+// Manager's own RunDir, not runtime state, so this checks both rather than
+// needing to know the Image's format).
+func (m *Manager) RootDiskPath(vmID string) (string, error) {
+	vmDir := filepath.Join(m.runDir(), vmID)
+	for _, name := range []string{"rootfs.raw", "disk.qcow2"} {
+		path := filepath.Join(vmDir, name)
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("chvmm: no root disk found for vm_id %q in %s", vmID, vmDir)
+}
+
 // ConsoleLogPath is where Boot(vmID's spec) captures cloud-hypervisor's
 // stdout/stderr (== the guest's serial console, ttyS0, via --serial tty
 // below) -- see docs/specs/cloud-hypervisor-boot.md. It exists only once

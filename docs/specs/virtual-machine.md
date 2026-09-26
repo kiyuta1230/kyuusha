@@ -291,10 +291,11 @@ mutate→`store.Update`をサービス内で完結させる。
 
 ## マイグレーション（`Migrate`、コールドのみ）
 
-`VirtualMachineService.Migrate(tenant_id, id, target_hypervisor)`はVMを別の
-Hypervisorへ移す。`Stopped`のVMのみ受け付ける（`FailedPrecondition`）——
-ライブマイグレーションは存在しない（`docs/architecture.md`「ライブ
-マイグレーション不要」という設計原則そのままで、対応する予定もない）。
+`VirtualMachineService.Migrate(tenant_id, id, target_hypervisor,
+transfer_root_disk)`はVMを別のHypervisorへ移す。`Stopped`のVMのみ受け付ける
+（`FailedPrecondition`）——ライブマイグレーションは存在しない
+（`docs/architecture.md`「ライブマイグレーション不要」という設計原則
+そのままで、対応する予定もない）。
 
 **引き継がれるもの・引き継がれないものが非対称**な点が最大の注意点:
 
@@ -304,14 +305,15 @@ Hypervisorへ移す。`Stopped`のVMのみ受け付ける（`FailedPrecondition`
   新Hypervisor上で再利用される（`provisionAndPublish`の
   `createNetworkInterfaces`/`createVolumeAttachments`が名前ベースで
   冪等なことがそのまま効く）
-- **引き継がれない**: root disk（`KERNEL_ROOTFS`のrootfs/`QCOW2`のdisk）
-  の中身。kyuushaのroot diskは各Hypervisorのローカルディスク上でImageから
-  都度クローンされる、意図的にエフェメラルな設計（Hypervisor間のディスク
-  転送パス自体が存在しない）なので、移行先では同じImageから作り直される
-  ——ゲストが起動後にroot diskへ書いた差分は失われる。永続化したいデータは
-  元々Volumeに置く設計（`docs/architecture.md`のpet/cattle区別廃止と同じ
-  前提）なので、この非対称は設計上の欠陥ではなく「rootディスクは
-  cattle、Volumeだけがpet」という一貫した扱い
+- **引き継がれない（既定）**: root disk（`KERNEL_ROOTFS`のrootfs/`QCOW2`の
+  disk）の中身。kyuushaのroot diskは各Hypervisorのローカルディスク上で
+  Imageから都度クローンされる、意図的にエフェメラルな設計なので、既定では
+  移行先で同じImageから作り直される——ゲストが起動後にroot diskへ書いた
+  差分は失われる。永続化したいデータは元々Volumeに置く設計
+  （`docs/architecture.md`のpet/cattle区別廃止と同じ前提）なので、この
+  非対称は設計上の欠陥ではなく「rootディスクはcattle、Volumeだけがpet」
+  という一貫した扱い——ただし`transfer_root_disk=true`を明示すれば、
+  実際の中身を転送できる（下記「ルートディスク転送」参照）
 - **要求は引き継がれるが具体的な個体は引き継がれない**: `spec.pci_devices`
   （`vendor_id`/`device_id`/`count`）自体はNetworkInterface/VolumeAttachment
   と同じくVMに固定されたまま移行先でも同じ要求を再提出するが、
@@ -343,18 +345,26 @@ Hypervisorへ移す。`Stopped`のVMのみ受け付ける（`FailedPrecondition`
      Conditionを記録する。`runRetrySweep`が`PhasePending`と全く同じ
      「無条件で毎tick再試行」を`PhaseMigrating`にも適用する——容量が空くのは
      Hypervisor側の変化であり、このVM自身のWatchイベントには現れないため
-3. 成功したら、元Hypervisorの容量予約（PCIデバイスの予約も含む）を解放し、
+3. **`transfer_root_disk=true`の場合、ここで元Hypervisorへのroot disk転送を
+   行う**（下記「ルートディスク転送」参照）。失敗すれば新Hypervisorへの
+   予約をロールバックし、`Unmigratable`/`RootDiskTransferFailed`として
+   Migrate自体を失敗させる——安い経路へ黙ってフォールバックはしない
+4. 成功したら、元Hypervisorの容量予約（PCIデバイスの予約も含む）を解放し、
    `DeleteCommand`を元Hypervisorへfire-and-forgetで送る（`Migrate`はStoppedのVMにしか効かない
    ので生きているプロセスは無く、元Hypervisor上に残っていた
    jail/runディレクトリ——古いroot diskの実体——を掃除するだけ。実質
    「削除」と同じ処理を、VMリソース自体は消さずに1ホスト分だけ行う）
-4. `Status.Hypervisor`を新Hypervisorへ書き換え、`Phase = Scheduled`へ
+   ——**`transfer_root_disk=true`の場合、この時点でroot diskの実体は
+   既にレジストリへpush済みなので、このタイミングで消えても問題ない**
+5. `Status.Hypervisor`を新Hypervisorへ書き換え、`Phase = Scheduled`へ
    遷移させる——ここから先は新規Createと全く同じ`provisionAndPublish`
    （`case PhaseScheduled, PhaseStarting:`と合流）が、新Hypervisor上で
-   kernel/rootfsの取得・tap配線・Volume発見をやり直す
+   kernel/rootfsの取得・tap配線・Volume発見をやり直す（`transfer_root_disk=
+   true`の場合、rootfs/diskの取得元が転送されたアーティファクトに
+   差し替わる——下記参照）
 
-**CLI**: `kyuusha vm migrate -tenant=... -id=... [-target-hypervisor=...]`。
-`-target-hypervisor`省略時は自動選択。
+**CLI**: `kyuusha vm migrate -tenant=... -id=... [-target-hypervisor=...]
+[-transfer-root-disk]`。`-target-hypervisor`省略時は自動選択。
 
 playgroundで実機確認済み: Stopped状態のVMを`vm migrate`（自動選択）で
 別Hypervisorへ移し、`Migrating`→`Provisioning`→`Running`と遷移して実際に
@@ -362,6 +372,49 @@ Firecrackerゲストが新Hypervisor上で起動し、`NetworkInterface`のIP/MA
 移行前と完全に同一のまま(`kyuusha vm console`でゲスト自身が同じIPを
 設定するログまで確認)、かつ元Hypervisor側のjail/runディレクトリが
 掃除されていることを確認した。
+
+## ルートディスク転送（`transfer_root_disk`）
+
+`Migrate`に`transfer_root_disk=true`を明示すると、既定の「移行先で同じImageから
+作り直す」動作の代わりに、実際のroot disk（Imageからクローンした後にゲストが
+書き込んだ差分）の中身を移行先Hypervisorへ転送する（設計判断の詳細は
+`docs/architecture.md`「ルートディスク転送」参照）。
+
+- **常にオプトイン、既定`false`**: 実ディスクサイズに比例したネットワーク転送＋
+  レジストリのストレージ消費という実コストを伴うため、明示的に要求した場合のみ
+- **転送経路**: Hypervisor間の新規データパスではなく、Imageの取得と全く同じ
+  OCIレジストリ経由。旧Hypervisorの`vmm.VMM.RootDiskPath(vm_id)`
+  （fcvmm/chvmmそれぞれが今使っているroot diskファイルの絶対パスを返す純粋関数。
+  `Stopped`なプロセスに対しても——`Stop`後もHypervisorはjail/runディレクトリを
+  保持するため——問題なく解決できる）が指すファイルを、
+  `internal/compute-agent/imagestore.PushOCIBlob`で`-migration-registry`
+  （compute-agentの起動フラグ。未設定ならこのHypervisorではroot disk転送は
+  使えず、転送要求は明示的なエラーになる——黙って何もしないことはない）へ
+  VM単位で一意なタグでpushする。新Hypervisorは、これが移行アーティファクトだと
+  知る必要すらなく、通常のImage取得と同じ`imagestore.EnsureCached`でpullする
+- **失敗時**: Migrate自体を失敗させる（上記「マイグレーション」のフロー参照）。
+  安い「作り直すだけ」の経路へ黙ってフォールバックはしない
+- **クリーンアップ**: 新VMの起動が確認できた時点（成功・失敗いずれの
+  `CreateResult`でも）で、レジストリ上の一時アーティファクトを削除する
+  fire-and-forgetコマンドが新Hypervisorへ送られる。ベストエフォート——
+  一部のレジストリ（stock `registry:2`イメージ等）は既定でmanifest削除を
+  無効化しており、その場合は削除に失敗してログに警告が残るだけ
+  （レジストリのストレージが消費されたままになるが、正しさには影響しない）
+- **compute-agentの設定**: `-migration-registry`（push/delete先のOCIレジストリ
+  host[:port]）、`-migration-registry-ref`（pushしたURLに埋め込むアドレスが
+  `-migration-registry`と異なる場合。`kyuusha image build`の`-registry`/
+  `-registry-ref`と同じ分割理由）、`-migration-registry-plain-http`
+- **既知の制約**: root diskファイル全体を一度にメモリへ読み込んでからpushする
+  （`kyuusha image build`の既存実装と同じ制約）。非常に大きなディスクでは
+  compute-agentのメモリを圧迫しうる——ストリーミングpush化は
+  [docs/open-questions.md](../open-questions.md)参照
+
+実機確認済み: 実際にFirecracker VMを起動し、ホスト側のroot diskファイルへ
+直接書き込んだマーカーバイトが、`transfer_root_disk=true`でのMigrate後、
+移行先Hypervisorの新しいroot diskファイルの同じオフセットにそのまま
+存在すること（＝Imageからの作り直しではなく実際の転送であること）、
+レジストリに一時アーティファクトが実際にpushされ、新VM起動確認後に
+削除されることを確認した。
 
 ## PCIデバイスパススルー（GPU/SR-IOV NIC等）
 

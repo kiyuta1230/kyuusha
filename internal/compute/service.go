@@ -493,7 +493,7 @@ func (s *Service) Start(ctx context.Context, tenantID, id string) (*VirtualMachi
 // Like Start, this only records the intent (PhaseMigrating,
 // Status.MigrateTarget) and returns immediately -- the actual scheduling
 // and re-provisioning happens asynchronously in reconcile() (reconciler.go).
-func (s *Service) Migrate(ctx context.Context, tenantID, id, targetHypervisor string) (*VirtualMachine, error) {
+func (s *Service) Migrate(ctx context.Context, tenantID, id, targetHypervisor string, transferRootDisk bool) (*VirtualMachine, error) {
 	vm, err := s.store.Get(ctx, tenantID, id)
 	if err != nil {
 		return nil, err
@@ -506,6 +506,7 @@ func (s *Service) Migrate(ctx context.Context, tenantID, id, targetHypervisor st
 	}
 	vm.Status.Phase = PhaseMigrating
 	vm.Status.MigrateTarget = targetHypervisor
+	vm.Status.TransferRootDisk = transferRootDisk
 	out, err := s.store.Update(ctx, vm)
 	if err != nil {
 		return nil, err

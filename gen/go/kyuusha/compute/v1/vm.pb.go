@@ -1290,6 +1290,14 @@ type MigrateVirtualMachineRequest struct {
 	TenantId         string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Id               string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
 	TargetHypervisor string                 `protobuf:"bytes,3,opt,name=target_hypervisor,json=targetHypervisor,proto3" json:"target_hypervisor,omitempty"`
+	// When true, transfer the VM's actual current root disk content (the
+	// guest's own writes since boot) to the new Hypervisor instead of
+	// re-cloning a fresh copy from the Image -- opt-in because it costs a
+	// real network transfer proportional to disk size and needs a
+	// migration-artifact registry configured on both Hypervisors (see
+	// docs/specs/virtual-machine.md「ルートディスク転送」). Default false
+	// keeps today's behavior (cheap, but loses in-guest writes) unchanged.
+	TransferRootDisk bool `protobuf:"varint,4,opt,name=transfer_root_disk,json=transferRootDisk,proto3" json:"transfer_root_disk,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1343,6 +1351,13 @@ func (x *MigrateVirtualMachineRequest) GetTargetHypervisor() string {
 		return x.TargetHypervisor
 	}
 	return ""
+}
+
+func (x *MigrateVirtualMachineRequest) GetTransferRootDisk() bool {
+	if x != nil {
+		return x.TransferRootDisk
+	}
+	return false
 }
 
 type WatchVirtualMachinesRequest struct {
@@ -1671,11 +1686,12 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x13DetachVolumeRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1b\n" +
-	"\tvolume_id\x18\x03 \x01(\tR\bvolumeId\"x\n" +
+	"\tvolume_id\x18\x03 \x01(\tR\bvolumeId\"\xa6\x01\n" +
 	"\x1cMigrateVirtualMachineRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12+\n" +
-	"\x11target_hypervisor\x18\x03 \x01(\tR\x10targetHypervisor\"\x97\x01\n" +
+	"\x11target_hypervisor\x18\x03 \x01(\tR\x10targetHypervisor\x12,\n" +
+	"\x12transfer_root_disk\x18\x04 \x01(\bR\x10transferRootDisk\"\x97\x01\n" +
 	"\x1bWatchVirtualMachinesRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x124\n" +
 	"\x16since_resource_version\x18\x02 \x01(\x03R\x14sinceResourceVersion\x12%\n" +

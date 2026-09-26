@@ -62,6 +62,18 @@ type VMM interface {
 	// have a live cgroup to read stats from, and which tenant_id to label
 	// them with, without duplicating either driver's own bookkeeping.
 	Running() []RunningVM
+	// RootDiskPath returns the absolute path to vmID's current writable
+	// root disk file (fcvmm's rootfs.ext4 inside its jail chroot, or
+	// chvmm's rootfs.raw/disk.qcow2 in its run dir) -- a pure function of
+	// vmID and this driver's own configured directories, valid whether or
+	// not vmID is currently running (Stop keeps the file around; only
+	// Destroy/Delete removes it -- see docs/architecture.md's VM lifecycle).
+	// Used only by Migrate(transfer_root_disk=true)'s push handler
+	// (agent.go), which needs this while the VM is Stopped, so it can
+	// never rely on runtime state like the running map. Returns an error
+	// if the file doesn't exist (this driver never booted vmID, or it's
+	// already been deleted).
+	RootDiskPath(vmID string) (string, error)
 }
 
 // Hotplugger is implemented by a VMM driver whose control surface supports

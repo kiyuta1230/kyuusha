@@ -241,6 +241,22 @@ func (m *Manager) numaPin(nodeID int32) *cgroup.NumaPin {
 	return &cgroup.NumaPin{NodeID: nodeID, CPUs: cpus}
 }
 
+// RootDiskPath implements vmm.VMM -- see that interface's doc comment.
+// Mirrors Boot's own chroot/rootfsCopy path construction exactly (jailer.go's
+// jailChrootDir), a pure function of vmID and this Manager's own config, not
+// runtime state.
+func (m *Manager) RootDiskPath(vmID string) (string, error) {
+	fcExecPath, err := resolveExecPath(m.binPath())
+	if err != nil {
+		return "", fmt.Errorf("fcvmm: resolve firecracker binary: %w", err)
+	}
+	path := filepath.Join(jailChrootDir(m.jailChrootBaseDir(), fcExecPath, vmID), "rootfs.ext4")
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("fcvmm: root disk for vm_id %q: %w", vmID, err)
+	}
+	return path, nil
+}
+
 // ConsoleLogPath is where Boot(vmID's spec) captures Firecracker's stdout/
 // stderr (== the guest's serial console, ttyS0) -- see docs/specs/
 // firecracker-boot.md. It exists only once Boot has actually run for this

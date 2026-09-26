@@ -37,6 +37,16 @@ func CmdSubjectHotplug(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.cmd.%s.vm.hotplug", hypervisor)
 }
 
+// CmdSubjectMigrateArtifact is where a Migrate(transfer_root_disk=true)'s
+// push (to the old Hypervisor) and cleanup delete (to the new Hypervisor)
+// travel -- see MigrateArtifactCommand and reconciler.go's migrateVM/
+// handleCreateResult. Same COMPUTE_CMD durability contract as
+// CmdSubjectHotplug; only PUSH round-trips a reply (same reply-subject
+// pattern, not COMPUTE_EVT), DELETE is fire-and-forget like DeleteCommand.
+func CmdSubjectMigrateArtifact(hypervisor string) string {
+	return fmt.Sprintf("ms.compute.cmd.%s.vm.migrate-artifact", hypervisor)
+}
+
 func EvtSubjectCreateResult(hypervisor string) string {
 	return fmt.Sprintf("ms.compute.evt.%s.vm.create-result", hypervisor)
 }
@@ -292,6 +302,52 @@ type HotplugCommand struct {
 // operation.
 type HotplugResult struct {
 	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// MigrateArtifactOp discriminates MigrateArtifactCommand's operation --
+// same "one struct with a discriminator" convention as HotplugOp.
+type MigrateArtifactOp string
+
+const (
+	MigrateArtifactOpPush   MigrateArtifactOp = "PUSH"
+	MigrateArtifactOpDelete MigrateArtifactOp = "DELETE"
+)
+
+// MigrateArtifactCommand is published to
+// CmdSubjectMigrateArtifact(hypervisor) by reconciler.go's migrateVM (PUSH,
+// to the VM's *old* Hypervisor, before its DeleteCommand cleanup) and
+// handleCreateResult (DELETE, to the *new* Hypervisor, once the migrated VM
+// is confirmed booted -- any Hypervisor with the same -migration-registry
+// configuration can delete it, not just the one that pushed it, so there's
+// no need to route this back to the old Hypervisor, which may already be
+// gone by then). See docs/architecture.md's「ルートディスク転送」section for
+// why this goes through the same OCI registry Images already use, not a
+// direct compute-agent-to-compute-agent transfer.
+type MigrateArtifactCommand struct {
+	Op MigrateArtifactOp `json:"op"`
+	// ReplySubject is set only for PUSH (same fresh-nc.NewInbox() pattern as
+	// HotplugCommand) -- DELETE is fire-and-forget, like DeleteCommand.
+	ReplySubject string `json:"reply_subject,omitempty"`
+	// VMID/DriverHint are set for PUSH: which VM's current root disk to
+	// push, and which VMM driver booted it (so compute-agent knows whether
+	// to resolve fcvmm's or chvmm's root disk path -- see
+	// vmm.VMM.RootDiskPath).
+	VMID       string `json:"vm_id,omitempty"`
+	DriverHint string `json:"driver_hint,omitempty"`
+	// URL is set for DELETE: the oci://... reference PUSH's result
+	// returned, to remove now that the new Hypervisor has its own cached
+	// copy.
+	URL string `json:"url,omitempty"`
+}
+
+// MigrateArtifactResult is published to a PUSH MigrateArtifactCommand's own
+// ReplySubject (plain core NATS, not COMPUTE_EVT, same as HotplugResult) --
+// DELETE has no result at all (fire-and-forget).
+type MigrateArtifactResult struct {
+	Success bool   `json:"success"`
+	URL     string `json:"url,omitempty"`
+	Digest  string `json:"digest,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 

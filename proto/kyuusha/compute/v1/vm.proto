@@ -218,6 +218,14 @@ message MigrateVirtualMachineRequest {
   string tenant_id = 1;
   string id = 2;
   string target_hypervisor = 3;
+  // When true, transfer the VM's actual current root disk content (the
+  // guest's own writes since boot) to the new Hypervisor instead of
+  // re-cloning a fresh copy from the Image -- opt-in because it costs a
+  // real network transfer proportional to disk size and needs a
+  // migration-artifact registry configured on both Hypervisors (see
+  // docs/specs/virtual-machine.md「ルートディスク転送」). Default false
+  // keeps today's behavior (cheap, but loses in-guest writes) unchanged.
+  bool transfer_root_disk = 4;
 }
 
 message WatchVirtualMachinesRequest {

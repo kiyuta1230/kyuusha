@@ -19,7 +19,7 @@
   コマンド）はこの自動補完の対象外
 - 認証・認可の詳細は[認証・認可仕様](authn-authz.md)を参照
 
-## `kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|attach-volume|detach-volume|reboot|hard-reboot|add-finalizer|remove-finalizer>`
+## `kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|migrate|attach-volume|detach-volume|reboot|hard-reboot|add-finalizer|remove-finalizer>`
 
 | サブコマンド | フラグ |
 |---|---|
@@ -31,7 +31,8 @@
 | `delete` | `-tenant`(必須) `-id`(必須)。`meta.finalizers`が残っていれば実削除されず`deleted_at`がセットされるだけになる（[外部システム連携仕様](external-integration.md)参照）。VMMプロセス停止に加え、jail/runディレクトリ（根本ディスク実体）ごと削除する |
 | `stop` | `-tenant`(必須) `-id`(必須) `-force`(既定false。trueなら即SIGKILL、falseならSIGTERM→猶予期間→SIGKILL)。`Running`のみ許可。ディスクは保持される |
 | `start` | `-tenant`(必須) `-id`(必須)。`Stopped`のみ許可。`stop`で保持されたディスクを再利用する（[VirtualMachine仕様](virtual-machine.md)/docs/architecture.md「VirtualMachineのライフサイクル状態機械」参照） |
-| `resize` | `-tenant`(必須) `-id`(必須) `-vcpu`(必須、新しいvCPU数) `-memory-mb`(必須、新しいメモリ量MB)。`Stopped`はコールド、`Running`+`CLOUD_HYPERVISOR`はダウンタイム無しのライブリサイズ（[VirtualMachine仕様](virtual-machine.md)「リサイズ」参照）。`start`/`stop`同様`resource_version`フラグは無い |
+| `resize` | `-tenant`(必須) `-id`(必須) `-vcpu`(必須、新しいvCPU数) `-memory-mb`(必須、新しいメモリ量MB) `-allow-migrate`(既定false。コールドリサイズが現在のHypervisorの容量不足で失敗する場合のみ、コールドマイグレーションを併用して収まる別Hypervisorへ移す——root diskは新HypervisorでImageから作り直される点はプレーンな`migrate`と同じ。ライブリサイズには無視される)。`Stopped`はコールド、`Running`+`CLOUD_HYPERVISOR`はダウンタイム無しのライブリサイズ（[VirtualMachine仕様](virtual-machine.md)「リサイズ」「容量不足時のマイグレーションフォールバック」参照）。`start`/`stop`同様`resource_version`フラグは無い |
+| `migrate` | `-tenant`(必須) `-id`(必須) `-target-hypervisor`(省略時は自動選択、現在のHypervisorを除外) `-transfer-root-disk`(既定false。root diskの実際の中身をレジストリ経由で移行先へ転送する——省略時はImageから作り直すだけでゲストの書き込みは失われる。`-migration-registry`がcompute-agent側に設定されていないHypervisorでは失敗する、[VirtualMachine仕様](virtual-machine.md)「ルートディスク転送」参照)。`Stopped`のVMのみ許可 |
 | `attach-volume` | `-tenant`(必須) `-id`(必須) `-volume-id`(必須) `-device-hint`(任意)。`Stopped`はコールド、`Running`+`CLOUD_HYPERVISOR`はライブ（[VirtualMachine仕様](virtual-machine.md)「Volume attach/detach」参照） |
 | `detach-volume` | `-tenant`(必須) `-id`(必須) `-volume-id`(必須)。`Stopped`/`Running`+`CLOUD_HYPERVISOR`とも可（同上） |
 | `reboot` | `-tenant`(必須) `-id`(必須)。サーバー側に専用RPC/状態は無い、CLI側で`stop`→`Stopped`になるまでポーリング→`start`を発行するだけの組み合わせ |
