@@ -39,8 +39,9 @@ Firecracker側の「jailer.goのパターンをほぼそのまま流用できる
 
 **確認できたトレードオフ**: VFIOパススルーはcloud-hypervisor側がQEMUより
 未成熟(GPU/IOMMU/PCIセグメント周りのバグ報告あり)。ただしkyuusha自体、
-VFIO/vhost-userはどちらもまだ未実装(下記「この実装がカバーしないもの」参照)
-なので、切り替え時点での実害はない。
+vhost-userはまだ未実装(下記「この実装がカバーしないもの」参照)なので、
+切り替え時点での実害はない（VFIOパススルー自体は後日実装、[VirtualMachine仕様]
+(virtual-machine.md)「PCIデバイスパススルー」参照）。
 
 置き換え前に、このコンテナ環境で`cloud-hypervisor-static`が既存の
 kernel+rootfsキャッシュ資産(fcvmm用に既にダウンロード済みのもの)を無変更で
@@ -53,7 +54,7 @@ Firecrackerは意図的に最小限のデバイスモデルしか持たない(PC
 cloud-hypervisorを選ぶ理由はそこにある:
 
 - **PCI passthrough (VFIO)**: GPU等のパススルーはPCIバスを持つ側でのみ成立する。
-  まだ未実装だが、将来足す際の受け皿になる
+  実装済み（[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照）
 - **vhost-user networking**: Firecrackerはtapのみでvhost-userに対応しない。
   OVS-DPDKのような高スループット経路を使うには前提になる
 - **NUMA/hugepages/CPU topology**: より柔軟。長時間稼働・性能重視のワークロード向け
@@ -159,6 +160,10 @@ Linuxカーネル起動→`vda2`（qcow2内の実パーティション）から�
      どのVMMプロセスが繋がっても同じ)。IPアドレス自体はkyuusha側の慣習
      (`kyuusha.net.<i>.*`カーネルパラメータ)でゲスト自身が設定するため、
      `ip=`/`mask=`パラメータは渡さない |
+   | `--device path=/sys/bus/pci/devices/<addr>/,iommu=on` | `spec.pci_devices`が
+     予約したPCIアドレス（`CreateCommand.pci_devices`）ごとに1つ。空なら
+     一切付与しない。VFIOパススルー、[VirtualMachine仕様](virtual-machine.md)
+     「PCIデバイスパススルー」参照 |
    | `--serial tty` `--console off` | ttyS0のみがI/O面。cloud-hypervisor
      自身のstdout/stderrを`console.log`へ丸ごとリダイレクトすることで、
      ゲストのシリアル出力と起動時エラーの両方を1ファイルで見られるようにする
@@ -255,8 +260,10 @@ CLOUD_HYPERVISOR`のVMはスケジュール不能になる)等、ドライバを
 
 - Windows自体での実機確認はまだ（UEFI起動機構自体はAlpine公式cloud imageで
   実証済み——上記「起動方式2: UEFIブート」参照）
-- PCI passthrough (VFIO)・vhost-user networking: 上記「なぜcloud-hypervisorも
-  要るのか」で挙げた本来の動機そのものは、まだどちらも未実装
+- vhost-user networking: 上記「なぜcloud-hypervisorも要るのか」で挙げた
+  本来の動機の1つだが、まだ未実装（PCI passthrough (VFIO)はもう1つの動機で、
+  こちらは実装済み——[VirtualMachine仕様](virtual-machine.md)
+  「PCIデバイスパススルー」参照）
 - `--api-socket`経由のライブマイグレーションは未実装（vcpu/memory resize・
   Volume attach/detachのホットプラグは実装済み、上記「`--api-socket`」参照）
 - 外部jailerによるchroot/namespace/uid-gid drop: 静的バイナリ+組み込み

@@ -477,5 +477,6 @@ attach/detach（コールド/ライブ）ももう「共通の未実装事項」
 が静的バイナリ+組み込みseccompという別の形で、それぞれ対応済み（上記「cgroupリソース
 制限」節参照）。Stop/Start・`Resize`・`AttachVolume`/`DetachVolume`はそれぞれ上記
 「停止/起動」「リサイズ」「Volume attach/detach」節参照。ドライバ固有の未実装事項
-（例: Firecrackerのクロスhypervisorネットワーク疎通、cloud-hypervisorのPCI
-passthrough/vhost-user）はそれぞれの仕様書の「この実装がカバーしないもの」を参照。
+（例: Firecrackerのクロスhypervisorネットワーク疎通、cloud-hypervisorの
+vhost-user networking——PCI passthroughは上記「PCIデバイスパススルー」節の通り
+実装済み）はそれぞれの仕様書の「この実装がカバーしないもの」を参照。
