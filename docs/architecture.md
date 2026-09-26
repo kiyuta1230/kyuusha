@@ -1250,11 +1250,8 @@ ASMedia USB 3.1コントローラ（デスクトップ用途に使われてい�
 予約→`chvmm`が実際に`--device path=/sys/bus/pci/devices/<addr>/,iommu=on`引数を渡す→
 起動したcloud-hypervisorゲストの`console.log`にそのUSBコントローラの実PCI ID
 （`pci 0000:00:03.0: [1b21:1242] ... PCIe Endpoint`、class 0x0c0330=USB/XHCI）が
-そのまま見える、という一連の経路を実機で確認した。この検証の過程で、実装当初は
-見つからなかった2つの結線バグ（`internal/compute/reconciler.go`の`CreateCommand`構築が
-`vm.status.allocated_pci_devices`を一切詰めていなかった、`internal/identity`の
-`QuotaSpec`のGoドメイン型とgRPC変換が`pci_devices`フィールドを持っていなかった——
-どちらも単体テストでは検出できず、実際にVMを起動させて初めて気づいた）を発見し修正した。
+そのまま見える、という一連の経路を実機で確認した（発見された実装ギャップの修正履歴は
+[docs/release-notes.md](release-notes.md)参照）。
 
 ## ハイパーバイザー死活監視とリカバリ、およびpet/cattleの区別の廃止
 
