@@ -913,10 +913,12 @@ Stopped ──(Migrate要求)──▶ Migrating ──(別Hypervisorを確保)�
   自然回復しないと判断される失敗のみ`Error`にする（quota超過はCreate時の同期バリデーションで
   拒否するため、VirtualMachineが生成されてから`Error`になることはない。「Quota設計」節を参照）
 - **実装済み（`Migrate` RPC）**: `Stopped`のVMを別Hypervisorへ移す、運用者が明示的に起動する
-  コールドマイグレーション。root diskはImageから移行先で作り直され（Hypervisor間のディスク転送
-  パスは存在しない）、NetworkInterface（IP/MAC）とVolumeAttachment（Volumeデータ）は
-  Hypervisor非依存の参照モデルのままなので無傷で引き継がれる。詳細は[VirtualMachine仕様]
-  (specs/virtual-machine.md)「マイグレーション」参照
+  コールドマイグレーション。既定ではroot diskはImageから移行先で作り直されるが、
+  `transfer_root_disk=true`を明示すれば実際の中身をOCIレジストリ経由で転送できる
+  （オプトイン、「ルートディスク転送」節参照）。NetworkInterface（IP/MAC）と
+  VolumeAttachment（Volumeデータ）はHypervisor非依存の参照モデルのままなので無傷で
+  引き継がれる。詳細は[VirtualMachine仕様](specs/virtual-machine.md)「マイグレーション」
+  「ルートディスク転送」参照
 - **ハイパーバイザー喪失時、VMには一切手を触れない**——`Running`のまま
   固まり、復旧はKaaS層/オペレータに委ねる。理由・経緯は「ハイパーバイザー死活監視と
   リカバリ」/「pet/cattleの区別を廃止」節参照
@@ -2429,9 +2431,6 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
    1テナントが無制限に作成できる
 4. **グラフィカルコンソール（VNC/SPICE相当）**: シリアルコンソールのみで、Windows等
    シリアル操作に頼れないゲストへの対応手段が無い（Harvester/KubeVirtの`virtctl vnc`相当）
-5. **コールドマイグレーション後もroot diskの中身は毎回作り直し**: 「マイグレーション」節の
-   通り意図的な設計だが、いずれroot diskの実データを転送する経路を追加する構想がある
-   （まだ設計していない）
 
 ### 解決済み（参考: 決定の経緯は各セクション本文を参照）
 
