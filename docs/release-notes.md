@@ -22,6 +22,30 @@
   され、Volumeが実際にAttachedまで到達することを確認
   （[VMスケジュール仕様](specs/vm-scheduling.md)「フィルタ（ハード制約）」参照）
 
+- PCI/GPUパススルーのkyuusha側実装を追加（`docs/architecture.md`「PCIデバイス
+  (GPU等)パススルー」節が長らく設計の型だけでTODOとしていた項目）。
+  `RegisterHypervisorRequest.available_devices`フィールドを新設し、
+  compute-agentの新しい`-pci-devices`フラグ（`pci_address:vendor_id:device_id`
+  のカンマ区切り、宣言された各アドレスが実際に`vfio-pci`に束縛されているか
+  `/sys/bus/pci/devices/<addr>/driver`で検証してから自己申告）で
+  `Hypervisor.status.available_devices`に反映されるようにした。スケジューラの
+  `filterSchedulable`/`scheduleVM`/`scheduleMigration`に`spec.pci_devices`
+  （`vendor_id`/`device_id`/`count`）のフィルタと排他予約
+  （`reservePciDevices`/`releasePciDevices`/`restorePciDevices`）を追加し、
+  `chvmm`がcloud-hypervisor起動時に`--device path=/sys/bus/pci/devices/<addr>/,
+  iommu=on`として反映するところまで配線した。テナント単位の統制として
+  `Tenant.spec.quota.pci_devices`（`(vendor_id, device_id)`ごとの数量上限、
+  リストに無い組は上限0の明示許可制）もCreate時のOPA判定に追加。
+  `driver_hint`が`CLOUD_HYPERVISOR`以外のVMに`spec.pci_devices`を指定した
+  場合は`validatePciDevicesForDriver`がCreate時に拒否する。
+  **未検証**: このホストはBIOS/UEFI側でVT-d(IOMMU)が無効（DMARテーブル自体が
+  存在しない）であることが判明し、物理的なBIOSアクセスが必要なため、実機での
+  実際のVFIOパススルー動作は今回未確認——スケジューリング/予約/解放ロジックの
+  ユニットテストとcloud-hypervisor起動引数の構築までを実装範囲とし、実機検証は
+  BIOSでVT-dを有効化できる環境が整い次第の課題として残す
+  （[VirtualMachine仕様](specs/virtual-machine.md)「PCIデバイスパススルー」、
+  [Quota仕様](specs/quota.md)参照）
+
 ## 2026-09-25
 
 - `VirtualMachineService.Create`向けのAdmission Webhook（Kubernetesの

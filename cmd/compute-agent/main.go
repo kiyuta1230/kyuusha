@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -67,6 +68,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
 	storageConnections := flag.String("storage-connections", "", "comma-separated storage connections this host already has established, name[:local_path][,name[:local_path]...] -- an iSCSI/NVMe-oF session already logged in (no local_path needed: Volumes on it are discovered under /dev/disk/by-id/) or an NFS export already mounted (local_path is its mount point). Sent to compute at self-registration and used locally by internal/compute-agent/volumeref to find each Volume's already-visible device/file at boot time; kyuusha never logs in, mounts, or exports anything itself (see docs/architecture.md「訂正: 責務の境界を...」)")
+	pciDevices := flag.String("pci-devices", "", "comma-separated PCI devices this host has already bound to vfio-pci and makes available for passthrough, pci_address:vendor_id:device_id[,pci_address:vendor_id:device_id...] (e.g. 0000:3b:00.0:10de:1c03) -- only meaningful with CLOUD_HYPERVISOR in -drivers (Firecracker has no PCI bus). Sent to compute at self-registration (see internal/compute/hypervisor_service.go's reservePciDevices); each address is verified to actually be vfio-pci-bound and dropped (with a warning) otherwise, same defensive spirit as -storage-connections' local_path check")
 	networkAttachBin := flag.String("network-attach-bin", "", "path to an external VNAP plugin binary (see internal/compute-agent/netsetup and docs/architecture.md \"VMのネットワーク接続をCNIのようにプラガブルにすべきか\") that Wire/DeleteTap delegate the local tap-to-switch attach/detach step to, invoked as '<bin> attach|detach' with a JSON payload on stdin. Empty (the default) keeps the built-in Linux bridge implementation")
 	flag.Parse()
 
@@ -88,6 +90,7 @@ func main() {
 	bootstrapToken := strings.TrimSpace(string(bootstrapTokenBytes))
 
 	connections, connectionProtos := parseStorageConnections(*storageConnections)
+	availableDevices := parsePciDevices(*pciDevices)
 
 	// Built once, before Agent and before /metrics/resources' collector,
 	// since both need the exact same map[string]vmm.VMM: the collector
@@ -243,6 +246,7 @@ func main() {
 		SupportedDrivers:        strings.Split(*drivers, ","),
 		StorageConnections:      connectionProtos,
 		LocalStorageConnections: connections,
+		AvailableDevices:        availableDevices,
 		Drivers:                 vmmDrivers,
 	}
 	slog.Info("compute-agent: starting", "hypervisor", *hypervisor)
@@ -299,4 +303,67 @@ func parseStorageConnections(raw string) (volumeref.Connections, []*computev1.St
 		protos = append(protos, &computev1.StorageConnection{Name: name, LocalPath: localPath})
 	}
 	return conns, protos
+}
+
+// cutLast splits s at the last occurrence of sep, returning (the part after
+// it, the part before it, true), or ("", s, false) if sep doesn't occur.
+func cutLast(s, sep string) (tail, head string, ok bool) {
+	i := strings.LastIndex(s, sep)
+	if i < 0 {
+		return "", s, false
+	}
+	return s[i+len(sep):], s[:i], true
+}
+
+// vfioPciDriverName is the kernel driver every declared -pci-devices entry
+// must actually be bound to -- checked below via /sys/bus/pci/devices/<addr>/
+// driver's symlink target, the same "declared" claim the OS itself can
+// independently confirm before compute-agent forwards it as fact (see
+// parseStorageConnections' local_path check for the same defensive shape).
+const vfioPciDriverName = "vfio-pci"
+
+// parsePciDevices turns -pci-devices' pci_address:vendor_id:device_id
+// entries into the RegisterHypervisorRequest.available_devices this
+// compute-agent self-reports. An entry whose pci_address isn't actually
+// bound to vfio-pci right now is dropped (with a warning, not a fatal
+// error) rather than trusted at face value -- a misconfigured or stale
+// declaration would otherwise let compute schedule a passthrough VM onto a
+// device the host can't actually hand to a guest.
+func parsePciDevices(raw string) []*computev1.PciDevice {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var devices []*computev1.PciDevice
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		// Split from the right: a pci_address (e.g. "0000:00:01.0") itself
+		// contains colons, so a naive strings.Split(entry, ":") on the whole
+		// entry would shatter it -- vendor_id/device_id never do, so the
+		// last two ":"-separated fields are always exactly those, and
+		// whatever's left is the (possibly colon-containing) pci_address.
+		deviceID, rest, ok := cutLast(entry, ":")
+		var vendorID, pciAddress string
+		if ok {
+			vendorID, pciAddress, ok = cutLast(rest, ":")
+		}
+		if !ok {
+			slog.Warn("compute-agent: dropping malformed -pci-devices entry, want pci_address:vendor_id:device_id", "entry", entry)
+			continue
+		}
+		driverLink, err := os.Readlink("/sys/bus/pci/devices/" + pciAddress + "/driver")
+		if err != nil {
+			slog.Warn("compute-agent: dropping declared pci device, driver check failed", "pci_address", pciAddress, "err", err)
+			continue
+		}
+		if filepath.Base(driverLink) != vfioPciDriverName {
+			slog.Warn("compute-agent: dropping declared pci device, not bound to vfio-pci", "pci_address", pciAddress, "bound_driver", filepath.Base(driverLink))
+			continue
+		}
+		devices = append(devices, &computev1.PciDevice{PciAddress: pciAddress, VendorId: vendorID, DeviceId: deviceID})
+	}
+	return devices
 }

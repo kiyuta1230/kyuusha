@@ -48,6 +48,18 @@ func validateVCPUForDriver(vcpu int32, driver VmmDriver) error {
 	return nil
 }
 
+// validatePciDevicesForDriver rejects spec.pci_devices on anything but
+// CLOUD_HYPERVISOR: Firecracker is virtio-mmio only and has no PCI bus at
+// all to attach a VFIO device to (see docs/architecture.md "PCIデバイス(GPU等)
+// パススルー"), so this fails the same doomed-VM-never-created way
+// validateImage's driver/format mismatch check does.
+func validatePciDevicesForDriver(devices []PciDeviceRequest, driver VmmDriver) error {
+	if len(devices) == 0 || driver == VmmDriverCloudHypervisor {
+		return nil
+	}
+	return fmt.Errorf("%w: spec.pci_devices requires driver_hint %s, got %s", ErrValidation, VmmDriverCloudHypervisor, driver)
+}
+
 type NetworkAttachment struct {
 	SubnetID string
 	Primary  bool
@@ -123,6 +135,15 @@ type VirtualMachineStatus struct {
 	// somewhere, so a later plain Migrate (auto-pick) on the same VM
 	// doesn't inherit a stale target.
 	MigrateTarget string
+	// AllocatedPciDevices are the specific PCI addresses (e.g.
+	// "0000:3b:00.0") scheduleVM/scheduleMigration reserved against
+	// spec.pci_devices out of the current Hypervisor's self-reported
+	// available_devices (see hypervisor_service.go's reservePciDevices) --
+	// exposed read-only (see grpcserver's toStatusProto) so a caller can see
+	// exactly which device(s) this VM got, not just what it asked for.
+	// compute-agent passes these straight through as cloud-hypervisor
+	// --device flags (see nats.go's CreateCommand.PciDevices).
+	AllocatedPciDevices []string
 }
 
 type VirtualMachine struct {

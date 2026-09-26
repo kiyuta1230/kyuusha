@@ -53,7 +53,7 @@ func (s *HypervisorServer) Register(ctx context.Context, req *computev1.Register
 	if claims.HypervisorID != "" && claims.HypervisorID != req.GetHypervisor() {
 		return nil, status.Errorf(codes.PermissionDenied, "bootstrap_token is scoped to hypervisor %q, not %q", claims.HypervisorID, req.GetHypervisor())
 	}
-	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), claims.Zone, req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers(), fromStorageConnectionsProto(req.GetStorageConnections()))
+	h, err := s.svc.RegisterHypervisor(ctx, req.GetHypervisor(), claims.Zone, req.GetAllocatableVcpu(), req.GetAllocatableMemoryMb(), req.GetSupportedDrivers(), fromStorageConnectionsProto(req.GetStorageConnections()), fromPciDevicesProto(req.GetAvailableDevices()))
 	if err != nil {
 		return nil, toHypervisorStatus(err)
 	}
@@ -167,6 +167,21 @@ func fromStorageConnectionsProto(in []*computev1.StorageConnection) []compute.St
 	out := make([]compute.StorageConnection, len(in))
 	for i, c := range in {
 		out[i] = compute.StorageConnection{Name: c.GetName(), LocalPath: c.GetLocalPath()}
+	}
+	return out
+}
+
+// fromPciDevicesProto ignores each entry's Allocated field: RegisterHypervisor
+// derives allocation state itself by matching pci_address against the
+// previous registration (see its doc comment), never from what the agent
+// self-reports.
+func fromPciDevicesProto(in []*computev1.PciDevice) []compute.PciDevice {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]compute.PciDevice, len(in))
+	for i, d := range in {
+		out[i] = compute.PciDevice{PCIAddress: d.GetPciAddress(), VendorID: d.GetVendorId(), DeviceID: d.GetDeviceId()}
 	}
 	return out
 }

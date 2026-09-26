@@ -163,6 +163,17 @@ type BootSpec struct {
 	// NetworkInterfaces. Attach-before-boot only: there is no hot-plug path
 	// for a Volume requested after the VM is already Running.
 	Volumes []VolumeAttachInfo
+	// PciDevices are the specific PCI addresses (e.g. "0000:3b:00.0")
+	// compute's scheduler reserved against this VM's spec.pci_devices (see
+	// internal/compute/hypervisor_service.go's reservePciDevices) --
+	// resolved to exact host addresses before this command was ever sent,
+	// same "everything needed travels in the boot command" shape as
+	// Volumes/NetworkInterfaces. Only chvmm consumes this: PCI passthrough
+	// requires driver_hint=CLOUD_HYPERVISOR (Firecracker is virtio-mmio only
+	// and has no PCI bus -- internal/compute/virtualmachine.go's
+	// validatePciDevicesForDriver rejects any other combination at Create
+	// time), so fcvmm never sees a non-empty PciDevices.
+	PciDevices []string
 }
 
 // VolumeAttachInfo is one already-resolved Volume attachment: the

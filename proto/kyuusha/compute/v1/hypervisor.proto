@@ -79,6 +79,14 @@ message RegisterHypervisorRequest {
   int64 allocatable_memory_mb = 4;
   repeated string supported_drivers = 5;
   repeated StorageConnection storage_connections = 7;
+  // Devices compute-agent self-reports as vfio-pci-bound and available for
+  // passthrough (see docs/architecture.md "PCIデバイス(GPU等)パススルー").
+  // `allocated` is ignored on input: the server preserves each device's
+  // existing allocated state across a re-register by matching pci_address
+  // (so a restarting agent doesn't un-reserve a device a running VM still
+  // holds), and a newly-seen pci_address always starts unallocated; see
+  // hypervisor_service.go's RegisterHypervisor.
+  repeated PciDevice available_devices = 8;
   // Required: a zone-scoped JWT minted by `kyuusha hypervisor bootstrap-token
   // create -zone=...` (internal/bootstraptoken). Its `zone` claim -- not any
   // self-reported value from the agent -- becomes the registered

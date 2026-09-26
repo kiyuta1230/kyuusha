@@ -37,7 +37,7 @@ func TestReconciler_ResizeWithMigrationMovesToHypervisorWithRoom(t *testing.T) {
 	// hypervisor-1: 4 allocatable, 2 already allocated to this VM -- only 2
 	// more vCPU free, not enough to grow 2->8.
 	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 4, 8192, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 4096})
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor hypervisor-2: %v", err)
 	}
 	deletesTo1 := subscribeDeleteCommands(t, ctx, r.js, "hypervisor-1")
@@ -93,7 +93,7 @@ func TestReconciler_ResizeWithMigrationFailsWhenNoHypervisorFitsEither(t *testin
 
 	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 4, 8192, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 4096})
 	// hypervisor-2 exists but is also too small for the requested size.
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 4, 8192, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 4, 8192, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor hypervisor-2: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestReconciler_ResizeWithMigrationEnforcesQuota(t *testing.T) {
 	const tenant = "tenant-a"
 
 	vm := stoppedVMWithHypervisor(t, ctx, svc, tenant, "hypervisor-1", 4, 8192, VirtualMachineSpec{ImageID: "img-abc", VCPU: 2, MemoryMB: 2048})
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-2", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("RegisterHypervisor hypervisor-2: %v", err)
 	}
 

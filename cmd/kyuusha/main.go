@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -200,6 +201,7 @@ func vmCreate(args []string) {
 	driverHint := fs.String("driver-hint", "", "VMM driver: firecracker|cloud-hypervisor (empty: server default, FIRECRACKER). Must match the Image's format -- KERNEL_ROOTFS accepts either, QCOW2 requires cloud-hypervisor; see docs/specs/image.md")
 	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
 	volumes := fs.String("volumes", "", "comma-separated Volume IDs to attach at boot (see docs/specs/volume.md; attach-before-boot only -- a Volume added after the VM is already Running is not attached)")
+	pciDevices := fs.String("pci-devices", "", "comma-separated PCI passthrough requests, vendor_id:device_id[:count] (count defaults to 1, e.g. 10de:1c03 or 10de:1c03:2) -- requires -driver-hint=cloud-hypervisor; see docs/specs/virtual-machine.md \"PCIデバイスパススルー\"")
 	userDataFile := fs.String("user-data-file", "", "path to a cloud-init user-data file (NoCloud seed disk; see docs/architecture.md \"UserData注入\"); empty means don't inject anything")
 	wait := fs.Bool("wait", false, "block until the VM reaches Running or Error")
 	fs.Parse(args)
@@ -227,6 +229,26 @@ func vmCreate(args []string) {
 		volRequests = append(volRequests, &computev1.VolumeRequest{VolumeId: volumeID})
 	}
 
+	var pciDeviceRequests []*computev1.PciDeviceRequest
+	for _, entry := range strings.Split(*pciDevices, ",") {
+		if entry == "" {
+			continue
+		}
+		parts := strings.Split(entry, ":")
+		if len(parts) < 2 || len(parts) > 3 {
+			fatal("-pci-devices: malformed entry %q, want vendor_id:device_id[:count]", entry)
+		}
+		count := int32(1)
+		if len(parts) == 3 {
+			n, err := strconv.Atoi(parts[2])
+			if err != nil || n <= 0 {
+				fatal("-pci-devices: malformed count in %q: %v", entry, err)
+			}
+			count = int32(n)
+		}
+		pciDeviceRequests = append(pciDeviceRequests, &computev1.PciDeviceRequest{VendorId: parts[0], DeviceId: parts[1], Count: count})
+	}
+
 	var userData string
 	if *userDataFile != "" {
 		b, err := os.ReadFile(*userDataFile)
@@ -249,6 +271,7 @@ func vmCreate(args []string) {
 			DriverHint:        parseVmmDriver(*driverHint),
 			NetworkInterfaces: netifs,
 			Volumes:           volRequests,
+			PciDevices:        pciDeviceRequests,
 			UserData:          userData,
 		},
 	})
@@ -688,10 +711,11 @@ func printVM(vm *computev1.VirtualMachine) {
 	for i, f := range vm.GetMeta().GetFinalizers() {
 		finalizerNames[i] = f.GetName()
 	}
-	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s finalizers=%s deleted_at=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s pci_devices=%s finalizers=%s deleted_at=%s rv=%d\n",
 		vm.GetMeta().GetId(), vm.GetMeta().GetName(), vm.GetMeta().GetTenantId(),
 		vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(),
 		strings.Join(vm.GetStatus().GetInterfaceRefs(), ","),
+		strings.Join(vm.GetStatus().GetAllocatedPciDevices(), ","),
 		strings.Join(finalizerNames, ","), deletedAtString(vm.GetMeta().GetDeletedAt()),
 		vm.GetMeta().GetResourceVersion())
 }

@@ -284,6 +284,16 @@ message QuotaSpec {
   int32 max_vms = 4;
   int32 max_vcpu_per_vm = 5;      // 1台あたりの上限。固定カタログ廃止に伴う歯止め
   int64 max_memory_mb_per_vm = 6; // 1台あたりの上限
+  // (vendor_id, device_id)ごとのPCIパススルー許可数。リストに無い組は
+  // 上限0（vcpu/memory_mbと違い、GPU等の希少資源は管理者の明示許可制。
+  // 詳細は「PCIデバイス(GPU等)パススルー」節）
+  repeated PciDeviceQuota pci_devices = 7;
+}
+
+message PciDeviceQuota {
+  string vendor_id = 1;
+  string device_id = 2;
+  int32 max_count = 3; // テナント合計。VM1台あたりの上限は無い
 }
 
 message TenantSpec {
@@ -307,7 +317,8 @@ Quotaの実体（vCPU/メモリ/Volume容量）はidentityではなくcompute/bl
 更新した**予約パターンをそのままテナント単位に転用**する。
 
 - compute/block-storageはそれぞれ自分のDBに`tenant_usage(tenant_id, used_vcpu, used_memory_mb,
-  used_volume_gb, vm_count)`を持つ
+  used_volume_gb, vm_count)`を持つ。computeはこれに加えて`(vendor_id, device_id)`ごとの
+  PCIデバイス使用数も同じ`tenant_usage`に同居させる（下記`pci_devices`参照）
 - VirtualMachine/Volumeの`Create`時、対象テナントの`quota`をidentityへ同期Getで取得し、`tenant_usage`への
   加算とリソース作成を**同一トランザクション**で行う。使用量のライブSUM集計はしない
   （レースを避けるため、Hypervisor容量予約と同じ理由）
@@ -323,6 +334,12 @@ Quotaの実体（vCPU/メモリ/Volume容量）はidentityではなくcompute/bl
   副次的に、物理ハイパーバイザーの最大キャパシティを超えるVirtualMachineをCreate時点で即座に拒否できる
   （`Unschedulable`のまま放置されるのを防ぐ）
 - VirtualMachine/Volume削除時、同一トランザクションで`tenant_usage`を減算する
+- **`pci_devices`はvcpu/memory_mbと非対称な「明示許可制」**: `QuotaSpec.pci_devices`に
+  無い`(vendor_id, device_id)`は上限0として扱う（vcpu/memory_mbの「上限だけ管理者が絞る、
+  デフォルトは自由」とは逆）。GPU等は物理的に希少で、どのテナントにどのデバイスを
+  割り当てるかを管理者が明示的に決めたい、という要求のための設計（詳細は「PCIデバイス
+  (GPU等)パススルー」節）。粒度は個々の物理アドレスではなく`vendor_id`/`device_id`単位の
+  数量——具体的にどのアドレスが割り当たるかはスケジューラの`reservePciDevices`に委ねる
 
 ### computeサービスのリソース: Hypervisor
 
@@ -1190,8 +1207,48 @@ type MostAvailableFirst struct{}
 汎用設計にしてある。デバイスIDは実ハードウェアのPCI ID(ベンダーID/デバイスID)そのものであり、
 `machine_class`のような実装都合の間接カタログではないため、「avoid indirection」の命名原則にも反しない。
 
-設計の型を用意しただけで、実装は当面のTODOとする（GPUワークロードの具体的な需要が
-出てから着手すれば良い）。
+### 在庫の自己申告とスケジューリング
+
+compute-agentが`-pci-devices`フラグ（`pci_address:vendor_id:device_id`のカンマ区切り）で
+`RegisterHypervisorRequest.available_devices`に載せて自己申告する——`-storage-connections`と
+同じ「host側の事実をエージェントが申告し、compute側はその内容自体は信用しつつ、
+検証可能な部分だけその場でチェックする」設計。申告された各アドレスが実際に
+`vfio-pci`ドライバへ束縛されているかを`/sys/bus/pci/devices/<addr>/driver`のシンボリック
+リンク先で確認し、そうでなければ警告付きで除外する。
+
+スケジューラの`filterSchedulable`は、`spec.pci_devices`が要求する`vendor_id`/`device_id`の
+組・数量を満たす未割当の`PciDevice`が候補Hypervisorに十分あるかを検証するフィルタを持つ
+（フィルタ8種の1つ、[VMスケジュール仕様](specs/vm-scheduling.md)参照）。予約は
+vCPU/メモリと同じGet→mutate→Updateの楽観的並行性制御で、対象の具体的なアドレスを選んで
+`allocated`を`true`にする——GPUは同時に1台のVirtualMachineにしかパススルーできないため
+（VolumeAttachmentの排他制御と同じ発想、上記「予約とレース対策」参照）。ロールバック時は
+新規予約時の「改めて空きを探す」（`reservePciDevices`）ではなく、直前まで確保していた
+**同じ**アドレスをそのまま復元する専用の`restorePciDevices`を使う——VMオブジェクト自体は
+書き換わっていないロールバックの結果が別の物理アドレスになると不整合になるため。
+
+Migrate/Resize（`allow_migrate`併用）は、`spec.pci_devices`という要求自体は引き継ぐが、
+実際に割り当たる具体的なPCIアドレスはroot diskと同じく移行先で作り直される
+（移行先Hypervisorの在庫から改めて`reservePciDevices`するため）。
+
+compute-agentの再登録（プロセス再起動によるRegister再呼び出し）では、`pci_address`が
+一致する既存デバイスの`allocated`状態を引き継ぐ——`allocated_vcpu`/`allocated_memory_mb`と
+同じ「agentの再起動でin-flightな予約を静かに解除しない」という保護（compute-agent自身は
+どのデバイスがどのVMで使用中か知らないため、状態はcompute側にのみある）。
+
+`spec.pci_devices`を指定できるのは`driver_hint: CLOUD_HYPERVISOR`のVirtualMachineのみ
+（`validatePciDevicesForDriver`、Create時に同期チェック）。compute-agent側は`chvmm`のみが
+`CreateCommand.pci_devices`を受け取り、`--device path=/sys/bus/pci/devices/<addr>/,iommu=on`
+としてcloud-hypervisor起動引数に反映する。
+
+GPU等は物理的に希少なリソースであるため、テナントへの割当ても`Tenant.spec.quota.pci_devices`
+（`(vendor_id, device_id)`ごとの数量上限）で管理者が明示的に統制する。vcpu/memory_mbとは
+逆に、リストに無い組は上限0（デフォルト自由ではなく明示許可制）——詳細は「Quota設計」節。
+
+**未検証**: このホスト環境ではBIOS/UEFI側でVT-d(IOMMU)が無効（DMARテーブル自体が存在しない）
+であることが判明しており、物理的なBIOSアクセスが必要な修正のため、実機での「実際にGPUが
+ゲストに見える」ところまでの動作確認はまだ行えていない。スケジューリング/予約/解放ロジックと
+cloud-hypervisor起動引数の構築まではユニットテスト済みだが、VFIOによる実パススルーそのものは
+BIOSでVT-dを有効化できる環境が用意でき次第の検証課題として残る。
 
 ## ハイパーバイザー死活監視とリカバリ、およびpet/cattleの区別の廃止
 
@@ -2301,8 +2358,8 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - NetworkInterface/Volume/VolumeAttachmentのライフサイクルphase
 - Volume/NetworkInterfaceの排他制御・フェンシング問題への対処方針
 - VLAN IDの割り当て方式（networkサービスが設定済みプールから同期・排他で払い出し）
-- スケジューラ設計（フィルタ7種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む。Volumeが要求するstorage_connectionによるフィルタは2026-09-26実装、[VMスケジュール仕様](specs/vm-scheduling.md)「フィルタ（ハード制約）」参照）
-- PCIデバイス(GPU等)パススルーの設計の型（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターン。実装は当面TODO——`HypervisorStatus.available_devices`という受け皿フィールド自体は存在するが、`RegisterHypervisorRequest`側にそれを申告するフィールドが無く、compute-agentがそもそも自己申告する手段が無い。スケジューラの`filterSchedulable`も`spec.pci_devices`を一切読まない。設計の型だけがあり、実装は本当にゼロから）
+- スケジューラ設計（フィルタ8種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む。Volumeが要求するstorage_connectionによるフィルタ、`spec.pci_devices`によるPCIデバイスフィルタ、[VMスケジュール仕様](specs/vm-scheduling.md)「フィルタ（ハード制約）」参照）
+- PCIデバイス(GPU等)パススルー（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターンで実装済み。テナント単位の`(vendor_id, device_id)`数量クォータ（明示許可制、上限リストに無い組は上限0）も実装済み。VFIOによる実機でのパススルー動作自体はこのホストのBIOS VT-d無効のため未検証、[VirtualMachine仕様](specs/virtual-machine.md)「PCIデバイスパススルー」参照）
 - pet/cattleの区別（`recovery_policy`/`persistent_root_disk`/`root_volume_ref`）を廃止（実質未使用だったフィールドを削除し、ハイパーバイザー喪失時の自動リカバリはKaaS層/オペレータに委ねる判断。「pet/cattleの区別を廃止」節参照）
 - UI方針（自前のWeb UIは作らずCLI＋Grafanaに任せる。OpenStack Horizonを反面教師に）
 - テナント間VRF分離の実配線ドキュメント化（`docs/network-deployment-guide.md`としてネットワーク運用チーム向けに独立した文書を作成。VLANプール/VRF/ルートリークポリシー/デプロイ前チェックリストを含む）

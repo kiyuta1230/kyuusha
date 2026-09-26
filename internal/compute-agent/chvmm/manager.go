@@ -504,6 +504,16 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	)
 	args = append(args, diskArgs...)
 	args = append(args, chNetArgs...)
+	// PCI passthrough (GPU/SR-IOV NIC): each address was already resolved
+	// against this Hypervisor's self-reported, vfio-pci-bound inventory by
+	// compute's scheduler (see internal/compute/hypervisor_service.go's
+	// reservePciDevices) -- chvmm just hands cloud-hypervisor the sysfs path
+	// its VFIO integration expects. iommu=on lets the guest itself use an
+	// IOMMU for this device (e.g. a GPU doing DMA-remapped work), not a
+	// precondition of passthrough working at all.
+	for _, addr := range spec.PciDevices {
+		args = append(args, "--device", fmt.Sprintf("path=/sys/bus/pci/devices/%s/,iommu=on", addr))
+	}
 
 	// Not exec.CommandContext(ctx, ...): ctx here is the NATS message
 	// handler's context, which is done long before this VM's guest is --

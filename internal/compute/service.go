@@ -147,6 +147,7 @@ func (s *Service) rebuildUsage(ctx context.Context) error {
 		u.VCPU += vm.Spec.VCPU
 		u.MemoryMB += vm.Spec.MemoryMB
 		u.VMCount++
+		addPciUsage(&u, vm.Spec.PciDevices, 1)
 		usage[vm.Meta.TenantID] = u
 	}
 	s.usage = usage
@@ -173,6 +174,9 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	if err := validateVCPUForDriver(spec.VCPU, spec.DriverHint); err != nil {
 		return nil, err
 	}
+	if err := validatePciDevicesForDriver(spec.PciDevices, spec.DriverHint); err != nil {
+		return nil, err
+	}
 
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
@@ -196,7 +200,7 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 		return nil, err
 	}
 	usage := s.usage[tenantID]
-	allowed, err := s.quota.allow(ctx, usage, spec.VCPU, spec.MemoryMB, limit)
+	allowed, err := s.quota.allow(ctx, usage, spec.VCPU, spec.MemoryMB, spec.PciDevices, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +232,7 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	usage.VCPU += spec.VCPU
 	usage.MemoryMB += spec.MemoryMB
 	usage.VMCount++
+	addPciUsage(&usage, spec.PciDevices, 1)
 	s.usage[tenantID] = usage
 
 	return &out, nil
@@ -410,6 +415,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
 	usage.VCPU -= vm.Spec.VCPU
 	usage.MemoryMB -= vm.Spec.MemoryMB
 	usage.VMCount--
+	addPciUsage(&usage, vm.Spec.PciDevices, -1)
 	s.usage[tenantID] = usage
 
 	return nil

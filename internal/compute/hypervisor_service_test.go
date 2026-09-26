@@ -12,7 +12,7 @@ func TestService_RegisterHypervisorUpsertsPreservingReservations(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	h, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil)
+	h, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil)
 	if err != nil {
 		t.Fatalf("RegisterHypervisor: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestService_RegisterHypervisorUpsertsPreservingReservations(t *testing.T) {
 
 	// Re-register (e.g. agent restart) must refresh capacity/zone but keep
 	// the existing reservation intact.
-	h2, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-b", 16, 32768, []string{"FIRECRACKER", "CLOUD_HYPERVISOR"}, nil)
+	h2, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-b", 16, 32768, []string{"FIRECRACKER", "CLOUD_HYPERVISOR"}, nil, nil)
 	if err != nil {
 		t.Fatalf("re-Register: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestService_RegisterHypervisorUpsertsPreservingReservations(t *testing.T) {
 	if _, err := svc.SetSchedulable(ctx, "hypervisor-1", false); err != nil {
 		t.Fatalf("SetSchedulable: %v", err)
 	}
-	h3, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-b", 16, 32768, []string{"FIRECRACKER"}, nil)
+	h3, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-b", 16, 32768, []string{"FIRECRACKER"}, nil, nil)
 	if err != nil {
 		t.Fatalf("re-Register after cordon: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestService_SetRevokedBlocksReRegistrationAndForcesUnschedulable(t *testing
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -81,7 +81,7 @@ func TestService_SetRevokedBlocksReRegistrationAndForcesUnschedulable(t *testing
 		t.Fatal("Schedulable = true after SetRevoked(true), want forced false")
 	}
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); !errors.Is(err, ErrHypervisorRevoked) {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); !errors.Is(err, ErrHypervisorRevoked) {
 		t.Fatalf("re-Register after revoke: got %v, want ErrHypervisorRevoked", err)
 	}
 
@@ -98,7 +98,7 @@ func TestService_SetRevokedBlocksReRegistrationAndForcesUnschedulable(t *testing
 		t.Fatal("Schedulable = true after un-revoke, want still false (not auto-restored)")
 	}
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("re-Register after un-revoke: %v", err)
 	}
 }
@@ -107,14 +107,14 @@ func TestService_ScheduleVMExcludesUnschedulable(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, err := svc.SetSchedulable(ctx, "hypervisor-1", false); err != nil {
 		t.Fatalf("SetSchedulable: %v", err)
 	}
 
-	_, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{})
+	_, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{})
 	if !errors.Is(err, ErrUnschedulable) {
 		t.Fatalf("scheduleVM against a cordoned-only Hypervisor: got %v, want ErrUnschedulable", err)
 	}
@@ -122,7 +122,7 @@ func TestService_ScheduleVMExcludesUnschedulable(t *testing.T) {
 	if _, err := svc.SetSchedulable(ctx, "hypervisor-1", true); err != nil {
 		t.Fatalf("SetSchedulable(true): %v", err)
 	}
-	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{})
+	picked, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{})
 	if err != nil {
 		t.Fatalf("scheduleVM after uncordon: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestService_ScheduleVMFiltersAndReserves(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-notready", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-notready", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if err := svc.updateHypervisor(ctx, "hypervisor-notready", func(h *Hypervisor) error {
@@ -145,19 +145,19 @@ func TestService_ScheduleVMFiltersAndReserves(t *testing.T) {
 		t.Fatalf("force NotReady: %v", err)
 	}
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-wrong-driver", "zone-a", 8, 16384, []string{"CLOUD_HYPERVISOR"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-wrong-driver", "zone-a", 8, 16384, []string{"CLOUD_HYPERVISOR"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-small", "zone-a", 1, 1024, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-small", "zone-a", 1, 1024, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-good", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-good", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 2, MemoryMB: 4096}, scheduleConstraints{})
+	picked, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 2, MemoryMB: 4096}, scheduleConstraints{})
 	if err != nil {
 		t.Fatalf("scheduleVM: %v", err)
 	}
@@ -187,14 +187,14 @@ func TestService_ScheduleVMFiltersByZone(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-a", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-a", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-b", "zone-b", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-b", "zone-b", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	picked, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{Zone: "zone-b"})
+	picked, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{Zone: "zone-b"})
 	if err != nil {
 		t.Fatalf("scheduleVM with requiredZone=zone-b: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestService_ScheduleVMFiltersByZone(t *testing.T) {
 
 	// No Hypervisor exists in zone-c: unschedulable despite zone-a/zone-b
 	// both having ample spare capacity.
-	if _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{Zone: "zone-c"}); !errors.Is(err, ErrUnschedulable) {
+	if _, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 1, MemoryMB: 1024}, scheduleConstraints{Zone: "zone-c"}); !errors.Is(err, ErrUnschedulable) {
 		t.Fatalf("scheduleVM with requiredZone=zone-c: got %v, want ErrUnschedulable", err)
 	}
 }
@@ -213,11 +213,11 @@ func TestService_ScheduleVMUnschedulableWhenNoCandidateFits(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 1, 1024, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 1, 1024, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	_, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 4, MemoryMB: 8192}, scheduleConstraints{})
+	_, _, err := svc.scheduleVM(ctx, VirtualMachineSpec{VCPU: 4, MemoryMB: 8192}, scheduleConstraints{})
 	if err == nil {
 		t.Fatal("expected ErrUnschedulable, got nil")
 	}
@@ -240,7 +240,7 @@ func TestService_ReserveHypervisorCapacityRaceNeverOversubscribes(t *testing.T) 
 	const perReservation = 2
 	const attempts = 6 // demands 12 vCPU total against 6 available: at most 3 can win
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", allocatableVCPU, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", allocatableVCPU, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -376,7 +376,7 @@ func TestService_ResizeCapacityRaceNeverOversubscribes(t *testing.T) {
 	const perDelta = 2
 	const attempts = 6 // demands 12 vCPU total against 6 available: at most 3 can win
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", allocatableVCPU, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", allocatableVCPU, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -423,7 +423,7 @@ func TestService_HeartbeatAndHealthSweep(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, ctx)
 
-	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil); err != nil {
+	if _, err := svc.RegisterHypervisor(ctx, "hypervisor-1", "zone-a", 8, 16384, []string{"FIRECRACKER"}, nil, nil); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

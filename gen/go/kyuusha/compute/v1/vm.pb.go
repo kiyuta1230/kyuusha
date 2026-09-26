@@ -416,8 +416,13 @@ type VirtualMachineStatus struct {
 	// comment on the same removal.
 	InterfaceRefs        []string `protobuf:"bytes,5,rep,name=interface_refs,json=interfaceRefs,proto3" json:"interface_refs,omitempty"`
 	VolumeAttachmentRefs []string `protobuf:"bytes,6,rep,name=volume_attachment_refs,json=volumeAttachmentRefs,proto3" json:"volume_attachment_refs,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Specific PCI addresses (e.g. "0000:3b:00.0") reserved against
+	// spec.pci_devices out of the current Hypervisor's self-reported
+	// available_devices -- read-only, see internal/compute/
+	// hypervisor_service.go's reservePciDevices.
+	AllocatedPciDevices []string `protobuf:"bytes,7,rep,name=allocated_pci_devices,json=allocatedPciDevices,proto3" json:"allocated_pci_devices,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *VirtualMachineStatus) Reset() {
@@ -481,6 +486,13 @@ func (x *VirtualMachineStatus) GetInterfaceRefs() []string {
 func (x *VirtualMachineStatus) GetVolumeAttachmentRefs() []string {
 	if x != nil {
 		return x.VolumeAttachmentRefs
+	}
+	return nil
+}
+
+func (x *VirtualMachineStatus) GetAllocatedPciDevices() []string {
+	if x != nil {
+		return x.AllocatedPciDevices
 	}
 	return nil
 }
@@ -1571,7 +1583,7 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"driverHint\x12E\n" +
 	"\vpci_devices\x18\n" +
 	" \x03(\v2$.kyuusha.compute.v1.PciDeviceRequestR\n" +
-	"pciDevices\"\xe9\x01\n" +
+	"pciDevices\"\x9d\x02\n" +
 	"\x14VirtualMachineStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -1581,7 +1593,8 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"hypervisor\x18\x03 \x01(\tR\n" +
 	"hypervisor\x12%\n" +
 	"\x0einterface_refs\x18\x05 \x03(\tR\rinterfaceRefs\x124\n" +
-	"\x16volume_attachment_refs\x18\x06 \x03(\tR\x14volumeAttachmentRefs\"\xc3\x01\n" +
+	"\x16volume_attachment_refs\x18\x06 \x03(\tR\x14volumeAttachmentRefs\x122\n" +
+	"\x15allocated_pci_devices\x18\a \x03(\tR\x13allocatedPciDevices\"\xc3\x01\n" +
 	"\x0eVirtualMachine\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x12:\n" +
 	"\x04spec\x18\x02 \x01(\v2&.kyuusha.compute.v1.VirtualMachineSpecR\x04spec\x12@\n" +

@@ -37,6 +37,7 @@ VMが`Scheduled`→`Provisioning`へ遷移する際（[VMスケジュール仕�
 | `interfaces` | `network_interfaces`から作られたNetworkInterface+そのSubnetの情報（[network.md](network.md)参照）。空配列ならネットワークなしで起動する |
 | `volumes` | `volumes`から作られたVolumeAttachmentのうち、実際に`Attached`まで到達したものについて、そのVolume自身が持つ`protocol`/`storage_connection`/`identifier`（[Volume仕様](volume.md)参照。kyuushaはここで何もログイン/マウントしない——compute-agentが起動時にこの情報から既に見えているデバイス/ファイルを探すだけ）。空配列ならVolumeなしで起動する——アタッチが`Pending`のまま（排他制御待ち）だったものはここに含まれない |
 | `user_data` | `VirtualMachineSpec.user_data`そのまま。空なら何も注入しない（下記「UserData注入」参照） |
+| `pci_devices` | スケジュール時に予約された具体的なPCIアドレス（`status.allocated_pci_devices`と同じ値）。空配列ならPCIパススルーなし。`chvmm`のみが消費する——下記「PCIデバイスパススルー」参照 |
 
 `kernel_url`+`rootfs_url`と`disk_url`のどちらも空、または`driver_hint`に対応する
 登録済みドライバがない場合（`internal/compute-agent/agent.go`の`Drivers`マップに
@@ -225,9 +226,14 @@ mutate→`store.Update`をサービス内で完結させる。
   不要——Resize自体が元々同期RPC（`Get`→検証→`store.Update`）である契約を
   崩さない。現在のHypervisorを除外した`scheduleVM`の自動選択で**新サイズが
   収まる**Hypervisorを探し（`target_hypervisor`を明示指定するオプションは
-  無い——これは配置の意思決定ではなく容量不足のフォールバックのため）、
-  見つかった新Hypervisorへ新サイズ分を予約、旧Hypervisorから旧サイズ分を
-  解放、`vm.Spec`と`vm.Status.hypervisor`を1回の`Update`で書き換える。
+  無い——これは配置の意思決定ではなく容量不足のフォールバックのため）。
+  `spec.pci_devices`はResizeでは変更されないが、`scheduleVM`は新
+  Hypervisor側でもこの不変の要求を満たすことを検証し、満たせば新
+  Hypervisorの在庫から改めて`reservePciDevices`する（マイグレーションと
+  同じ「具体的なアドレスは引き継がれない」扱い、上記「マイグレーション」
+  参照）。見つかった新Hypervisorへ新サイズ分（+PCIデバイス）を予約、
+  旧Hypervisorから旧サイズ分（+PCIデバイス）を解放、`vm.Spec`と
+  `vm.Status.hypervisor`/`allocated_pci_devices`を1回の`Update`で書き換える。
   旧Hypervisorには`Migrate`と同じ`DeleteCommand`をfire-and-forgetで送り、
   残っていたjail/runディレクトリを掃除する
 - **新Hypervisorでも収まらなければ**`ErrHypervisorCapacityExceeded`
@@ -258,6 +264,13 @@ Hypervisorへ移す。`Stopped`のVMのみ受け付ける（`FailedPrecondition`
   元々Volumeに置く設計（`docs/architecture.md`のpet/cattle区別廃止と同じ
   前提）なので、この非対称は設計上の欠陥ではなく「rootディスクは
   cattle、Volumeだけがpet」という一貫した扱い
+- **要求は引き継がれるが具体的な個体は引き継がれない**: `spec.pci_devices`
+  （`vendor_id`/`device_id`/`count`）自体はNetworkInterface/VolumeAttachment
+  と同じくVMに固定されたまま移行先でも同じ要求を再提出するが、
+  `status.allocated_pci_devices`（実際に割り当たったPCIアドレス）は
+  root diskと同じ「移行先で作り直される」側——新Hypervisorの在庫から
+  改めて`reservePciDevices`が空きを探すため、旧Hypervisorと同じ物理
+  アドレスが割り当たる保証はない（下記「PCIデバイスパススルー」参照）
 
 **フロー**（`internal/compute/reconciler.go`の`migrateVM`、`PhaseMigrating`）:
 
@@ -271,16 +284,19 @@ Hypervisorへ移す。`Stopped`のVMのみ受け付ける（`FailedPrecondition`
      自動選択する。ただし現在のHypervisorは候補から除外——除外しないと
      「移行の結果、元の場所に戻ってくる」という無意味な成功がありうるため
    - `target_hypervisor`が指定されていれば、そのHypervisor**だけ**を対象に
-     同じハードフィルタ（Ready/schedulable/driver対応/zone/容量）で検証する
-     ——指定を無条件に信用せず、フィルタを満たさなければ
+     同じハードフィルタ（Ready/schedulable/driver対応/zone/容量/PCIデバイス
+     在庫）で検証する——指定を無条件に信用せず、フィルタを満たさなければ
      `ResourceExhausted`/`FailedPrecondition`相当で拒否する。現在の
      Hypervisorと同じIDを指定した場合は`InvalidArgument`
+   - どちらの経路も、`spec.pci_devices`が非空なら移行先の在庫に対して
+     改めて`reservePciDevices`を行う（上記「引き継がれるもの・
+     引き継がれないもの」参照）。失敗すれば容量予約ごとロールバックする
    - どちらの経路も失敗時はVMを`Migrating`のまま留め、`Unmigratable`
      Conditionを記録する。`runRetrySweep`が`PhasePending`と全く同じ
      「無条件で毎tick再試行」を`PhaseMigrating`にも適用する——容量が空くのは
      Hypervisor側の変化であり、このVM自身のWatchイベントには現れないため
-3. 成功したら、元Hypervisorの容量予約を解放し、`DeleteCommand`を元
-   Hypervisorへfire-and-forgetで送る（`Migrate`はStoppedのVMにしか効かない
+3. 成功したら、元Hypervisorの容量予約（PCIデバイスの予約も含む）を解放し、
+   `DeleteCommand`を元Hypervisorへfire-and-forgetで送る（`Migrate`はStoppedのVMにしか効かない
    ので生きているプロセスは無く、元Hypervisor上に残っていた
    jail/runディレクトリ——古いroot diskの実体——を掃除するだけ。実質
    「削除」と同じ処理を、VMリソース自体は消さずに1ホスト分だけ行う）
@@ -298,6 +314,59 @@ Firecrackerゲストが新Hypervisor上で起動し、`NetworkInterface`のIP/MA
 移行前と完全に同一のまま(`kyuusha vm console`でゲスト自身が同じIPを
 設定するログまで確認)、かつ元Hypervisor側のjail/runディレクトリが
 掃除されていることを確認した。
+
+## PCIデバイスパススルー（GPU/SR-IOV NIC等）
+
+`spec.pci_devices`（`PciDeviceRequest{vendor_id, device_id, count}`の配列）で
+VMに特定のPCIデバイスをパススルー要求できる。カタログ的な間接層は無く、
+実ハードウェアのPCI ID（ベンダーID/デバイスID）を直接指定する——GPUだけで
+なくSR-IOV NIC等にも使い回せる汎用設計（`docs/architecture.md`「PCIデバイス
+(GPU等)パススルー」参照）。
+
+- **`driver_hint=CLOUD_HYPERVISOR`限定**: Firecrackerはvirtio-mmioのみで
+  そもそもゲストにPCIバスを見せない設計のため、`spec.pci_devices`が非空の
+  まま他の`driver_hint`でCreateすると`ErrValidation`で拒否される
+  （`validatePciDevicesForDriver`、`validateVCPUForDriver`と同じ
+  doomed-VM-never-createdの理由）
+- **Hypervisor側の在庫申告**: compute-agentが`-pci-devices`フラグ
+  （`pci_address:vendor_id:device_id`のカンマ区切り）で自己登録時に申告する。
+  申告された各アドレスは`/sys/bus/pci/devices/<addr>/driver`が実際に
+  `vfio-pci`を指しているかその場で検証され、そうでなければ警告付きで
+  除外される（`-storage-connections`のlocal_path存在確認と同じ防御姿勢）。
+  結果は`Hypervisor.status.available_devices`に反映される
+- **スケジューリング**: `filterSchedulable`が要求を満たす未割当の
+  `PciDevice`（`vendor_id`/`device_id`一致、`count`分の数量）が候補
+  Hypervisorに十分あるかを検証するフィルタ（[VMスケジュール仕様]
+  (vm-scheduling.md)「フィルタ（ハード制約）」参照）。予約は
+  `reservePciDevices`が具体的なアドレスを選んで`allocated`を`true`にする
+  ——vcpu/memory_mbと同じGet→mutate→Updateの楽観的並行性制御。実際に
+  割り当たったアドレスは`status.allocated_pci_devices`に読み取り専用で
+  反映される（要求は`vendor_id`/`device_id`単位だが、割当結果は個体
+  レベルで見える）
+- **compute-agentへの伝達**: `CreateCommand.pci_devices`が
+  `status.allocated_pci_devices`をそのまま運ぶ（上記「computeから
+  compute-agentへ渡る情報」参照）。`chvmm`のみが`--device
+  path=/sys/bus/pci/devices/<addr>/,iommu=on`としてcloud-hypervisor起動
+  引数に反映する（[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照）
+- **Hypervisor再登録時の扱い**: compute-agentの再起動（`RegisterHypervisor`
+  の再呼び出し）では、既存のVMがまだ使用中のデバイスの`allocated`状態が
+  `pci_address`一致で引き継がれる——vcpu/memory_mbの`allocated_vcpu`/
+  `allocated_memory_mb`と同じ「再登録がin-flightな予約を静かに解除しない」
+  という保護（compute-agent自身は自分のどのデバイスがどのVMで使用中かを
+  知らない）
+- **Quota**: `identity.Tenant.spec.quota.pci_devices`が`(vendor_id,
+  device_id)`ごとのテナント合計上限を持つ——リストに無い組は上限0
+  （明示的な許可制、[Quota仕様](quota.md)参照）
+- **Migrate/Resizeでの扱い**: 上記「マイグレーション」「容量不足時の
+  マイグレーションフォールバック」参照。要求（`vendor_id`/`device_id`/
+  `count`）自体は引き継がれるが、割り当たる具体的なPCIアドレスは
+  root diskと同じく移行先で作り直される
+- **未検証**: このホスト環境ではBIOS/UEFI側でVT-d(IOMMU)が無効
+  （DMARテーブル自体が存在しない）なため、実機での「実際にGPUが
+  ゲストに見える」ところまでの動作確認はまだ行えていない。スケジューリング/
+  予約/解放ロジックとcloud-hypervisor起動引数の構築まではユニットテスト
+  済みだが、VFIOによる実パススルーそのものはBIOSでVT-dを有効化できる
+  環境が用意でき次第の検証課題として残る
 
 ## Volume attach/detach（`AttachVolume`/`DetachVolume`、コールド/ライブ両対応）
 

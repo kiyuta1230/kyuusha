@@ -68,6 +68,11 @@ message VirtualMachineStatus {
   // comment on the same removal.
   repeated string interface_refs = 5;
   repeated string volume_attachment_refs = 6;
+  // Specific PCI addresses (e.g. "0000:3b:00.0") reserved against
+  // spec.pci_devices out of the current Hypervisor's self-reported
+  // available_devices -- read-only, see internal/compute/
+  // hypervisor_service.go's reservePciDevices.
+  repeated string allocated_pci_devices = 7;
 }
 
 message VirtualMachine {

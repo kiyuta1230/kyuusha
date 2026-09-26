@@ -455,6 +455,14 @@ type RegisterHypervisorRequest struct {
 	AllocatableMemoryMb int64                  `protobuf:"varint,4,opt,name=allocatable_memory_mb,json=allocatableMemoryMb,proto3" json:"allocatable_memory_mb,omitempty"`
 	SupportedDrivers    []string               `protobuf:"bytes,5,rep,name=supported_drivers,json=supportedDrivers,proto3" json:"supported_drivers,omitempty"`
 	StorageConnections  []*StorageConnection   `protobuf:"bytes,7,rep,name=storage_connections,json=storageConnections,proto3" json:"storage_connections,omitempty"`
+	// Devices compute-agent self-reports as vfio-pci-bound and available for
+	// passthrough (see docs/architecture.md "PCIデバイス(GPU等)パススルー").
+	// `allocated` is ignored on input: the server preserves each device's
+	// existing allocated state across a re-register by matching pci_address
+	// (so a restarting agent doesn't un-reserve a device a running VM still
+	// holds), and a newly-seen pci_address always starts unallocated; see
+	// hypervisor_service.go's RegisterHypervisor.
+	AvailableDevices []*PciDevice `protobuf:"bytes,8,rep,name=available_devices,json=availableDevices,proto3" json:"available_devices,omitempty"`
 	// Required: a zone-scoped JWT minted by `kyuusha hypervisor bootstrap-token
 	// create -zone=...` (internal/bootstraptoken). Its `zone` claim -- not any
 	// self-reported value from the agent -- becomes the registered
@@ -528,6 +536,13 @@ func (x *RegisterHypervisorRequest) GetSupportedDrivers() []string {
 func (x *RegisterHypervisorRequest) GetStorageConnections() []*StorageConnection {
 	if x != nil {
 		return x.StorageConnections
+	}
+	return nil
+}
+
+func (x *RegisterHypervisorRequest) GetAvailableDevices() []*PciDevice {
+	if x != nil {
+		return x.AvailableDevices
 	}
 	return nil
 }
@@ -911,7 +926,7 @@ const file_kyuusha_compute_v1_hypervisor_proto_rawDesc = "" +
 	"Hypervisor\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x126\n" +
 	"\x04spec\x18\x02 \x01(\v2\".kyuusha.compute.v1.HypervisorSpecR\x04spec\x12<\n" +
-	"\x06status\x18\x03 \x01(\v2$.kyuusha.compute.v1.HypervisorStatusR\x06status\"\xc8\x02\n" +
+	"\x06status\x18\x03 \x01(\v2$.kyuusha.compute.v1.HypervisorStatusR\x06status\"\x94\x03\n" +
 	"\x19RegisterHypervisorRequest\x12\x1e\n" +
 	"\n" +
 	"hypervisor\x18\x01 \x01(\tR\n" +
@@ -919,7 +934,8 @@ const file_kyuusha_compute_v1_hypervisor_proto_rawDesc = "" +
 	"\x10allocatable_vcpu\x18\x03 \x01(\x05R\x0fallocatableVcpu\x122\n" +
 	"\x15allocatable_memory_mb\x18\x04 \x01(\x03R\x13allocatableMemoryMb\x12+\n" +
 	"\x11supported_drivers\x18\x05 \x03(\tR\x10supportedDrivers\x12V\n" +
-	"\x13storage_connections\x18\a \x03(\v2%.kyuusha.compute.v1.StorageConnectionR\x12storageConnections\x12'\n" +
+	"\x13storage_connections\x18\a \x03(\v2%.kyuusha.compute.v1.StorageConnectionR\x12storageConnections\x12J\n" +
+	"\x11available_devices\x18\b \x03(\v2\x1d.kyuusha.compute.v1.PciDeviceR\x10availableDevices\x12'\n" +
 	"\x0fbootstrap_token\x18\x06 \x01(\tR\x0ebootstrapToken\"6\n" +
 	"\x14GetHypervisorRequest\x12\x1e\n" +
 	"\n" +
@@ -999,26 +1015,27 @@ var file_kyuusha_compute_v1_hypervisor_proto_depIdxs = []int32{
 	3,  // 3: kyuusha.compute.v1.Hypervisor.spec:type_name -> kyuusha.compute.v1.HypervisorSpec
 	4,  // 4: kyuusha.compute.v1.Hypervisor.status:type_name -> kyuusha.compute.v1.HypervisorStatus
 	2,  // 5: kyuusha.compute.v1.RegisterHypervisorRequest.storage_connections:type_name -> kyuusha.compute.v1.StorageConnection
-	5,  // 6: kyuusha.compute.v1.ListHypervisorsResponse.items:type_name -> kyuusha.compute.v1.Hypervisor
-	0,  // 7: kyuusha.compute.v1.HypervisorEvent.type:type_name -> kyuusha.compute.v1.HypervisorEvent.Type
-	5,  // 8: kyuusha.compute.v1.HypervisorEvent.hypervisor:type_name -> kyuusha.compute.v1.Hypervisor
-	6,  // 9: kyuusha.compute.v1.HypervisorService.Register:input_type -> kyuusha.compute.v1.RegisterHypervisorRequest
-	7,  // 10: kyuusha.compute.v1.HypervisorService.Get:input_type -> kyuusha.compute.v1.GetHypervisorRequest
-	8,  // 11: kyuusha.compute.v1.HypervisorService.List:input_type -> kyuusha.compute.v1.ListHypervisorsRequest
-	10, // 12: kyuusha.compute.v1.HypervisorService.Watch:input_type -> kyuusha.compute.v1.WatchHypervisorsRequest
-	11, // 13: kyuusha.compute.v1.HypervisorService.SetSchedulable:input_type -> kyuusha.compute.v1.SetSchedulableRequest
-	12, // 14: kyuusha.compute.v1.HypervisorService.SetRevoked:input_type -> kyuusha.compute.v1.SetRevokedRequest
-	5,  // 15: kyuusha.compute.v1.HypervisorService.Register:output_type -> kyuusha.compute.v1.Hypervisor
-	5,  // 16: kyuusha.compute.v1.HypervisorService.Get:output_type -> kyuusha.compute.v1.Hypervisor
-	9,  // 17: kyuusha.compute.v1.HypervisorService.List:output_type -> kyuusha.compute.v1.ListHypervisorsResponse
-	13, // 18: kyuusha.compute.v1.HypervisorService.Watch:output_type -> kyuusha.compute.v1.HypervisorEvent
-	5,  // 19: kyuusha.compute.v1.HypervisorService.SetSchedulable:output_type -> kyuusha.compute.v1.Hypervisor
-	5,  // 20: kyuusha.compute.v1.HypervisorService.SetRevoked:output_type -> kyuusha.compute.v1.Hypervisor
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	1,  // 6: kyuusha.compute.v1.RegisterHypervisorRequest.available_devices:type_name -> kyuusha.compute.v1.PciDevice
+	5,  // 7: kyuusha.compute.v1.ListHypervisorsResponse.items:type_name -> kyuusha.compute.v1.Hypervisor
+	0,  // 8: kyuusha.compute.v1.HypervisorEvent.type:type_name -> kyuusha.compute.v1.HypervisorEvent.Type
+	5,  // 9: kyuusha.compute.v1.HypervisorEvent.hypervisor:type_name -> kyuusha.compute.v1.Hypervisor
+	6,  // 10: kyuusha.compute.v1.HypervisorService.Register:input_type -> kyuusha.compute.v1.RegisterHypervisorRequest
+	7,  // 11: kyuusha.compute.v1.HypervisorService.Get:input_type -> kyuusha.compute.v1.GetHypervisorRequest
+	8,  // 12: kyuusha.compute.v1.HypervisorService.List:input_type -> kyuusha.compute.v1.ListHypervisorsRequest
+	10, // 13: kyuusha.compute.v1.HypervisorService.Watch:input_type -> kyuusha.compute.v1.WatchHypervisorsRequest
+	11, // 14: kyuusha.compute.v1.HypervisorService.SetSchedulable:input_type -> kyuusha.compute.v1.SetSchedulableRequest
+	12, // 15: kyuusha.compute.v1.HypervisorService.SetRevoked:input_type -> kyuusha.compute.v1.SetRevokedRequest
+	5,  // 16: kyuusha.compute.v1.HypervisorService.Register:output_type -> kyuusha.compute.v1.Hypervisor
+	5,  // 17: kyuusha.compute.v1.HypervisorService.Get:output_type -> kyuusha.compute.v1.Hypervisor
+	9,  // 18: kyuusha.compute.v1.HypervisorService.List:output_type -> kyuusha.compute.v1.ListHypervisorsResponse
+	13, // 19: kyuusha.compute.v1.HypervisorService.Watch:output_type -> kyuusha.compute.v1.HypervisorEvent
+	5,  // 20: kyuusha.compute.v1.HypervisorService.SetSchedulable:output_type -> kyuusha.compute.v1.Hypervisor
+	5,  // 21: kyuusha.compute.v1.HypervisorService.SetRevoked:output_type -> kyuusha.compute.v1.Hypervisor
+	16, // [16:22] is the sub-list for method output_type
+	10, // [10:16] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_compute_v1_hypervisor_proto_init() }

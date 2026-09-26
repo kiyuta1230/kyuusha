@@ -72,6 +72,17 @@ type Agent struct {
 	// a Volume, just without attaching it to anything.
 	LocalStorageConnections volumeref.Connections
 
+	// AvailableDevices declares which PCI devices this host has already
+	// bound to vfio-pci and made available for passthrough (see
+	// docs/architecture.md "PCIデバイス(GPU等)パススルー") -- sent at self-
+	// registration so compute can reserve them against a VM's
+	// spec.pci_devices (internal/compute/hypervisor_service.go's
+	// reservePciDevices). Allocated is ignored by the server on input; see
+	// hypervisor.proto's RegisterHypervisorRequest.available_devices.
+	// cmd/compute-agent/main.go builds this from the -pci-devices flag,
+	// after verifying each address is actually vfio-pci-bound.
+	AvailableDevices []*computev1.PciDevice
+
 	// Drivers boots/tears down VMs, keyed by driver_hint (e.g.
 	// string(compute.VmmDriverFirecracker), string(compute.VmmDriverCloudHypervisor)).
 	// cmd/compute-agent/main.go always populates both in production;
@@ -234,6 +245,7 @@ func (a *Agent) register(ctx context.Context) error {
 		AllocatableMemoryMb: a.AllocatableMemoryMB,
 		SupportedDrivers:    a.SupportedDrivers,
 		StorageConnections:  a.StorageConnections,
+		AvailableDevices:    a.AvailableDevices,
 	}
 	var lastErr error
 	for attempt := 0; attempt < 30; attempt++ {
@@ -295,6 +307,7 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 			NetworkInterfaces: buildNetIfaces(cmd.VMID, cmd.Interfaces),
 			UserData:          cmd.UserData,
 			Volumes:           buildVolumeInfos(cmd.TenantID, cmd.Volumes),
+			PciDevices:        cmd.PciDevices,
 		})
 		if err != nil {
 			span.RecordError(err)

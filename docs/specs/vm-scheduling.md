@@ -44,6 +44,10 @@ sequenceDiagram
 6. `status.zone == requiredZone`（`requiredZone`が空でない場合のみ）
 7. `spec.volumes`が要求する`storage_connection`が全て`status.storage_connections`
    に含まれる（`requiredConnections`が空でない場合のみ）
+8. `spec.pci_devices`が指定されている場合、要求を満たす未割当の`PciDevice`
+   （`vendor_id`/`device_id`一致、`count`分の数量）が`status.available_devices`
+   に十分な数だけ存在する（`spec.pci_devices`が空のVMには影響しない。
+   [VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照）
 
 `requiredZone`は`spec.network_interfaces`が参照するSubnetのzoneから導出する
 （[network.md](network.md)「compute側の統合」参照）。マルチAZにまたがる
@@ -62,8 +66,6 @@ Create時点から実際のスケジュール時点までの間にSubnetが変�
 Hypervisorへ移すことはない。`network_interfaces`が空のVMと同様、`volumes`が
 空のVM（接続要件なし）には影響しない。
 
-PCIデバイスフィルタは未実装（PCI在庫が存在しないため）。
-
 ## ピック（MostAvailableFirst）
 
 フィルタを通過した候補の中から、**空きvCPU（`allocatable_vcpu - allocated_vcpu`）が最大**のHypervisorを選ぶ。
@@ -75,15 +77,30 @@ PCIデバイスフィルタは未実装（PCI在庫が存在しないため）�
 
 - 選定したHypervisorの`allocated_vcpu`/`allocated_memory_mb`に要求量を加算する
 - Get→mutate→Updateの楽観的並行性制御（`resource_version`）で行い、衝突時は最大20回まで自動リトライする
-- 予約の後にVMの`Scheduled`遷移（Update）を行う。VM側のUpdateが失敗した場合、直前の予約を解放（ロールバック）する
+- `spec.pci_devices`が非空なら、続けて`reservePciDevices`が同じHypervisorの
+  `available_devices`から要求を満たす具体的なアドレスを選び`allocated`を
+  `true`にする（オールオアナッシング——一部だけ確保して残りが足りない状態には
+  しない）。失敗した場合は直前のvcpu/memory_mb予約を解放してから
+  `ErrUnschedulable`を返す
+- 予約の後にVMの`Scheduled`遷移（Update）を行う。VM側のUpdateが失敗した場合、
+  直前の予約（vcpu/memory_mbとPCIデバイスの両方）を解放（ロールバック）する
 
 ## 解放（capacity release）
 
-以下のいずれかのタイミングで、該当VMの`spec.vcpu`/`spec.memory_mb`分を`allocated_vcpu`/`allocated_memory_mb`から減算する。
+以下のいずれかのタイミングで、該当VMの`spec.vcpu`/`spec.memory_mb`分を
+`allocated_vcpu`/`allocated_memory_mb`から減算し、`status.allocated_pci_devices`
+の各アドレスの`allocated`を`false`に戻す。
 
 - VMが削除された時（`status.hypervisor`が設定済み、すなわち一度でもスケジュールされていた場合のみ）
 - VM作成が失敗し`Error`へ遷移する時。このとき`status.hypervisor`を空文字列にクリアし、
   後続のVM削除で二重に解放されないようにする
+
+ロールバック時（`Update`失敗直後にvcpu/memory_mb予約を復元する場合）は、
+新規予約と同じ`reservePciDevices`（改めて空きを探す）ではなく、直前まで
+確保していた**同じ**アドレスをそのまま`allocated=true`へ戻す専用の
+`restorePciDevices`を使う——VMオブジェクト自体は書き換わっていない
+（`Update`が失敗している）ため、ロールバックの結果が別の物理アドレスに
+なってしまうと不整合になるため。
 
 ## リサイズ時の容量調整
 

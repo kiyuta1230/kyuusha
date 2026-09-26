@@ -21,6 +21,18 @@ message QuotaSpec {
   int32 max_vms = 4;
   int32 max_vcpu_per_vm = 5;      // per-VM cap
   int64 max_memory_mb_per_vm = 6; // per-VM cap
+  // Per-(vendor_id, device_id) PCI passthrough allotment: a scarce physical
+  // resource (see docs/architecture.md "PCIデバイス(GPU等)パススルー"), so
+  // unlike vcpu/memory_mb an admin must explicitly list every device type a
+  // tenant may request at all -- a (vendor_id, device_id) pair absent from
+  // this list has an implicit max_count of 0, not "unlimited".
+  repeated PciDeviceQuota pci_devices = 7;
+}
+
+message PciDeviceQuota {
+  string vendor_id = 1;  // e.g. "10de" (NVIDIA)
+  string device_id = 2;  // e.g. "20b0" (A100)
+  int32 max_count = 3;   // tenant total across all Hypervisors, not per-VM
 }
 
 message TenantSpec {

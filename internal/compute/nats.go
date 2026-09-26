@@ -147,6 +147,15 @@ type CreateCommand struct {
 	// logs in, mounts, or exports anything -- see docs/architecture.md
 	// 「block-storageのバックエンド抽象化」) travels here.
 	Volumes []VolumeAttachInfo `json:"volumes,omitempty"`
+	// PciDevices is vm.Status.AllocatedPciDevices verbatim -- the specific
+	// PCI addresses (e.g. "0000:3b:00.0") scheduleVM/scheduleConstraints
+	// already reserved against this Hypervisor's self-reported
+	// available_devices (see hypervisor_service.go's reservePciDevices).
+	// compute-agent never picks which device to use itself, only passes
+	// each address straight to cloud-hypervisor's --device flag (fcvmm
+	// never sees this: CLOUD_HYPERVISOR-only, enforced at Create time --
+	// see docs/architecture.md「PCIデバイス(GPU等)パススルー」).
+	PciDevices []string `json:"pci_devices,omitempty"`
 }
 
 // VolumeAttachInfo is one VM Volume attachment: the protocol/connection/

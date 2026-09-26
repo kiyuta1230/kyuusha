@@ -75,7 +75,7 @@ func (x TenantEvent_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TenantEvent_Type.Descriptor instead.
 func (TenantEvent_Type) EnumDescriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{11, 0}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{12, 0}
 }
 
 type QuotaSpec struct {
@@ -86,8 +86,14 @@ type QuotaSpec struct {
 	MaxVms           int32                  `protobuf:"varint,4,opt,name=max_vms,json=maxVms,proto3" json:"max_vms,omitempty"`
 	MaxVcpuPerVm     int32                  `protobuf:"varint,5,opt,name=max_vcpu_per_vm,json=maxVcpuPerVm,proto3" json:"max_vcpu_per_vm,omitempty"`               // per-VM cap
 	MaxMemoryMbPerVm int64                  `protobuf:"varint,6,opt,name=max_memory_mb_per_vm,json=maxMemoryMbPerVm,proto3" json:"max_memory_mb_per_vm,omitempty"` // per-VM cap
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Per-(vendor_id, device_id) PCI passthrough allotment: a scarce physical
+	// resource (see docs/architecture.md "PCIデバイス(GPU等)パススルー"), so
+	// unlike vcpu/memory_mb an admin must explicitly list every device type a
+	// tenant may request at all -- a (vendor_id, device_id) pair absent from
+	// this list has an implicit max_count of 0, not "unlimited".
+	PciDevices    []*PciDeviceQuota `protobuf:"bytes,7,rep,name=pci_devices,json=pciDevices,proto3" json:"pci_devices,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *QuotaSpec) Reset() {
@@ -162,6 +168,73 @@ func (x *QuotaSpec) GetMaxMemoryMbPerVm() int64 {
 	return 0
 }
 
+func (x *QuotaSpec) GetPciDevices() []*PciDeviceQuota {
+	if x != nil {
+		return x.PciDevices
+	}
+	return nil
+}
+
+type PciDeviceQuota struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VendorId      string                 `protobuf:"bytes,1,opt,name=vendor_id,json=vendorId,proto3" json:"vendor_id,omitempty"`  // e.g. "10de" (NVIDIA)
+	DeviceId      string                 `protobuf:"bytes,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`  // e.g. "20b0" (A100)
+	MaxCount      int32                  `protobuf:"varint,3,opt,name=max_count,json=maxCount,proto3" json:"max_count,omitempty"` // tenant total across all Hypervisors, not per-VM
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PciDeviceQuota) Reset() {
+	*x = PciDeviceQuota{}
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PciDeviceQuota) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PciDeviceQuota) ProtoMessage() {}
+
+func (x *PciDeviceQuota) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PciDeviceQuota.ProtoReflect.Descriptor instead.
+func (*PciDeviceQuota) Descriptor() ([]byte, []int) {
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PciDeviceQuota) GetVendorId() string {
+	if x != nil {
+		return x.VendorId
+	}
+	return ""
+}
+
+func (x *PciDeviceQuota) GetDeviceId() string {
+	if x != nil {
+		return x.DeviceId
+	}
+	return ""
+}
+
+func (x *PciDeviceQuota) GetMaxCount() int32 {
+	if x != nil {
+		return x.MaxCount
+	}
+	return 0
+}
+
 type TenantSpec struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DisplayName   string                 `protobuf:"bytes,1,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
@@ -172,7 +245,7 @@ type TenantSpec struct {
 
 func (x *TenantSpec) Reset() {
 	*x = TenantSpec{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[1]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -184,7 +257,7 @@ func (x *TenantSpec) String() string {
 func (*TenantSpec) ProtoMessage() {}
 
 func (x *TenantSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[1]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -197,7 +270,7 @@ func (x *TenantSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantSpec.ProtoReflect.Descriptor instead.
 func (*TenantSpec) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{1}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *TenantSpec) GetDisplayName() string {
@@ -224,7 +297,7 @@ type TenantStatus struct {
 
 func (x *TenantStatus) Reset() {
 	*x = TenantStatus{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[2]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -236,7 +309,7 @@ func (x *TenantStatus) String() string {
 func (*TenantStatus) ProtoMessage() {}
 
 func (x *TenantStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[2]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -249,7 +322,7 @@ func (x *TenantStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantStatus.ProtoReflect.Descriptor instead.
 func (*TenantStatus) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{2}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *TenantStatus) GetPhase() string {
@@ -277,7 +350,7 @@ type Tenant struct {
 
 func (x *Tenant) Reset() {
 	*x = Tenant{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[3]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -289,7 +362,7 @@ func (x *Tenant) String() string {
 func (*Tenant) ProtoMessage() {}
 
 func (x *Tenant) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[3]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -302,7 +375,7 @@ func (x *Tenant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tenant.ProtoReflect.Descriptor instead.
 func (*Tenant) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{3}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Tenant) GetMeta() *v1.ObjectMeta {
@@ -341,7 +414,7 @@ type CreateTenantRequest struct {
 
 func (x *CreateTenantRequest) Reset() {
 	*x = CreateTenantRequest{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[4]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -353,7 +426,7 @@ func (x *CreateTenantRequest) String() string {
 func (*CreateTenantRequest) ProtoMessage() {}
 
 func (x *CreateTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[4]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -366,7 +439,7 @@ func (x *CreateTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTenantRequest.ProtoReflect.Descriptor instead.
 func (*CreateTenantRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{4}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CreateTenantRequest) GetName() string {
@@ -399,7 +472,7 @@ type GetTenantRequest struct {
 
 func (x *GetTenantRequest) Reset() {
 	*x = GetTenantRequest{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[5]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -411,7 +484,7 @@ func (x *GetTenantRequest) String() string {
 func (*GetTenantRequest) ProtoMessage() {}
 
 func (x *GetTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[5]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -424,7 +497,7 @@ func (x *GetTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{5}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetTenantRequest) GetTenantId() string {
@@ -443,7 +516,7 @@ type ListTenantsRequest struct {
 
 func (x *ListTenantsRequest) Reset() {
 	*x = ListTenantsRequest{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[6]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -455,7 +528,7 @@ func (x *ListTenantsRequest) String() string {
 func (*ListTenantsRequest) ProtoMessage() {}
 
 func (x *ListTenantsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[6]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -468,7 +541,7 @@ func (x *ListTenantsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTenantsRequest.ProtoReflect.Descriptor instead.
 func (*ListTenantsRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{6}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListTenantsRequest) GetTenantId() string {
@@ -487,7 +560,7 @@ type ListTenantsResponse struct {
 
 func (x *ListTenantsResponse) Reset() {
 	*x = ListTenantsResponse{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[7]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -499,7 +572,7 @@ func (x *ListTenantsResponse) String() string {
 func (*ListTenantsResponse) ProtoMessage() {}
 
 func (x *ListTenantsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[7]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -512,7 +585,7 @@ func (x *ListTenantsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTenantsResponse.ProtoReflect.Descriptor instead.
 func (*ListTenantsResponse) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{7}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListTenantsResponse) GetItems() []*Tenant {
@@ -537,7 +610,7 @@ type UpdateTenantRequest struct {
 
 func (x *UpdateTenantRequest) Reset() {
 	*x = UpdateTenantRequest{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[8]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -549,7 +622,7 @@ func (x *UpdateTenantRequest) String() string {
 func (*UpdateTenantRequest) ProtoMessage() {}
 
 func (x *UpdateTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[8]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -562,7 +635,7 @@ func (x *UpdateTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateTenantRequest.ProtoReflect.Descriptor instead.
 func (*UpdateTenantRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{8}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *UpdateTenantRequest) GetTenant() *Tenant {
@@ -596,7 +669,7 @@ type DeleteTenantRequest struct {
 
 func (x *DeleteTenantRequest) Reset() {
 	*x = DeleteTenantRequest{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[9]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -608,7 +681,7 @@ func (x *DeleteTenantRequest) String() string {
 func (*DeleteTenantRequest) ProtoMessage() {}
 
 func (x *DeleteTenantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[9]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -621,7 +694,7 @@ func (x *DeleteTenantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTenantRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTenantRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{9}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DeleteTenantRequest) GetTenantId() string {
@@ -648,7 +721,7 @@ type WatchTenantsRequest struct {
 
 func (x *WatchTenantsRequest) Reset() {
 	*x = WatchTenantsRequest{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[10]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -660,7 +733,7 @@ func (x *WatchTenantsRequest) String() string {
 func (*WatchTenantsRequest) ProtoMessage() {}
 
 func (x *WatchTenantsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[10]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -673,7 +746,7 @@ func (x *WatchTenantsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchTenantsRequest.ProtoReflect.Descriptor instead.
 func (*WatchTenantsRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{10}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *WatchTenantsRequest) GetTenantId() string {
@@ -701,7 +774,7 @@ type TenantEvent struct {
 
 func (x *TenantEvent) Reset() {
 	*x = TenantEvent{}
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[11]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +786,7 @@ func (x *TenantEvent) String() string {
 func (*TenantEvent) ProtoMessage() {}
 
 func (x *TenantEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[11]
+	mi := &file_kyuusha_identity_v1_tenant_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +799,7 @@ func (x *TenantEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TenantEvent.ProtoReflect.Descriptor instead.
 func (*TenantEvent) Descriptor() ([]byte, []int) {
-	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{11}
+	return file_kyuusha_identity_v1_tenant_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *TenantEvent) GetType() TenantEvent_Type {
@@ -754,14 +827,20 @@ var File_kyuusha_identity_v1_tenant_proto protoreflect.FileDescriptor
 
 const file_kyuusha_identity_v1_tenant_proto_rawDesc = "" +
 	"\n" +
-	" kyuusha/identity/v1/tenant.proto\x12\x13kyuusha.identity.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xde\x01\n" +
+	" kyuusha/identity/v1/tenant.proto\x12\x13kyuusha.identity.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xa4\x02\n" +
 	"\tQuotaSpec\x12\x19\n" +
 	"\bmax_vcpu\x18\x01 \x01(\x05R\amaxVcpu\x12\"\n" +
 	"\rmax_memory_mb\x18\x02 \x01(\x03R\vmaxMemoryMb\x12\"\n" +
 	"\rmax_volume_gb\x18\x03 \x01(\x03R\vmaxVolumeGb\x12\x17\n" +
 	"\amax_vms\x18\x04 \x01(\x05R\x06maxVms\x12%\n" +
 	"\x0fmax_vcpu_per_vm\x18\x05 \x01(\x05R\fmaxVcpuPerVm\x12.\n" +
-	"\x14max_memory_mb_per_vm\x18\x06 \x01(\x03R\x10maxMemoryMbPerVm\"e\n" +
+	"\x14max_memory_mb_per_vm\x18\x06 \x01(\x03R\x10maxMemoryMbPerVm\x12D\n" +
+	"\vpci_devices\x18\a \x03(\v2#.kyuusha.identity.v1.PciDeviceQuotaR\n" +
+	"pciDevices\"g\n" +
+	"\x0ePciDeviceQuota\x12\x1b\n" +
+	"\tvendor_id\x18\x01 \x01(\tR\bvendorId\x12\x1b\n" +
+	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x1b\n" +
+	"\tmax_count\x18\x03 \x01(\x05R\bmaxCount\"e\n" +
 	"\n" +
 	"TenantSpec\x12!\n" +
 	"\fdisplay_name\x18\x01 \x01(\tR\vdisplayName\x124\n" +
@@ -826,53 +905,55 @@ func file_kyuusha_identity_v1_tenant_proto_rawDescGZIP() []byte {
 }
 
 var file_kyuusha_identity_v1_tenant_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kyuusha_identity_v1_tenant_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_kyuusha_identity_v1_tenant_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_kyuusha_identity_v1_tenant_proto_goTypes = []any{
 	(TenantEvent_Type)(0),       // 0: kyuusha.identity.v1.TenantEvent.Type
 	(*QuotaSpec)(nil),           // 1: kyuusha.identity.v1.QuotaSpec
-	(*TenantSpec)(nil),          // 2: kyuusha.identity.v1.TenantSpec
-	(*TenantStatus)(nil),        // 3: kyuusha.identity.v1.TenantStatus
-	(*Tenant)(nil),              // 4: kyuusha.identity.v1.Tenant
-	(*CreateTenantRequest)(nil), // 5: kyuusha.identity.v1.CreateTenantRequest
-	(*GetTenantRequest)(nil),    // 6: kyuusha.identity.v1.GetTenantRequest
-	(*ListTenantsRequest)(nil),  // 7: kyuusha.identity.v1.ListTenantsRequest
-	(*ListTenantsResponse)(nil), // 8: kyuusha.identity.v1.ListTenantsResponse
-	(*UpdateTenantRequest)(nil), // 9: kyuusha.identity.v1.UpdateTenantRequest
-	(*DeleteTenantRequest)(nil), // 10: kyuusha.identity.v1.DeleteTenantRequest
-	(*WatchTenantsRequest)(nil), // 11: kyuusha.identity.v1.WatchTenantsRequest
-	(*TenantEvent)(nil),         // 12: kyuusha.identity.v1.TenantEvent
-	(*v1.Condition)(nil),        // 13: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),       // 14: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),       // 15: google.protobuf.Empty
+	(*PciDeviceQuota)(nil),      // 2: kyuusha.identity.v1.PciDeviceQuota
+	(*TenantSpec)(nil),          // 3: kyuusha.identity.v1.TenantSpec
+	(*TenantStatus)(nil),        // 4: kyuusha.identity.v1.TenantStatus
+	(*Tenant)(nil),              // 5: kyuusha.identity.v1.Tenant
+	(*CreateTenantRequest)(nil), // 6: kyuusha.identity.v1.CreateTenantRequest
+	(*GetTenantRequest)(nil),    // 7: kyuusha.identity.v1.GetTenantRequest
+	(*ListTenantsRequest)(nil),  // 8: kyuusha.identity.v1.ListTenantsRequest
+	(*ListTenantsResponse)(nil), // 9: kyuusha.identity.v1.ListTenantsResponse
+	(*UpdateTenantRequest)(nil), // 10: kyuusha.identity.v1.UpdateTenantRequest
+	(*DeleteTenantRequest)(nil), // 11: kyuusha.identity.v1.DeleteTenantRequest
+	(*WatchTenantsRequest)(nil), // 12: kyuusha.identity.v1.WatchTenantsRequest
+	(*TenantEvent)(nil),         // 13: kyuusha.identity.v1.TenantEvent
+	(*v1.Condition)(nil),        // 14: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),       // 15: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),       // 16: google.protobuf.Empty
 }
 var file_kyuusha_identity_v1_tenant_proto_depIdxs = []int32{
-	1,  // 0: kyuusha.identity.v1.TenantSpec.quota:type_name -> kyuusha.identity.v1.QuotaSpec
-	13, // 1: kyuusha.identity.v1.TenantStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	14, // 2: kyuusha.identity.v1.Tenant.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	2,  // 3: kyuusha.identity.v1.Tenant.spec:type_name -> kyuusha.identity.v1.TenantSpec
-	3,  // 4: kyuusha.identity.v1.Tenant.status:type_name -> kyuusha.identity.v1.TenantStatus
-	2,  // 5: kyuusha.identity.v1.CreateTenantRequest.spec:type_name -> kyuusha.identity.v1.TenantSpec
-	4,  // 6: kyuusha.identity.v1.ListTenantsResponse.items:type_name -> kyuusha.identity.v1.Tenant
-	4,  // 7: kyuusha.identity.v1.UpdateTenantRequest.tenant:type_name -> kyuusha.identity.v1.Tenant
-	0,  // 8: kyuusha.identity.v1.TenantEvent.type:type_name -> kyuusha.identity.v1.TenantEvent.Type
-	4,  // 9: kyuusha.identity.v1.TenantEvent.tenant:type_name -> kyuusha.identity.v1.Tenant
-	5,  // 10: kyuusha.identity.v1.TenantService.Create:input_type -> kyuusha.identity.v1.CreateTenantRequest
-	6,  // 11: kyuusha.identity.v1.TenantService.Get:input_type -> kyuusha.identity.v1.GetTenantRequest
-	7,  // 12: kyuusha.identity.v1.TenantService.List:input_type -> kyuusha.identity.v1.ListTenantsRequest
-	9,  // 13: kyuusha.identity.v1.TenantService.Update:input_type -> kyuusha.identity.v1.UpdateTenantRequest
-	10, // 14: kyuusha.identity.v1.TenantService.Delete:input_type -> kyuusha.identity.v1.DeleteTenantRequest
-	11, // 15: kyuusha.identity.v1.TenantService.Watch:input_type -> kyuusha.identity.v1.WatchTenantsRequest
-	4,  // 16: kyuusha.identity.v1.TenantService.Create:output_type -> kyuusha.identity.v1.Tenant
-	4,  // 17: kyuusha.identity.v1.TenantService.Get:output_type -> kyuusha.identity.v1.Tenant
-	8,  // 18: kyuusha.identity.v1.TenantService.List:output_type -> kyuusha.identity.v1.ListTenantsResponse
-	4,  // 19: kyuusha.identity.v1.TenantService.Update:output_type -> kyuusha.identity.v1.Tenant
-	15, // 20: kyuusha.identity.v1.TenantService.Delete:output_type -> google.protobuf.Empty
-	12, // 21: kyuusha.identity.v1.TenantService.Watch:output_type -> kyuusha.identity.v1.TenantEvent
-	16, // [16:22] is the sub-list for method output_type
-	10, // [10:16] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	2,  // 0: kyuusha.identity.v1.QuotaSpec.pci_devices:type_name -> kyuusha.identity.v1.PciDeviceQuota
+	1,  // 1: kyuusha.identity.v1.TenantSpec.quota:type_name -> kyuusha.identity.v1.QuotaSpec
+	14, // 2: kyuusha.identity.v1.TenantStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	15, // 3: kyuusha.identity.v1.Tenant.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	3,  // 4: kyuusha.identity.v1.Tenant.spec:type_name -> kyuusha.identity.v1.TenantSpec
+	4,  // 5: kyuusha.identity.v1.Tenant.status:type_name -> kyuusha.identity.v1.TenantStatus
+	3,  // 6: kyuusha.identity.v1.CreateTenantRequest.spec:type_name -> kyuusha.identity.v1.TenantSpec
+	5,  // 7: kyuusha.identity.v1.ListTenantsResponse.items:type_name -> kyuusha.identity.v1.Tenant
+	5,  // 8: kyuusha.identity.v1.UpdateTenantRequest.tenant:type_name -> kyuusha.identity.v1.Tenant
+	0,  // 9: kyuusha.identity.v1.TenantEvent.type:type_name -> kyuusha.identity.v1.TenantEvent.Type
+	5,  // 10: kyuusha.identity.v1.TenantEvent.tenant:type_name -> kyuusha.identity.v1.Tenant
+	6,  // 11: kyuusha.identity.v1.TenantService.Create:input_type -> kyuusha.identity.v1.CreateTenantRequest
+	7,  // 12: kyuusha.identity.v1.TenantService.Get:input_type -> kyuusha.identity.v1.GetTenantRequest
+	8,  // 13: kyuusha.identity.v1.TenantService.List:input_type -> kyuusha.identity.v1.ListTenantsRequest
+	10, // 14: kyuusha.identity.v1.TenantService.Update:input_type -> kyuusha.identity.v1.UpdateTenantRequest
+	11, // 15: kyuusha.identity.v1.TenantService.Delete:input_type -> kyuusha.identity.v1.DeleteTenantRequest
+	12, // 16: kyuusha.identity.v1.TenantService.Watch:input_type -> kyuusha.identity.v1.WatchTenantsRequest
+	5,  // 17: kyuusha.identity.v1.TenantService.Create:output_type -> kyuusha.identity.v1.Tenant
+	5,  // 18: kyuusha.identity.v1.TenantService.Get:output_type -> kyuusha.identity.v1.Tenant
+	9,  // 19: kyuusha.identity.v1.TenantService.List:output_type -> kyuusha.identity.v1.ListTenantsResponse
+	5,  // 20: kyuusha.identity.v1.TenantService.Update:output_type -> kyuusha.identity.v1.Tenant
+	16, // 21: kyuusha.identity.v1.TenantService.Delete:output_type -> google.protobuf.Empty
+	13, // 22: kyuusha.identity.v1.TenantService.Watch:output_type -> kyuusha.identity.v1.TenantEvent
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_identity_v1_tenant_proto_init() }
@@ -886,7 +967,7 @@ func file_kyuusha_identity_v1_tenant_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_identity_v1_tenant_proto_rawDesc), len(file_kyuusha_identity_v1_tenant_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

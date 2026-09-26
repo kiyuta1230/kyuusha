@@ -166,6 +166,76 @@ func TestService_ResizeEnforcesPerVMCap(t *testing.T) {
 	}
 }
 
+// TestService_CreateEnforcesPciDeviceQuota exercises quota.rego's per-
+// (vendor_id, device_id) branch: a device type absent from the tenant's
+// QuotaSpec.pci_devices is rejected outright (implicit max_count=0, not
+// unlimited -- see PciDeviceQuota's doc comment), a device type present but
+// already at its max_count is rejected, and Delete frees enough usage for a
+// later Create of the same device type to succeed.
+func TestService_CreateEnforcesPciDeviceQuota(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{
+		MaxVcpu: 32, MaxMemoryMb: 65536, MaxVms: 10, MaxVcpuPerVm: 32, MaxMemoryMbPerVm: 65536,
+		PciDevices: []*identityv1.PciDeviceQuota{
+			{VendorId: "10de", DeviceId: "1c03", MaxCount: 1},
+		},
+	}}, &FakeImageClient{}, &FakeSubnetClient{}, &FakeNetworkInterfaceClient{}, &FakeVolumeClient{}, &FakeVolumeAttachmentClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	const tenant = "tenant-a"
+
+	// vendor/device not present in the tenant's quota at all.
+	if _, err := svc.Create(ctx, tenant, "vm-unquoted", VirtualMachineSpec{
+		ImageID: "img-abc", DriverHint: VmmDriverCloudHypervisor,
+		PciDevices: []PciDeviceRequest{{VendorID: "8086", DeviceID: "1521"}},
+	}); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("device type absent from quota: got %v, want ErrQuotaExceeded", err)
+	}
+
+	first, err := svc.Create(ctx, tenant, "vm-1", VirtualMachineSpec{
+		ImageID: "img-abc", DriverHint: VmmDriverCloudHypervisor,
+		PciDevices: []PciDeviceRequest{{VendorID: "10de", DeviceID: "1c03"}},
+	})
+	if err != nil {
+		t.Fatalf("first Create (within max_count=1): %v", err)
+	}
+
+	// max_count=1 already used by vm-1.
+	if _, err := svc.Create(ctx, tenant, "vm-2", VirtualMachineSpec{
+		ImageID: "img-abc", DriverHint: VmmDriverCloudHypervisor,
+		PciDevices: []PciDeviceRequest{{VendorID: "10de", DeviceID: "1c03"}},
+	}); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("over max_count: got %v, want ErrQuotaExceeded", err)
+	}
+
+	if err := svc.Delete(ctx, tenant, first.Meta.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := svc.Create(ctx, tenant, "vm-3", VirtualMachineSpec{
+		ImageID: "img-abc", DriverHint: VmmDriverCloudHypervisor,
+		PciDevices: []PciDeviceRequest{{VendorID: "10de", DeviceID: "1c03"}},
+	}); err != nil {
+		t.Fatalf("Create after Delete freed the device quota: %v", err)
+	}
+}
+
+// TestService_CreateRejectsPciDevicesForNonCloudHypervisorDriver exercises
+// validatePciDevicesForDriver: Firecracker is virtio-mmio only and has no
+// PCI bus, so spec.pci_devices must be rejected before quota/scheduling ever
+// runs, the same doomed-VM-never-created reasoning as validateVCPUForDriver.
+func TestService_CreateRejectsPciDevicesForNonCloudHypervisorDriver(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, ctx)
+
+	if _, err := svc.Create(ctx, "tenant-a", "vm-1", VirtualMachineSpec{
+		ImageID: "img-abc", DriverHint: VmmDriverFirecracker,
+		PciDevices: []PciDeviceRequest{{VendorID: "10de", DeviceID: "1c03"}},
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("pci_devices under FIRECRACKER: got %v, want ErrValidation", err)
+	}
+}
+
 // TestService_NewServiceRebuildsUsageFromExistingVirtualMachines proves the
 // real bug found 2026-09-13 (same class as
 // network.Service.rebuildPools/blockstorage.Service.rebuildUsage, and

@@ -308,6 +308,7 @@ func toStatusProto(st compute.VirtualMachineStatus) *computev1.VirtualMachineSta
 		Hypervisor:           st.Hypervisor,
 		InterfaceRefs:        st.InterfaceRefs,
 		VolumeAttachmentRefs: st.VolumeAttachmentRefs,
+		AllocatedPciDevices:  st.AllocatedPciDevices,
 	}
 	for _, c := range st.Conditions {
 		out.Conditions = append(out.Conditions, &resourcev1.Condition{
@@ -327,6 +328,7 @@ func fromStatusProto(st *computev1.VirtualMachineStatus) compute.VirtualMachineS
 		Hypervisor:           st.GetHypervisor(),
 		InterfaceRefs:        st.GetInterfaceRefs(),
 		VolumeAttachmentRefs: st.GetVolumeAttachmentRefs(),
+		AllocatedPciDevices:  st.GetAllocatedPciDevices(),
 	}
 	for _, c := range st.GetConditions() {
 		out.Conditions = append(out.Conditions, resource.Condition{

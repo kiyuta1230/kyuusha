@@ -15,10 +15,19 @@ Tenantが持つ利用上限（Quota）の値はidentityが保持し、使用量�
 | `max_vms` | テナント合計VM数上限 |
 | `max_vcpu_per_vm` | VM1台あたりのvCPU上限 |
 | `max_memory_mb_per_vm` | VM1台あたりのメモリ上限(MB) |
+| `pci_devices` | `(vendor_id, device_id)`ごとのPCIパススルー上限（`PciDeviceQuota{vendor_id, device_id, max_count}`の配列）。テナント合計で、VM1台あたりの上限は無い |
+
+`pci_devices`は他のフィールドと違い、リストに存在しない`(vendor_id, device_id)`の
+組は**上限0（無制限ではない）**を意味する。GPU等の物理的に希少なリソースは、
+vcpu/memory_mbのような「デフォルトで自由、上限だけ管理者が絞る」方式ではなく、
+「管理者が明示的に許可した組だけがテナントに割り当て可能」という opt-in
+方式にしている（[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照）。
 
 ## 各サービスが保持する使用量（tenant_usage）
 
-- compute内のin-memoryマップ（`tenant_id -> {vcpu, memory_mb, vm_count}`）
+- compute内のin-memoryマップ（`tenant_id -> {vcpu, memory_mb, vm_count, pci_devices}`）。
+  `pci_devices`は`(vendor_id, device_id) -> count`のマップで、他3フィールドと同じ
+  マップ本体に同居する
 - block-storage内のin-memoryマップ（`tenant_id -> {volume_gb}`）
 
 どちらもDBではなくプロセス内状態。
@@ -60,9 +69,19 @@ allow if {
 	input.usage.vm_count + 1 <= input.limit.max_vms
 	input.request.vcpu <= input.limit.max_vcpu_per_vm
 	input.request.memory_mb <= input.limit.max_memory_mb_per_vm
+	every req in input.request.pci_devices {
+		some lim in input.limit.pci_devices
+		lim.vendor_id == req.vendor_id
+		lim.device_id == req.device_id
+		pci_usage_count(req.vendor_id, req.device_id) + req.count <= lim.max_count
+	}
 }
 ```
 
+- `every`ブロックは`spec.pci_devices`が空なら自明に真（vacuous truth）——vcpu/memory_mbのみの
+  既存Createと判定を分岐させる必要がない
+- 該当する`(vendor_id, device_id)`が`limit.pci_devices`に一件も無ければ`some lim in ...`自体が
+  失敗し、その時点で`allow`全体が不許可になる（上限0の意味。上の「Quotaの上限値」参照）
 - 拒否は`Create`自体への同期的な`ResourceExhausted`。VMオブジェクトは作られない（`Error`フェーズへ倒すことはしない）
 - `tenant_usage`への加算は、VM作成（`resource.Store.Create`）が成功した**後**に行う。作成が失敗した場合は加算しない
 
@@ -90,6 +109,10 @@ allow_resize if {
 
 - 集計側（`max_vcpu`/`max_memory_mb`）はデルタで判定し、1台あたり上限
   （`max_vcpu_per_vm`/`max_memory_mb_per_vm`）は新しい絶対値で判定する
+- `allow_resize`は`pci_devices`を一切判定しない: Resize（cold/`allow_migrate`併用とも）は
+  `spec.vcpu`/`spec.memory_mb`のみを変更し、`spec.pci_devices`は常に元のVMのものを
+  そのまま引き継ぐ（[VirtualMachine仕様](virtual-machine.md)「容量不足時の
+  マイグレーションフォールバック」参照）ため、PCIデバイスのquota使用量はResizeで変化しない
 - 縮小のみ（両軸ともdeltaが0以下）のリサイズはquotaを絶対に超過しえないため、
   identityへの`lookupQuota`呼び出し自体を省略する（`allow_resize`の評価にも進まない）
 - 判定後の`tenant_usage`更新もCreateと同じくデルタ加算（`vcpu += delta_vcpu`等）で、

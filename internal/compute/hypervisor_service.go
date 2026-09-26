@@ -50,7 +50,7 @@ const (
 // agent's own separate claim. See docs/specs/hypervisor-bootstrap.md for
 // what's still open beyond that (individual hypervisor identity/revocation
 // -- see ErrHypervisorRevoked below -- and single-use tokens).
-func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone string, allocatableVCPU int32, allocatableMemoryMB int64, supportedDrivers []string, storageConnections []StorageConnection) (*Hypervisor, error) {
+func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone string, allocatableVCPU int32, allocatableMemoryMB int64, supportedDrivers []string, storageConnections []StorageConnection, availableDevices []PciDevice) (*Hypervisor, error) {
 	existing, err := s.hypervisors.Get(ctx, "", hypervisor)
 	hadExisting := err == nil
 	if hadExisting && existing.Spec.Revoked {
@@ -75,10 +75,32 @@ func (s *Service) RegisterHypervisor(ctx context.Context, hypervisor, zone strin
 		AllocatableMemoryMB: allocatableMemoryMB,
 		SupportedDrivers:    supportedDrivers,
 		StorageConnections:  storageConnections,
+		AvailableDevices:    availableDevices,
 	}
 	if hadExisting {
 		status.AllocatedVCPU = existing.Status.AllocatedVCPU
 		status.AllocatedMemoryMB = existing.Status.AllocatedMemoryMB
+
+		// Preserve each device's allocated state across a re-register by
+		// matching pci_address, the same "don't let a restarting agent
+		// silently undo in-flight reservations" reasoning as
+		// AllocatedVCPU/AllocatedMemoryMB above -- a running VM's
+		// passthrough device must stay marked allocated even though the
+		// agent that just re-registered has no idea which of its devices
+		// are in use (compute-agent only self-reports vendor/device
+		// identity, never allocation -- see hypervisor.proto's
+		// RegisterHypervisorRequest.available_devices).
+		prevAllocated := make(map[string]bool, len(existing.Status.AvailableDevices))
+		for _, d := range existing.Status.AvailableDevices {
+			if d.Allocated {
+				prevAllocated[d.PCIAddress] = true
+			}
+		}
+		for i := range status.AvailableDevices {
+			if prevAllocated[status.AvailableDevices[i].PCIAddress] {
+				status.AvailableDevices[i].Allocated = true
+			}
+		}
 	}
 
 	out, err := s.hypervisors.Put(ctx, hypervisor, "", hypervisor, Hypervisor{Spec: spec, Status: status})
@@ -186,8 +208,7 @@ func (s *Service) runHealthSweep(ctx context.Context) {
 // scheduleConstraints bundles scheduleVM/scheduleMigration's optional hard
 // constraints beyond spec's own vcpu/memory_mb/driver_hint (see
 // filterSchedulable) -- a struct rather than a growing positional
-// parameter list, since new constraint kinds keep getting added here (PCI
-// device requirements are the next candidate).
+// parameter list, since new constraint kinds keep getting added here.
 type scheduleConstraints struct {
 	// Zone restricts candidates to spec.network_interfaces' Subnets' zone
 	// (derived by the caller -- see reconciler.go); empty means no
@@ -200,6 +221,15 @@ type scheduleConstraints struct {
 	// constraint. See docs/specs/volume.md「スケジューリング時のフィルタ
 	// リング」.
 	StorageConnections []string
+	// PciDevices is spec.pci_devices verbatim (no separate lookup needed,
+	// unlike Zone/StorageConnections -- it's already on the spec). Requires
+	// a candidate to self-report enough matching, currently-unallocated
+	// devices in Status.available_devices for every (vendor_id, device_id,
+	// count) entry -- see docs/architecture.md「PCIデバイス(GPU等)
+	// パススルー」. Only a dry-run check here (hasEnoughPciDevices); the
+	// actual reservation (picking which specific pci_address(es)) happens
+	// in reservePciDevices, after Pick.
+	PciDevices []PciDeviceRequest
 	// Exclude, when non-empty, drops that one Hypervisor from the
 	// candidate list before Pick sees it -- Migrate's auto-pick path
 	// (scheduleMigration) uses this so a migration can never "succeed" by
@@ -209,14 +239,16 @@ type scheduleConstraints struct {
 }
 
 // scheduleVM picks a Hypervisor satisfying spec's hard constraints plus c
-// (see "フィルタ（ハード制約）"; PCI filters are deferred -- no PCI
-// inventory exists yet), reserves capacity against it, and returns its id.
+// (see "フィルタ（ハード制約）"), reserves vcpu/memory and any requested
+// PCI devices against it, and returns its id plus the specific PCI
+// pci_address(es) reserved (see VirtualMachineStatus.AllocatedPciDevices).
 // Callers are responsible for then transitioning the VM to Scheduled and
-// releasing the reservation (releaseHypervisorCapacity) if that fails.
-func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c scheduleConstraints) (string, error) {
+// releasing the reservation (releaseHypervisorCapacity/releasePciDevices)
+// if anything after this fails.
+func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c scheduleConstraints) (hypervisorID string, allocatedPciDevices []string, err error) {
 	candidates, err := s.hypervisors.List(ctx, "")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	driver := spec.DriverHint
 	if driver == VmmDriverUnspecified {
@@ -225,47 +257,57 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c sch
 	filtered := filterSchedulable(candidates, driver, spec.VCPU, spec.MemoryMB, c)
 	picked, err := s.scheduler.Pick(filtered)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	if err := s.reserveHypervisorCapacity(ctx, picked.Meta.ID, spec.VCPU, spec.MemoryMB); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return picked.Meta.ID, nil
+	devices, err := s.reservePciDevices(ctx, picked.Meta.ID, c.PciDevices)
+	if err != nil {
+		s.releaseHypervisorCapacity(ctx, picked.Meta.ID, spec.VCPU, spec.MemoryMB)
+		return "", nil, err
+	}
+	return picked.Meta.ID, devices, nil
 }
 
-// scheduleMigration picks (and reserves capacity on) the Hypervisor
-// Migrate should move vm to -- see Service.Migrate and reconciler.go's
-// migrateVM. target == "" reuses scheduleVM's normal auto-pick, excluding
-// currentHypervisor (so migrating never just re-picks the same place);
-// a non-empty target is Migrate's admin-specified path, validated against
-// the exact same hard constraints scheduleVM's auto-pick applies
-// (Ready/schedulable/driver/zone/storage connections/capacity) rather than
-// trusted blindly -- ErrUnschedulable if it doesn't qualify, ErrValidation
-// if it names the VM's current Hypervisor (migrating to the same place is
-// never valid).
-func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, requiredZone, currentHypervisor, target string, requiredConnections []string) (string, error) {
+// scheduleMigration picks (and reserves capacity plus any requested PCI
+// devices on) the Hypervisor Migrate should move vm to -- see
+// Service.Migrate and reconciler.go's migrateVM. target == "" reuses
+// scheduleVM's normal auto-pick, excluding currentHypervisor (so migrating
+// never just re-picks the same place); a non-empty target is Migrate's
+// admin-specified path, validated against the exact same hard constraints
+// scheduleVM's auto-pick applies (Ready/schedulable/driver/zone/storage
+// connections/PCI devices/capacity) rather than trusted blindly --
+// ErrUnschedulable if it doesn't qualify, ErrValidation if it names the
+// VM's current Hypervisor (migrating to the same place is never valid).
+func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, requiredZone, currentHypervisor, target string, requiredConnections []string) (hypervisorID string, allocatedPciDevices []string, err error) {
 	if target == "" {
-		return s.scheduleVM(ctx, spec, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, Exclude: currentHypervisor})
+		return s.scheduleVM(ctx, spec, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, PciDevices: spec.PciDevices, Exclude: currentHypervisor})
 	}
 	if target == currentHypervisor {
-		return "", fmt.Errorf("%w: target_hypervisor %q is the vm's current Hypervisor", ErrValidation, target)
+		return "", nil, fmt.Errorf("%w: target_hypervisor %q is the vm's current Hypervisor", ErrValidation, target)
 	}
 	h, err := s.hypervisors.Get(ctx, "", target)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	driver := spec.DriverHint
 	if driver == VmmDriverUnspecified {
 		driver = VmmDriverFirecracker
 	}
-	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections})) == 0 {
-		return "", ErrUnschedulable
+	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, PciDevices: spec.PciDevices})) == 0 {
+		return "", nil, ErrUnschedulable
 	}
 	if err := s.reserveHypervisorCapacity(ctx, target, spec.VCPU, spec.MemoryMB); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return target, nil
+	devices, err := s.reservePciDevices(ctx, target, spec.PciDevices)
+	if err != nil {
+		s.releaseHypervisorCapacity(ctx, target, spec.VCPU, spec.MemoryMB)
+		return "", nil, err
+	}
+	return target, devices, nil
 }
 
 func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, memoryMB int64, c scheduleConstraints) []Hypervisor {
@@ -293,6 +335,9 @@ func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, me
 			continue
 		}
 		if !hasAllStorageConnections(h.Status.StorageConnections, c.StorageConnections) {
+			continue
+		}
+		if !hasEnoughPciDevices(h.Status.AvailableDevices, c.PciDevices) {
 			continue
 		}
 		out = append(out, h)
@@ -327,6 +372,137 @@ func hasDriver(supported []string, driver VmmDriver) bool {
 		}
 	}
 	return false
+}
+
+// pciDeviceKey identifies a PCI device *model* (vendor+device id) -- never
+// an individual physical device, which is instead identified by its unique
+// pci_address (see PciDevice.PCIAddress).
+type pciDeviceKey struct{ vendorID, deviceID string }
+
+// pciCount normalizes PciDeviceRequest.Count: the proto field's zero value
+// means "unspecified", not "zero devices" (a request with Count==0 would
+// be pointless to even list), so it's treated the same as 1.
+func pciCount(req PciDeviceRequest) int32 {
+	if req.Count <= 0 {
+		return 1
+	}
+	return req.Count
+}
+
+// hasEnoughPciDevices is filterSchedulable's dry-run check: does available
+// (a candidate Hypervisor's self-reported inventory) have enough
+// currently-unallocated devices to satisfy every entry in want, matched by
+// (vendor_id, device_id)? want empty is trivially satisfied. This never
+// mutates anything -- reservePciDevices does the actual, specific-address
+// allocation afterward, and could still fail this same check having
+// raced with a concurrent reservation between the two (the same
+// List-then-reserve race reserveHypervisorCapacity's own doc comment
+// already accepts for vcpu/memory).
+func hasEnoughPciDevices(available []PciDevice, want []PciDeviceRequest) bool {
+	if len(want) == 0 {
+		return true
+	}
+	free := make(map[pciDeviceKey]int32, len(available))
+	for _, d := range available {
+		if !d.Allocated {
+			free[pciDeviceKey{d.VendorID, d.DeviceID}]++
+		}
+	}
+	for _, req := range want {
+		key := pciDeviceKey{req.VendorID, req.DeviceID}
+		need := pciCount(req)
+		if free[key] < need {
+			return false
+		}
+		free[key] -= need // a later request for the same model sees what's left
+	}
+	return true
+}
+
+// reservePciDevices picks specific, currently-unallocated PCI devices out
+// of Hypervisor id's self-reported available_devices matching every entry
+// in requests (by vendor_id/device_id), marks each Allocated, and returns
+// the exact pci_address(es) picked -- see VirtualMachineStatus.
+// AllocatedPciDevices's doc comment for why the caller needs the specific
+// addresses (compute-agent passes each straight to cloud-hypervisor's
+// --device flag), not just "it fit". All-or-nothing, same shape
+// reserveHypervisorCapacity already has for vcpu/memory: if any single
+// request can't be fully satisfied, updateHypervisor's mutate closure
+// returns an error and nothing is reserved (its Update is never reached).
+// requests empty is a no-op (nil, nil).
+func (s *Service) reservePciDevices(ctx context.Context, id string, requests []PciDeviceRequest) ([]string, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+	var picked []string
+	err := s.updateHypervisor(ctx, id, func(h *Hypervisor) error {
+		picked = nil // h is freshly re-fetched on every retry -- start over
+		claimed := make(map[int]bool, len(h.Status.AvailableDevices))
+		for _, req := range requests {
+			for range pciCount(req) {
+				found := -1
+				for i, d := range h.Status.AvailableDevices {
+					if claimed[i] || d.Allocated || d.VendorID != req.VendorID || d.DeviceID != req.DeviceID {
+						continue
+					}
+					found = i
+					break
+				}
+				if found == -1 {
+					return fmt.Errorf("%w: no unallocated PCI device %s:%s available on hypervisor %q", ErrUnschedulable, req.VendorID, req.DeviceID, id)
+				}
+				claimed[found] = true
+				h.Status.AvailableDevices[found].Allocated = true
+				picked = append(picked, h.Status.AvailableDevices[found].PCIAddress)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return picked, nil
+}
+
+// releasePciDevices marks addresses (as previously returned by
+// reservePciDevices) no longer Allocated on Hypervisor id. Best-effort,
+// same reasoning and same tolerance of a since-deleted Hypervisor as
+// releaseHypervisorCapacity. addresses empty is a no-op.
+func (s *Service) releasePciDevices(ctx context.Context, id string, addresses []string) {
+	s.setPciDevicesAllocated(ctx, id, addresses, false)
+}
+
+// restorePciDevices re-marks the exact addresses releasePciDevices
+// previously freed as Allocated again on Hypervisor id -- a rollback's
+// compensating action, deliberately not a fresh reservePciDevices call:
+// this restores the *specific* devices a still-persisted VM object's
+// AllocatedPciDevices already claims (its own Update having failed, so the
+// store's copy never changed), which a new reservePciDevices search could
+// satisfy with *different* addresses instead if something else raced in
+// between. Best-effort, same reasoning as releasePciDevices.
+func (s *Service) restorePciDevices(ctx context.Context, id string, addresses []string) {
+	s.setPciDevicesAllocated(ctx, id, addresses, true)
+}
+
+func (s *Service) setPciDevicesAllocated(ctx context.Context, id string, addresses []string, allocated bool) {
+	if len(addresses) == 0 {
+		return
+	}
+	want := make(map[string]bool, len(addresses))
+	for _, a := range addresses {
+		want[a] = true
+	}
+	err := s.updateHypervisor(ctx, id, func(h *Hypervisor) error {
+		for i, d := range h.Status.AvailableDevices {
+			if want[d.PCIAddress] {
+				h.Status.AvailableDevices[i].Allocated = allocated
+			}
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, ErrHypervisorNotFound) {
+		_ = err
+	}
 }
 
 // SchedulingStrategy picks among candidates that already satisfy every hard

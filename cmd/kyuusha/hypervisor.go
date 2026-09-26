@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/authn"
@@ -200,9 +201,26 @@ func hypervisorSetRevoked(args []string) {
 
 func printHypervisor(h *computev1.Hypervisor) {
 	st := h.GetStatus()
-	fmt.Printf("id=%s phase=%s schedulable=%t revoked=%t zone=%s drivers=%v allocated=%d/%dvcpu %d/%dMB rv=%d\n",
+	fmt.Printf("id=%s phase=%s schedulable=%t revoked=%t zone=%s drivers=%v allocated=%d/%dvcpu %d/%dMB pci_devices=%s rv=%d\n",
 		h.GetMeta().GetId(), st.GetPhase(), h.GetSpec().GetSchedulable(), h.GetSpec().GetRevoked(), st.GetZone(), st.GetSupportedDrivers(),
 		st.GetAllocatedVcpu(), st.GetAllocatableVcpu(),
 		st.GetAllocatedMemoryMb(), st.GetAllocatableMemoryMb(),
+		formatPciDevices(st.GetAvailableDevices()),
 		h.GetMeta().GetResourceVersion())
+}
+
+// formatPciDevices renders each self-reported PciDevice as
+// "vendor_id:device_id@pci_address[*]" (a trailing "*" marks one currently
+// allocated to a VM) -- compact enough for the same single-line-per-
+// Hypervisor list output printHypervisor/hypervisor list already use.
+func formatPciDevices(devices []*computev1.PciDevice) string {
+	parts := make([]string, len(devices))
+	for i, d := range devices {
+		suffix := ""
+		if d.GetAllocated() {
+			suffix = "*"
+		}
+		parts[i] = fmt.Sprintf("%s:%s@%s%s", d.GetVendorId(), d.GetDeviceId(), d.GetPciAddress(), suffix)
+	}
+	return strings.Join(parts, ",")
 }

@@ -15,6 +15,25 @@ allow if {
 	input.usage.vm_count + 1 <= input.limit.max_vms
 	input.request.vcpu <= input.limit.max_vcpu_per_vm
 	input.request.memory_mb <= input.limit.max_memory_mb_per_vm
+	every req in input.request.pci_devices {
+		some lim in input.limit.pci_devices
+		lim.vendor_id == req.vendor_id
+		lim.device_id == req.device_id
+		pci_usage_count(req.vendor_id, req.device_id) + req.count <= lim.max_count
+	}
+}
+
+# pci_usage_count sums this tenant's currently-charged usage for one
+# (vendor_id, device_id) pair. A pair with no usage entries sums to 0 (an
+# empty array's sum is 0), never undefined -- so a first-ever request for a
+# device type a tenant is quota'd for still evaluates cleanly.
+pci_usage_count(vendor_id, device_id) := count if {
+	matches := [u.count |
+		some u in input.usage.pci_devices
+		u.vendor_id == vendor_id
+		u.device_id == device_id
+	]
+	count := sum(matches)
 }
 
 # allow_resize is Resize's counterpart to allow: unlike Create, a resize

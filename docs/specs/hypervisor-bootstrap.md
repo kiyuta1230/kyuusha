@@ -21,8 +21,8 @@ Hypervisorはcompute内部のスケジューリング対象であり、KaaS向�
 | `status.allocatable_vcpu` / `allocatable_memory_mb` | 申告された総capacity |
 | `status.allocated_vcpu` / `allocated_memory_mb` | スケジューラによる予約合計 |
 | `status.supported_drivers` | 対応VMMドライバ一覧（例: `["FIRECRACKER", "CLOUD_HYPERVISOR"]`） |
-| `status.storage_connections` | このHypervisorが既に確立済みのストレージ接続一覧（`{name, local_path}`）。自己申告——kyuusha自身はここに何も接続しない。詳細は[Volume仕様](volume.md)「StorageConnection」参照。現状スケジューラは未使用（同参照） |
-| `status.available_devices` | PCIデバイス在庫（現状スケジューラは未使用） |
+| `status.storage_connections` | このHypervisorが既に確立済みのストレージ接続一覧（`{name, local_path}`）。自己申告——kyuusha自身はここに何も接続しない。`spec.volumes`が要求する`storage_connection`によるスケジューラのフィルタ制約に使われる（[VMスケジュール仕様](vm-scheduling.md)「フィルタ（ハード制約）」参照） |
+| `status.available_devices` | vfio-pci束縛済みのPCIデバイス在庫（`{pci_address, vendor_id, device_id, allocated}`）。自己申告——`-pci-devices`フラグで宣言し、実際にvfio-pciへ束縛されているか起動時に検証される。`spec.pci_devices`によるスケジューラのフィルタ制約・予約に使われる（[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照） |
 
 ## 登録フロー
 
@@ -33,7 +33,7 @@ sequenceDiagram
 
     Note over A: 起動
     loop 最大30回・1秒間隔でリトライ
-        A->>C: Register(hypervisor, bootstrap_token, allocatable_vcpu,<br/>allocatable_memory_mb, supported_drivers, storage_connections)
+        A->>C: Register(hypervisor, bootstrap_token, allocatable_vcpu,<br/>allocatable_memory_mb, supported_drivers, storage_connections,<br/>available_devices)
         C->>C: bootstrap_tokenを検証、zoneクレームを採用<br/>hypervisor_idクレームがあれば一致確認、revoked確認
         C-->>A: Hypervisor (成功時break)
     end
@@ -52,9 +52,14 @@ sequenceDiagram
 - トークンが`hypervisor_id`クレームも持つ場合、リクエストの`hypervisor`フィールドと完全一致しないと
   `PermissionDenied`で拒否される（下記「個体識別と失効」参照）
 - 既存のhypervisor IDが`spec.revoked=true`の場合、`PermissionDenied`で拒否される（下記参照）
-- 冪等（upsert）: 同じhypervisor IDでの再登録は zone（トークン由来）/capacity/supported_driversを
-  最新の値に上書きするが、以下は前回の値を保持する:
+- 冪等（upsert）: 同じhypervisor IDでの再登録は zone（トークン由来）/capacity/supported_drivers/
+  storage_connections/available_devicesを最新の値に上書きするが、以下は前回の値を保持する:
   - `status.allocated_vcpu` / `allocated_memory_mb`（既存のスケジューラ予約）
+  - `status.available_devices[].allocated`（`pci_address`が一致する既存エントリのみ。
+    compute-agent自身はどのデバイスがどのVMで使用中か知らないため、新規に申告された
+    在庫リストへ`pci_address`単位で前回の`allocated=true`を移し替える——上記
+    `allocated_vcpu`と同じ「agentの再起動でin-flightな予約を静かに解除しない」という
+    保護。新しく見えたアドレスは常に`allocated=false`から始まる）
   - `spec.schedulable`（オペレーターが設定した意図。agentの再起動で意図せず解除されない）
   - `spec.revoked`（`Register`は常に`false`のままにする——このフィールド自体を`true`に
     することはない。すでに`true`なら上記の通りそもそも拒否される）
