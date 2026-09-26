@@ -19,6 +19,17 @@ type QuotaSpec struct {
 	MaxVMs           int32
 	MaxVCPUPerVM     int32
 	MaxMemoryMBPerVM int64
+	// PciDevices is compute's per-(vendor_id, device_id) PCI passthrough
+	// allotment (see docs/specs/quota.md) -- identity only stores this
+	// limit value, same "owns the number, not the enforcement" split as
+	// every other QuotaSpec field.
+	PciDevices []PciDeviceQuota
+}
+
+type PciDeviceQuota struct {
+	VendorID string
+	DeviceID string
+	MaxCount int32
 }
 
 type TenantSpec struct {

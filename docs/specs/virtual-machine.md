@@ -361,12 +361,11 @@ VMに特定のPCIデバイスをパススルー要求できる。カタログ的
   マイグレーションフォールバック」参照。要求（`vendor_id`/`device_id`/
   `count`）自体は引き継がれるが、割り当たる具体的なPCIアドレスは
   root diskと同じく移行先で作り直される
-- **未検証**: このホスト環境ではBIOS/UEFI側でVT-d(IOMMU)が無効
-  （DMARテーブル自体が存在しない）なため、実機での「実際にGPUが
-  ゲストに見える」ところまでの動作確認はまだ行えていない。スケジューリング/
-  予約/解放ロジックとcloud-hypervisor起動引数の構築まではユニットテスト
-  済みだが、VFIOによる実パススルーそのものはBIOSでVT-dを有効化できる
-  環境が用意でき次第の検証課題として残る
+- **実機確認済み**: BIOS/UEFI側でVT-dを有効化した開発ホストで、ASMedia USB 3.1
+  コントローラを`vfio-pci`へ再バインドし、`-pci-devices`自己申告→スケジューラの
+  予約→`chvmm`の`--device`引数構築→実際に起動したcloud-hypervisorゲストの
+  `console.log`にそのデバイスの実PCI ID（`vendor_id:device_id`一致、
+  USB/XHCIクラス）がそのまま見えるところまで確認した
 
 ## Volume attach/detach（`AttachVolume`/`DetachVolume`、コールド/ライブ両対応）
 

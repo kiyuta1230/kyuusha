@@ -1244,11 +1244,17 @@ GPU等は物理的に希少なリソースであるため、テナントへの�
 （`(vendor_id, device_id)`ごとの数量上限）で管理者が明示的に統制する。vcpu/memory_mbとは
 逆に、リストに無い組は上限0（デフォルト自由ではなく明示許可制）——詳細は「Quota設計」節。
 
-**未検証**: このホスト環境ではBIOS/UEFI側でVT-d(IOMMU)が無効（DMARテーブル自体が存在しない）
-であることが判明しており、物理的なBIOSアクセスが必要な修正のため、実機での「実際にGPUが
-ゲストに見える」ところまでの動作確認はまだ行えていない。スケジューリング/予約/解放ロジックと
-cloud-hypervisor起動引数の構築まではユニットテスト済みだが、VFIOによる実パススルーそのものは
-BIOSでVT-dを有効化できる環境が用意でき次第の検証課題として残る。
+実機でのVFIOパススルー動作を確認済み: 開発ホストのBIOS/UEFI側でVT-dを有効化した上で、
+ASMedia USB 3.1コントローラ（デスクトップ用途に使われていない、既存デバイスの中で
+最も影響の小さい候補）をvfio-pciへ再バインドし、`-pci-devices`での自己申告→スケジューラの
+予約→`chvmm`が実際に`--device path=/sys/bus/pci/devices/<addr>/,iommu=on`引数を渡す→
+起動したcloud-hypervisorゲストの`console.log`にそのUSBコントローラの実PCI ID
+（`pci 0000:00:03.0: [1b21:1242] ... PCIe Endpoint`、class 0x0c0330=USB/XHCI）が
+そのまま見える、という一連の経路を実機で確認した。この検証の過程で、実装当初は
+見つからなかった2つの結線バグ（`internal/compute/reconciler.go`の`CreateCommand`構築が
+`vm.status.allocated_pci_devices`を一切詰めていなかった、`internal/identity`の
+`QuotaSpec`のGoドメイン型とgRPC変換が`pci_devices`フィールドを持っていなかった——
+どちらも単体テストでは検出できず、実際にVMを起動させて初めて気づいた）を発見し修正した。
 
 ## ハイパーバイザー死活監視とリカバリ、およびpet/cattleの区別の廃止
 
@@ -2359,7 +2365,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Volume/NetworkInterfaceの排他制御・フェンシング問題への対処方針
 - VLAN IDの割り当て方式（networkサービスが設定済みプールから同期・排他で払い出し）
 - スケジューラ設計（フィルタ8種＋スプレッド戦略、予約とレース対策。`spec.vcpu`/`memory_mb`/`driver_hint`を直接読む。Volumeが要求するstorage_connectionによるフィルタ、`spec.pci_devices`によるPCIデバイスフィルタ、[VMスケジュール仕様](specs/vm-scheduling.md)「フィルタ（ハード制約）」参照）
-- PCIデバイス(GPU等)パススルー（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターンで実装済み。テナント単位の`(vendor_id, device_id)`数量クォータ（明示許可制、上限リストに無い組は上限0）も実装済み。VFIOによる実機でのパススルー動作自体はこのホストのBIOS VT-d無効のため未検証、[VirtualMachine仕様](specs/virtual-machine.md)「PCIデバイスパススルー」参照）
+- PCIデバイス(GPU等)パススルー（`driver_hint: CLOUD_HYPERVISOR`限定、Hypervisor在庫+排他予約はvCPU/メモリと同じパターンで実装済み。テナント単位の`(vendor_id, device_id)`数量クォータ（明示許可制、上限リストに無い組は上限0）も実装済み。実機でのVFIOパススルー動作も確認済み（ASMedia USB 3.1コントローラでのゲスト内PCI列挙まで確認）、[VirtualMachine仕様](specs/virtual-machine.md)「PCIデバイスパススルー」参照）
 - pet/cattleの区別（`recovery_policy`/`persistent_root_disk`/`root_volume_ref`）を廃止（実質未使用だったフィールドを削除し、ハイパーバイザー喪失時の自動リカバリはKaaS層/オペレータに委ねる判断。「pet/cattleの区別を廃止」節参照）
 - UI方針（自前のWeb UIは作らずCLI＋Grafanaに任せる。OpenStack Horizonを反面教師に）
 - テナント間VRF分離の実配線ドキュメント化（`docs/network-deployment-guide.md`としてネットワーク運用チーム向けに独立した文書を作成。VLANプール/VRF/ルートリークポリシー/デプロイ前チェックリストを含む）

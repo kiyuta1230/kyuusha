@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
@@ -48,6 +50,7 @@ func tenantCreate(args []string) {
 	maxVMs := fs.Int("max-vms", 0, "quota: tenant-total VM count")
 	maxVCPUPerVM := fs.Int("max-vcpu-per-vm", 0, "quota: per-VM vCPU cap")
 	maxMemoryMBPerVM := fs.Int64("max-memory-mb-per-vm", 0, "quota: per-VM memory cap in MB")
+	pciDeviceQuota := fs.String("pci-device-quota", "", "quota: comma-separated per-(vendor_id, device_id) PCI passthrough allotment, vendor_id:device_id:max_count (e.g. 10de:1c03:2) -- a pair absent here has an implicit max_count of 0, not unlimited; see docs/specs/quota.md")
 	fs.Parse(args)
 
 	if *name == "" {
@@ -68,6 +71,7 @@ func tenantCreate(args []string) {
 				MaxVms:           int32(*maxVMs),
 				MaxVcpuPerVm:     int32(*maxVCPUPerVM),
 				MaxMemoryMbPerVm: *maxMemoryMBPerVM,
+				PciDevices:       parsePciDeviceQuota(*pciDeviceQuota),
 			},
 		},
 	})
@@ -169,6 +173,7 @@ func tenantUpdate(args []string) {
 	maxVMs := fs.Int("max-vms", 0, "quota: tenant-total VM count")
 	maxVCPUPerVM := fs.Int("max-vcpu-per-vm", 0, "quota: per-VM vCPU cap")
 	maxMemoryMBPerVM := fs.Int64("max-memory-mb-per-vm", 0, "quota: per-VM memory cap in MB")
+	pciDeviceQuota := fs.String("pci-device-quota", "", "quota: comma-separated per-(vendor_id, device_id) PCI passthrough allotment, vendor_id:device_id:max_count (e.g. 10de:1c03:2) -- replaces the whole list, not merged with the existing one; see docs/specs/quota.md")
 	fs.Parse(args)
 
 	if *id == "" {
@@ -206,6 +211,9 @@ func tenantUpdate(args []string) {
 	if set["max-memory-mb-per-vm"] {
 		q.MaxMemoryMbPerVm = *maxMemoryMBPerVM
 	}
+	if set["pci-device-quota"] {
+		q.PciDevices = parsePciDeviceQuota(*pciDeviceQuota)
+	}
 
 	updated, err := client.Update(ctx, &identityv1.UpdateTenantRequest{TenantId: *id, Tenant: tn})
 	if err != nil {
@@ -233,8 +241,41 @@ func tenantDelete(args []string) {
 
 func printTenant(tn *identityv1.Tenant) {
 	q := tn.GetSpec().GetQuota()
-	fmt.Printf("id=%s name=%s display_name=%q phase=%s quota(vcpu=%d,memory_mb=%d,volume_gb=%d,vms=%d,vcpu/vm=%d,memory_mb/vm=%d) rv=%d\n",
+	fmt.Printf("id=%s name=%s display_name=%q phase=%s quota(vcpu=%d,memory_mb=%d,volume_gb=%d,vms=%d,vcpu/vm=%d,memory_mb/vm=%d,pci_devices=%s) rv=%d\n",
 		tn.GetMeta().GetId(), tn.GetMeta().GetName(), tn.GetSpec().GetDisplayName(), tn.GetStatus().GetPhase(),
 		q.GetMaxVcpu(), q.GetMaxMemoryMb(), q.GetMaxVolumeGb(), q.GetMaxVms(), q.GetMaxVcpuPerVm(), q.GetMaxMemoryMbPerVm(),
+		formatPciDeviceQuota(q.GetPciDevices()),
 		tn.GetMeta().GetResourceVersion())
+}
+
+// parsePciDeviceQuota turns -pci-device-quota's vendor_id:device_id:max_count
+// entries into QuotaSpec.pci_devices -- mirroring vm create's -pci-devices
+// parsing shape, but simpler: unlike a pci_address, neither vendor_id nor
+// device_id ever contains a colon, so a plain 3-way split is safe here (see
+// cmd/compute-agent/main.go's parsePciDevices for the case where it isn't).
+func parsePciDeviceQuota(raw string) []*identityv1.PciDeviceQuota {
+	var out []*identityv1.PciDeviceQuota
+	for _, entry := range strings.Split(raw, ",") {
+		if entry == "" {
+			continue
+		}
+		parts := strings.Split(entry, ":")
+		if len(parts) != 3 {
+			fatal("-pci-device-quota: malformed entry %q, want vendor_id:device_id:max_count", entry)
+		}
+		maxCount, err := strconv.Atoi(parts[2])
+		if err != nil || maxCount < 0 {
+			fatal("-pci-device-quota: malformed max_count in %q: %v", entry, err)
+		}
+		out = append(out, &identityv1.PciDeviceQuota{VendorId: parts[0], DeviceId: parts[1], MaxCount: int32(maxCount)})
+	}
+	return out
+}
+
+func formatPciDeviceQuota(quota []*identityv1.PciDeviceQuota) string {
+	parts := make([]string, len(quota))
+	for i, q := range quota {
+		parts[i] = fmt.Sprintf("%s:%s:%d", q.GetVendorId(), q.GetDeviceId(), q.GetMaxCount())
+	}
+	return strings.Join(parts, ",")
 }

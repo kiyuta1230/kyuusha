@@ -121,7 +121,7 @@ func toSpec(s identity.TenantSpec) *identityv1.TenantSpec {
 }
 
 func fromQuota(q *identityv1.QuotaSpec) identity.QuotaSpec {
-	return identity.QuotaSpec{
+	out := identity.QuotaSpec{
 		MaxVCPU:          q.GetMaxVcpu(),
 		MaxMemoryMB:      q.GetMaxMemoryMb(),
 		MaxVolumeGB:      q.GetMaxVolumeGb(),
@@ -129,10 +129,16 @@ func fromQuota(q *identityv1.QuotaSpec) identity.QuotaSpec {
 		MaxVCPUPerVM:     q.GetMaxVcpuPerVm(),
 		MaxMemoryMBPerVM: q.GetMaxMemoryMbPerVm(),
 	}
+	for _, p := range q.GetPciDevices() {
+		out.PciDevices = append(out.PciDevices, identity.PciDeviceQuota{
+			VendorID: p.GetVendorId(), DeviceID: p.GetDeviceId(), MaxCount: p.GetMaxCount(),
+		})
+	}
+	return out
 }
 
 func toQuota(q identity.QuotaSpec) *identityv1.QuotaSpec {
-	return &identityv1.QuotaSpec{
+	out := &identityv1.QuotaSpec{
 		MaxVcpu:          q.MaxVCPU,
 		MaxMemoryMb:      q.MaxMemoryMB,
 		MaxVolumeGb:      q.MaxVolumeGB,
@@ -140,6 +146,12 @@ func toQuota(q identity.QuotaSpec) *identityv1.QuotaSpec {
 		MaxVcpuPerVm:     q.MaxVCPUPerVM,
 		MaxMemoryMbPerVm: q.MaxMemoryMBPerVM,
 	}
+	for _, p := range q.PciDevices {
+		out.PciDevices = append(out.PciDevices, &identityv1.PciDeviceQuota{
+			VendorId: p.VendorID, DeviceId: p.DeviceID, MaxCount: p.MaxCount,
+		})
+	}
+	return out
 }
 
 func toStatusProto(st identity.TenantStatus) *identityv1.TenantStatus {

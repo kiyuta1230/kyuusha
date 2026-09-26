@@ -565,6 +565,7 @@ func (r *Reconciler) provisionAndPublish(ctx context.Context, vm VirtualMachine)
 		Interfaces: netifs,
 		UserData:   vm.Spec.UserData,
 		Volumes:    volInfos,
+		PciDevices: vm.Status.AllocatedPciDevices,
 	}
 	// Resolve the Image to concrete boot inputs now (not at Create time:
 	// the Image could have changed, and compute-agent has no image

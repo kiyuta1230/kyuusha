@@ -23,7 +23,7 @@
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-driver-hint`(`firecracker`\|`cloud-hypervisor`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`cloud-hypervisor`必須。[Image仕様](image.md)参照) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-volumes`(カンマ区切りVolume ID。起動時にattach——attach-before-bootのみ、[Volume仕様](volume.md)参照) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-driver-hint`(`firecracker`\|`cloud-hypervisor`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`cloud-hypervisor`必須。[Image仕様](image.md)参照) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-volumes`(カンマ区切りVolume ID。起動時にattach——attach-before-bootのみ、[Volume仕様](volume.md)参照) `-pci-devices`(カンマ区切り`vendor_id:device_id[:count]`。`cloud-hypervisor`限定、[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` `-finalizer-name`(指定すると`meta.finalizers`にその名前を含むVMだけに絞り込む。[外部システム連携仕様](external-integration.md)「大量Watch対策」参照) |
@@ -61,11 +61,11 @@ identity向け。`create`は`tenant_id`を持たないリクエストのため**
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-name`(必須、冪等キー) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm` |
+| `create` | `-name`(必須、冪等キー) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm` `-pci-device-quota`(カンマ区切り`vendor_id:device_id:max_count`。リストに無い組は上限0、[Quota仕様](quota.md)参照) |
 | `get` | `-id`(必須) |
 | `list` | `-id`(空なら全テナント、admin-only) |
 | `watch` | `-id` `-since-resource-version` |
-| `update` | `-id`(必須) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm`。明示的に指定したフラグだけがGet→Updateで上書きされ、省略したフィールドは既存値のまま |
+| `update` | `-id`(必須) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm` `-pci-device-quota`。明示的に指定したフラグだけがGet→Updateで上書きされ、省略したフィールドは既存値のまま（`-pci-device-quota`を指定した場合はリスト全体を丸ごと置き換える、既存エントリとのマージはしない） |
 | `delete` | `-id`(必須) |
 
 ## `kyuusha hypervisor <get|list|watch|set-schedulable|set-revoked|bootstrap-token>`

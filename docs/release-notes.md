@@ -46,6 +46,25 @@
   （[VirtualMachine仕様](specs/virtual-machine.md)「PCIデバイスパススルー」、
   [Quota仕様](specs/quota.md)参照）
 
+- 上記PCI/GPUパススルーの実機検証をBIOSでVT-dを有効化した上で実施し、成功を確認。
+  ASMedia USB 3.1コントローラ（デスクトップ用途のGPU/NICより影響が小さい候補として選定）を
+  `vfio-pci`へ再バインドし、`-pci-devices`自己申告→スケジューラの予約→`chvmm`の
+  `--device`引数構築→実際に起動したcloud-hypervisorゲストのシリアルコンソールに
+  そのデバイスの実PCI ID（`vendor_id:device_id`一致、USB/XHCIクラス）がPCIe Endpointとして
+  そのまま見える、という経路を確認した。検証の過程で2つの結線バグを発見・修正:
+  (1) `internal/compute/reconciler.go`の`CreateCommand`構築が
+  `vm.status.allocated_pci_devices`を`PciDevices`フィールドへ一切詰めていなかった
+  （スケジューラの予約自体は正しく動いていたが、compute-agentへは何も伝わっていなかった）、
+  (2) `internal/identity`の`QuotaSpec`のGoドメイン型（`identity.QuotaSpec`）と
+  gRPC変換（`fromQuota`/`toQuota`）が`pci_devices`フィールドを持っておらず、
+  `Tenant.spec.quota.pci_devices`を設定してもidentity側で常に空に落ちていた
+  （proto定義とcompute側の判定ロジックだけを見ていては気づけない、実際にCreate/Updateの
+  往復をさせて初めて発覚したギャップ）。どちらも単体テストでは検出できなかった箇所——
+  実際にVMを作成・起動させるplayground検証が無ければ「動くコードに見えて実際には
+  何も配線されていない」状態のまま残っていた。あわせて`kyuusha tenant create`/
+  `tenant update`に`-pci-device-quota`フラグを追加（それまでこのquotaを設定する
+  CLI手段が存在しなかった）
+
 ## 2026-09-25
 
 - `VirtualMachineService.Create`向けのAdmission Webhook（Kubernetesの
