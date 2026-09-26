@@ -17,7 +17,10 @@ import (
 // proves the collector doesn't require it to be running.
 func TestMetricsCollector_CountsByTenantAndPhase(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	if _, err := svc.Create(ctx, "tenant-a", "img-1", kernelRootfsSpec()); err != nil {
 		t.Fatalf("Create img-1: %v", err)

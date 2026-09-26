@@ -16,6 +16,13 @@ Tenantが持つ利用上限（Quota）の値はidentityが保持し、使用量�
 | `max_vcpu_per_vm` | VM1台あたりのvCPU上限 |
 | `max_memory_mb_per_vm` | VM1台あたりのメモリ上限(MB) |
 | `pci_devices` | `(vendor_id, device_id)`ごとのPCIパススルー上限（`PciDeviceQuota{vendor_id, device_id, max_count}`の配列）。テナント合計で、VM1台あたりの上限は無い |
+| `max_images` | テナント合計Image数上限。imageが強制する |
+| `max_subnets` | テナント合計Subnet数上限。networkが強制する |
+| `max_network_interfaces` | テナント合計NetworkInterface数上限。networkが強制する（VM作成に伴う内部的なNetworkInterface作成にも同じ判定がかかる） |
+
+`max_images`/`max_subnets`/`max_network_interfaces`も`pci_devices`と同じく、
+未設定（0）は無制限ではなく**上限0**を意味する: Tenant作成時にこれらを指定しなければ、
+そのテナントはImage/Subnet/NetworkInterfaceを1つも作れない。
 
 `pci_devices`は他のフィールドと違い、リストに存在しない`(vendor_id, device_id)`の
 組は**上限0（無制限ではない）**を意味する。GPU等の物理的に希少なリソースは、
@@ -29,8 +36,14 @@ vcpu/memory_mbのような「デフォルトで自由、上限だけ管理者が
   `pci_devices`は`(vendor_id, device_id) -> count`のマップで、他3フィールドと同じ
   マップ本体に同居する
 - block-storage内のin-memoryマップ（`tenant_id -> {volume_gb}`）
+- image内のin-memoryマップ（`tenant_id -> {image_count}`）
+- network内のin-memoryマップ（`tenant_id -> {subnet_count, network_interface_count}`）
 
-どちらもDBではなくプロセス内状態。
+どれもDBではなくプロセス内状態。プロセス再起動やレプリカ入れ替えのたびに`Service`の
+コンストラクタが対応するetcd上のリソース（VM/Volume/Image/Subnet/NetworkInterface）を
+全件走査して`tenant_usage`を再構築する——in-memoryである以上、この再構築なしでは
+再起動直後の使用量がゼロから数え直され、実際の使用量を大きく下回った状態でquota判定が
+通ってしまう。
 
 ## 強制フロー（VM Create時）
 
@@ -131,9 +144,10 @@ VMの取得・削除・減算は同一の呼び出し内で行う。block-storag
 `Service.usageMu`という単一の`sync.Mutex`が、Create/Deleteそれぞれの
 「冪等チェック→Quota取得→判定→加算/減算」の一連の処理全体をロックする。
 テナント単位ではなく**全テナント共通**のロックであるため、Create/Delete全体が直列化される。
-compute/block-storageそれぞれが自分専用の`usageMu`を持つ（サービスを跨いだ排他は不要——
-`max_vcpu`/`max_memory_mb`/`max_vms`はcomputeだけが、`max_volume_gb`はblock-storageだけが
-見るフィールドで、互いに独立しているため）。
+compute/block-storage/image/networkそれぞれが自分専用の`usageMu`を持つ
+（サービスを跨いだ排他は不要——`max_vcpu`/`max_memory_mb`/`max_vms`はcomputeだけが、
+`max_volume_gb`はblock-storageだけが、`max_images`はimageだけが、
+`max_subnets`/`max_network_interfaces`はnetworkだけが見るフィールドで、互いに独立しているため）。
 
 ## block-storageのQuota判定
 
@@ -148,3 +162,53 @@ allow if {
 
 VMのような1台あたり上限（`max_vcpu_per_vm`相当）はVolumeには存在しない
 （`QuotaSpec`に`max_volume_gb`一つしかなく、Volume単体の上限や個数上限は無い）。
+
+## imageのQuota判定
+
+`internal/image/quota.go`（`internal/block-storage/quota.go`と同型、単一次元）が、
+`kyuusha.image.quota`パッケージに対するOPA評価で`max_images`のみを判定する:
+
+```rego
+allow if {
+	input.usage.image_count + 1 <= input.limit.max_images
+}
+```
+
+- 判定対象はテナント合計のImage数のみ。Volumeと同じく1件あたりの上限や
+  サイズに応じた上限は無い
+- 拒否は`Create`自体への同期的な`InvalidArgument`（`ErrQuotaExceeded`）。Imageは
+  Finalizer/soft-deleteを持たないため、`Delete`は即座に`tenant_usage`の
+  `image_count`を1減らす
+
+## networkのQuota判定
+
+`internal/network/quota.go`が、`kyuusha.network.quota`パッケージに対する
+OPA評価でSubnet/NetworkInterfaceそれぞれの上限を判定する。両者は独立した
+リソースなので、compute同様「同じpackage内の兄弟ルール」として`allow_subnet`/
+`allow_network_interface`の2つに分けている（1つの`allow`にmode分岐を持たせない）:
+
+```rego
+default allow_subnet := false
+allow_subnet if {
+	input.usage.subnet_count + 1 <= input.limit.max_subnets
+}
+
+default allow_network_interface := false
+allow_network_interface if {
+	input.usage.network_interface_count + 1 <= input.limit.max_network_interfaces
+}
+```
+
+- `CreateSubnet`は`allow_subnet`を、`CreateNetworkInterface`は
+  `allow_network_interface`を判定する。どちらも単一次元（VM1台あたり上限に相当する
+  概念が無い）ため、Create時の絶対値判定のみで、Resize相当の判定は存在しない
+- `CreateNetworkInterface`は直接のテナント操作（`kyuusha netif create`）と、
+  VM作成に伴ってcomputeが内部的に呼ぶ経路（[VirtualMachine仕様](virtual-machine.md)
+  のネットワーク構成参照）の両方から呼ばれるが、`Service.CreateNetworkInterface`
+  一箇所でのみ判定するため、呼び出し元による特別扱いは無い——VM作成時に
+  自動生成されるNetworkInterfaceも同じ`max_network_interfaces`を消費する
+- quota判定は、既存のSubnet存在チェック・Ready状態チェックより**後**に行う
+  （存在しないSubnetを指しているだけの不正なリクエストで先にquotaを消費させない）
+- 拒否は`Create*`自体への同期的な`InvalidArgument`（`ErrQuotaExceeded`）。
+  `DeleteSubnet`/`DeleteNetworkInterface`はSubnet/NetworkInterfaceが
+  ハードデリートのため、削除成功後に即座に`tenant_usage`の該当カウントを1減らす

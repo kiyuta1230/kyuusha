@@ -51,6 +51,9 @@ func tenantCreate(args []string) {
 	maxVCPUPerVM := fs.Int("max-vcpu-per-vm", 0, "quota: per-VM vCPU cap")
 	maxMemoryMBPerVM := fs.Int64("max-memory-mb-per-vm", 0, "quota: per-VM memory cap in MB")
 	pciDeviceQuota := fs.String("pci-device-quota", "", "quota: comma-separated per-(vendor_id, device_id) PCI passthrough allotment, vendor_id:device_id:max_count (e.g. 10de:1c03:2) -- a pair absent here has an implicit max_count of 0, not unlimited; see docs/specs/quota.md")
+	maxImages := fs.Int("max-images", 0, "quota: tenant-total Image count")
+	maxSubnets := fs.Int("max-subnets", 0, "quota: tenant-total Subnet count")
+	maxNetworkInterfaces := fs.Int("max-network-interfaces", 0, "quota: tenant-total NetworkInterface count")
 	fs.Parse(args)
 
 	if *name == "" {
@@ -65,13 +68,16 @@ func tenantCreate(args []string) {
 		Spec: &identityv1.TenantSpec{
 			DisplayName: *displayName,
 			Quota: &identityv1.QuotaSpec{
-				MaxVcpu:          int32(*maxVCPU),
-				MaxMemoryMb:      *maxMemoryMB,
-				MaxVolumeGb:      *maxVolumeGB,
-				MaxVms:           int32(*maxVMs),
-				MaxVcpuPerVm:     int32(*maxVCPUPerVM),
-				MaxMemoryMbPerVm: *maxMemoryMBPerVM,
-				PciDevices:       parsePciDeviceQuota(*pciDeviceQuota),
+				MaxVcpu:              int32(*maxVCPU),
+				MaxMemoryMb:          *maxMemoryMB,
+				MaxVolumeGb:          *maxVolumeGB,
+				MaxVms:               int32(*maxVMs),
+				MaxVcpuPerVm:         int32(*maxVCPUPerVM),
+				MaxMemoryMbPerVm:     *maxMemoryMBPerVM,
+				PciDevices:           parsePciDeviceQuota(*pciDeviceQuota),
+				MaxImages:            int32(*maxImages),
+				MaxSubnets:           int32(*maxSubnets),
+				MaxNetworkInterfaces: int32(*maxNetworkInterfaces),
 			},
 		},
 	})
@@ -174,6 +180,9 @@ func tenantUpdate(args []string) {
 	maxVCPUPerVM := fs.Int("max-vcpu-per-vm", 0, "quota: per-VM vCPU cap")
 	maxMemoryMBPerVM := fs.Int64("max-memory-mb-per-vm", 0, "quota: per-VM memory cap in MB")
 	pciDeviceQuota := fs.String("pci-device-quota", "", "quota: comma-separated per-(vendor_id, device_id) PCI passthrough allotment, vendor_id:device_id:max_count (e.g. 10de:1c03:2) -- replaces the whole list, not merged with the existing one; see docs/specs/quota.md")
+	maxImages := fs.Int("max-images", 0, "quota: tenant-total Image count")
+	maxSubnets := fs.Int("max-subnets", 0, "quota: tenant-total Subnet count")
+	maxNetworkInterfaces := fs.Int("max-network-interfaces", 0, "quota: tenant-total NetworkInterface count")
 	fs.Parse(args)
 
 	if *id == "" {
@@ -214,6 +223,15 @@ func tenantUpdate(args []string) {
 	if set["pci-device-quota"] {
 		q.PciDevices = parsePciDeviceQuota(*pciDeviceQuota)
 	}
+	if set["max-images"] {
+		q.MaxImages = int32(*maxImages)
+	}
+	if set["max-subnets"] {
+		q.MaxSubnets = int32(*maxSubnets)
+	}
+	if set["max-network-interfaces"] {
+		q.MaxNetworkInterfaces = int32(*maxNetworkInterfaces)
+	}
 
 	updated, err := client.Update(ctx, &identityv1.UpdateTenantRequest{TenantId: *id, Tenant: tn})
 	if err != nil {
@@ -241,10 +259,11 @@ func tenantDelete(args []string) {
 
 func printTenant(tn *identityv1.Tenant) {
 	q := tn.GetSpec().GetQuota()
-	fmt.Printf("id=%s name=%s display_name=%q phase=%s quota(vcpu=%d,memory_mb=%d,volume_gb=%d,vms=%d,vcpu/vm=%d,memory_mb/vm=%d,pci_devices=%s) rv=%d\n",
+	fmt.Printf("id=%s name=%s display_name=%q phase=%s quota(vcpu=%d,memory_mb=%d,volume_gb=%d,vms=%d,vcpu/vm=%d,memory_mb/vm=%d,pci_devices=%s,images=%d,subnets=%d,network_interfaces=%d) rv=%d\n",
 		tn.GetMeta().GetId(), tn.GetMeta().GetName(), tn.GetSpec().GetDisplayName(), tn.GetStatus().GetPhase(),
 		q.GetMaxVcpu(), q.GetMaxMemoryMb(), q.GetMaxVolumeGb(), q.GetMaxVms(), q.GetMaxVcpuPerVm(), q.GetMaxMemoryMbPerVm(),
 		formatPciDeviceQuota(q.GetPciDevices()),
+		q.GetMaxImages(), q.GetMaxSubnets(), q.GetMaxNetworkInterfaces(),
 		tn.GetMeta().GetResourceVersion())
 }
 

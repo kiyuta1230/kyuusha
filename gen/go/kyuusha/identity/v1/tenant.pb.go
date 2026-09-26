@@ -91,9 +91,21 @@ type QuotaSpec struct {
 	// unlike vcpu/memory_mb an admin must explicitly list every device type a
 	// tenant may request at all -- a (vendor_id, device_id) pair absent from
 	// this list has an implicit max_count of 0, not "unlimited".
-	PciDevices    []*PciDeviceQuota `protobuf:"bytes,7,rep,name=pci_devices,json=pciDevices,proto3" json:"pci_devices,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PciDevices []*PciDeviceQuota `protobuf:"bytes,7,rep,name=pci_devices,json=pciDevices,proto3" json:"pci_devices,omitempty"`
+	// Tenant-total counts for the other Create-time-quota'd resources: unlike
+	// vcpu/memory_mb these have no per-VM-style cap, just one number checked
+	// against a plain +1 (see docs/specs/quota.md「Image/Subnet/
+	// NetworkInterfaceのQuota」). 0 for all three means "unlimited" is NOT the
+	// default the way it might be for a hand-rolled check -- Create still
+	// synchronously rejects once max_images/etc is exceeded either way, so an
+	// admin creating a Tenant without setting these gets 0 (nothing
+	// creatable), matching every other QuotaSpec field's own zero-value
+	// behavior.
+	MaxImages            int32 `protobuf:"varint,8,opt,name=max_images,json=maxImages,proto3" json:"max_images,omitempty"`
+	MaxSubnets           int32 `protobuf:"varint,9,opt,name=max_subnets,json=maxSubnets,proto3" json:"max_subnets,omitempty"`
+	MaxNetworkInterfaces int32 `protobuf:"varint,10,opt,name=max_network_interfaces,json=maxNetworkInterfaces,proto3" json:"max_network_interfaces,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *QuotaSpec) Reset() {
@@ -173,6 +185,27 @@ func (x *QuotaSpec) GetPciDevices() []*PciDeviceQuota {
 		return x.PciDevices
 	}
 	return nil
+}
+
+func (x *QuotaSpec) GetMaxImages() int32 {
+	if x != nil {
+		return x.MaxImages
+	}
+	return 0
+}
+
+func (x *QuotaSpec) GetMaxSubnets() int32 {
+	if x != nil {
+		return x.MaxSubnets
+	}
+	return 0
+}
+
+func (x *QuotaSpec) GetMaxNetworkInterfaces() int32 {
+	if x != nil {
+		return x.MaxNetworkInterfaces
+	}
+	return 0
 }
 
 type PciDeviceQuota struct {
@@ -827,7 +860,7 @@ var File_kyuusha_identity_v1_tenant_proto protoreflect.FileDescriptor
 
 const file_kyuusha_identity_v1_tenant_proto_rawDesc = "" +
 	"\n" +
-	" kyuusha/identity/v1/tenant.proto\x12\x13kyuusha.identity.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xa4\x02\n" +
+	" kyuusha/identity/v1/tenant.proto\x12\x13kyuusha.identity.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\x9a\x03\n" +
 	"\tQuotaSpec\x12\x19\n" +
 	"\bmax_vcpu\x18\x01 \x01(\x05R\amaxVcpu\x12\"\n" +
 	"\rmax_memory_mb\x18\x02 \x01(\x03R\vmaxMemoryMb\x12\"\n" +
@@ -836,7 +869,13 @@ const file_kyuusha_identity_v1_tenant_proto_rawDesc = "" +
 	"\x0fmax_vcpu_per_vm\x18\x05 \x01(\x05R\fmaxVcpuPerVm\x12.\n" +
 	"\x14max_memory_mb_per_vm\x18\x06 \x01(\x03R\x10maxMemoryMbPerVm\x12D\n" +
 	"\vpci_devices\x18\a \x03(\v2#.kyuusha.identity.v1.PciDeviceQuotaR\n" +
-	"pciDevices\"g\n" +
+	"pciDevices\x12\x1d\n" +
+	"\n" +
+	"max_images\x18\b \x01(\x05R\tmaxImages\x12\x1f\n" +
+	"\vmax_subnets\x18\t \x01(\x05R\n" +
+	"maxSubnets\x124\n" +
+	"\x16max_network_interfaces\x18\n" +
+	" \x01(\x05R\x14maxNetworkInterfaces\"g\n" +
 	"\x0ePciDeviceQuota\x12\x1b\n" +
 	"\tvendor_id\x18\x01 \x01(\tR\bvendorId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x1b\n" +

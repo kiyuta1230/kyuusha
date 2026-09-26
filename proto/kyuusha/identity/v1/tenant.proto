@@ -27,6 +27,18 @@ message QuotaSpec {
   // tenant may request at all -- a (vendor_id, device_id) pair absent from
   // this list has an implicit max_count of 0, not "unlimited".
   repeated PciDeviceQuota pci_devices = 7;
+  // Tenant-total counts for the other Create-time-quota'd resources: unlike
+  // vcpu/memory_mb these have no per-VM-style cap, just one number checked
+  // against a plain +1 (see docs/specs/quota.md「Image/Subnet/
+  // NetworkInterfaceのQuota」). 0 for all three means "unlimited" is NOT the
+  // default the way it might be for a hand-rolled check -- Create still
+  // synchronously rejects once max_images/etc is exceeded either way, so an
+  // admin creating a Tenant without setting these gets 0 (nothing
+  // creatable), matching every other QuotaSpec field's own zero-value
+  // behavior.
+  int32 max_images = 8;
+  int32 max_subnets = 9;
+  int32 max_network_interfaces = 10;
 }
 
 message PciDeviceQuota {

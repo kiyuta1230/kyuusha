@@ -80,6 +80,12 @@ Subnetの組み合わせを自動許可する、という形で参照される�
 （[Image仕様](image.md)参照）と同じ設計原則。IPAM自体のプール枯渇は上記の通りCreateを
 拒否しない（Pendingで受理する）ため、この検証とは別軸。
 
+`Subnet.Create`/`NetworkInterface.Create`はいずれも、上記の検証に加えてテナントの
+Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
+`max_network_interfaces`）判定を同じCreate内で同期的に行う。`NetworkInterface`側は
+このQuota判定を上記のSubnet存在/Ready検証より後に行う（詳細は
+[Quota仕様](quota.md)「networkのQuota判定」参照）。
+
 ## この実装がカバーしないもの
 
 - **クロスHypervisor接続**: tap配線自体は下記「tap配線とローカルネットワーク」の通り

@@ -24,6 +24,12 @@ type QuotaSpec struct {
 	// limit value, same "owns the number, not the enforcement" split as
 	// every other QuotaSpec field.
 	PciDevices []PciDeviceQuota
+	// MaxImages/MaxSubnets/MaxNetworkInterfaces are image's/network's
+	// tenant-total counts (see docs/specs/quota.md), same "identity only
+	// stores the limit value" split as every other QuotaSpec field.
+	MaxImages            int32
+	MaxSubnets           int32
+	MaxNetworkInterfaces int32
 }
 
 type PciDeviceQuota struct {

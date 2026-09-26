@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 	clientv3 "go.etcd.io/etcd/client/v3"
+
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 var (
@@ -17,6 +20,7 @@ var (
 	ErrConflict      = errors.New("image: resource_version conflict")
 	ErrValidation    = errors.New("image: validation failed")
 	ErrHistoryPruned = errors.New("image: watch resume point too old, relist required")
+	ErrQuotaExceeded = errors.New("image: tenant quota exceeded")
 )
 
 type EventType = resource.EventType
@@ -36,31 +40,106 @@ const reachabilityTimeout = 5 * time.Second
 // VirtualMachine there's no scheduler/NATS side; the only asynchronous work
 // is the Pending->Ready reachability check, run by Run below.
 type Service struct {
-	store      *resource.Store[Image, *Image]
-	httpClient *http.Client
+	store          *resource.Store[Image, *Image]
+	httpClient     *http.Client
+	identityClient identityv1.TenantServiceClient
+	quota          *quotaChecker
+
+	usageMu sync.Mutex
+	usage   map[string]tenantUsage
 }
 
-func NewService(etcdClient *clientv3.Client) *Service {
-	return &Service{
+// NewService constructs a Service and synchronously rebuilds its tenant
+// quota usage (see rebuildUsage) from etcd before returning -- same
+// reasoning as compute/block-storage/network's identical rebuild calls:
+// callers must not start serving Create requests until this returns.
+func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient) (*Service, error) {
+	quota, err := newQuotaChecker(ctx)
+	if err != nil {
+		return nil, err
+	}
+	svc := &Service{
 		store: resource.NewStore[Image, *Image](etcdClient, "image", resource.StoreErrors{
 			NotFound:      ErrNotFound,
 			Conflict:      ErrConflict,
 			HistoryPruned: ErrHistoryPruned,
 		}),
-		httpClient: &http.Client{Timeout: reachabilityTimeout},
+		httpClient:     &http.Client{Timeout: reachabilityTimeout},
+		identityClient: identityClient,
+		quota:          quota,
+		usage:          make(map[string]tenantUsage),
 	}
+	if err := svc.rebuildUsage(ctx); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// rebuildUsage restores usage's in-memory per-tenant quota accounting from
+// every existing Image in etcd -- same bug class as compute/block-storage/
+// network's identical rebuild functions (found 2026-09-13 there): usage is
+// purely in-memory, populated only by Create/Delete calls made within this
+// process's own lifetime, so without this, every restart forgets every
+// tenant's real usage. Image has no Finalizer/soft-delete support (Delete
+// below is a direct hard delete), so every Image List returns is live --
+// no DeletedAt check needed here, unlike VirtualMachine/Volume's rebuilds.
+func (s *Service) rebuildUsage(ctx context.Context) error {
+	images, err := s.store.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("image: rebuild usage: list images: %w", err)
+	}
+	usage := make(map[string]tenantUsage)
+	for _, img := range images {
+		u := usage[img.Meta.TenantID]
+		u.ImageCount++
+		usage[img.Meta.TenantID] = u
+	}
+	s.usage = usage
+	return nil
 }
 
 // Create validates spec.format matches the artifacts actually provided
 // (docs/architecture.md's Create-time validation) and starts the Image in
 // Pending; Run's background check flips it to Ready or Error once the
 // artifact URL(s) are confirmed reachable (or not).
+//
+// Idempotent when name is set (same shape as compute/block-storage's own
+// Create): a second Create with the same (tenantID, name) returns the
+// existing Image rather than erroring or re-charging quota. A genuinely new
+// Create synchronously checks tenantID's Quota (max_images) against
+// image's own local tenant_usage and rejects with ErrQuotaExceeded if it
+// would be exceeded -- a doomed Image is never created just to be marked
+// Error afterwards, same "Quota設計" reasoning as every other quota'd
+// resource.
 func (s *Service) Create(ctx context.Context, tenantID, name string, spec Spec) (*Image, error) {
+	if tenantID == "" {
+		return nil, fmt.Errorf("%w: tenant_id is required", ErrValidation)
+	}
 	if spec.Visibility == VisibilityUnspecified {
 		spec.Visibility = VisibilityPrivate
 	}
 	if err := validateSpec(spec); err != nil {
 		return nil, err
+	}
+
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+
+	if existing, ok := s.store.LookupByName(ctx, tenantID, name); ok {
+		return &existing, nil
+	}
+
+	limit, err := lookupQuota(ctx, s.identityClient, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	usage := s.usage[tenantID]
+	allowed, err := s.quota.allow(ctx, usage, limit)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, fmt.Errorf("%w: tenant %q", ErrQuotaExceeded, tenantID)
 	}
 
 	out, err := s.store.Create(ctx, tenantID, name, Image{
@@ -70,6 +149,10 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Spec) 
 	if err != nil {
 		return nil, err
 	}
+
+	usage.ImageCount++
+	s.usage[tenantID] = usage
+
 	return &out, nil
 }
 
@@ -192,7 +275,21 @@ func (s *Service) SetVisibility(ctx context.Context, tenantID, id string, visibi
 }
 
 func (s *Service) Delete(ctx context.Context, tenantID, id string) error {
-	return s.store.Delete(ctx, tenantID, id)
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+
+	if _, err := s.store.Get(ctx, tenantID, id); err != nil {
+		return err
+	}
+	if err := s.store.Delete(ctx, tenantID, id); err != nil {
+		return err
+	}
+
+	usage := s.usage[tenantID]
+	usage.ImageCount--
+	s.usage[tenantID] = usage
+
+	return nil
 }
 
 // Watch replays history newer than sinceRV (0 for "from the start") and then

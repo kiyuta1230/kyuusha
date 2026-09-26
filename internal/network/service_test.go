@@ -42,7 +42,7 @@ func mustCreateAndAllocateNetworkInterface(t *testing.T, ctx context.Context, sv
 
 func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestService_CreateSubnetValidatesSpec(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestService_CreateNetworkInterfaceRespectsAllocatableIPRanges(t *testing.T)
 
 func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestService_CreateSubnetGoesReadyWithVLANID(t *testing.T) {
 
 func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestService_CreateSubnetIsIdempotentByName(t *testing.T) {
 // of replicas without touching shared process-local pool state.
 func TestService_CreateNeverAllocatesSynchronously(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -190,14 +190,14 @@ func TestService_NewServiceRebuildsPoolsFromExistingResources(t *testing.T) {
 	ctx := context.Background()
 	etcdClient := resourcetest.Client(t)
 
-	svc1, err := NewService(ctx, etcdClient, nil)
+	svc1, err := NewService(ctx, etcdClient, &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService (first): %v", err)
 	}
 	sn := mustCreateAndAllocateSubnet(t, ctx, svc1, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
 	iface := mustCreateAndAllocateNetworkInterface(t, ctx, svc1, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, sn)
 
-	svc2, err := NewService(ctx, etcdClient, nil)
+	svc2, err := NewService(ctx, etcdClient, &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService (second, simulating a restart): %v", err)
 	}
@@ -218,7 +218,7 @@ func TestService_NewServiceRebuildsPoolsFromExistingResources(t *testing.T) {
 
 func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestService_CreateSubnetReportsVlanPoolExhausted(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRejectsUnknownSubnet(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestService_CreateNetworkInterfaceRejectsUnknownSubnet(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T)
 // this closes (VM Delete never touches its NetworkInterfaces today).
 func TestService_SweepOrphanedNetworkInterfacesDeletesOnlyMissingVMs(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeVirtualMachineClient{Existing: map[string]bool{"vm-exists": true}})
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, &FakeVirtualMachineClient{Existing: map[string]bool{"vm-exists": true}})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestService_SweepOrphanedNetworkInterfacesDeletesOnlyMissingVMs(t *testing.
 
 func TestService_CreateNetworkInterfaceReportsIPPoolExhausted(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

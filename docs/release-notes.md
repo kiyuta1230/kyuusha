@@ -5,6 +5,36 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-09-27
+
+- Image/Subnet/NetworkInterfaceにQuota適用を追加（`docs/architecture.md`
+  「未決事項」節が残していた項目: `QuotaSpec`はvcpu/memory/volume_gb/vms/
+  pci_devicesまでカバーしていたが、Image数・Subnet数・NetworkInterface数には
+  上限が無く、1テナントが無制限に作成できた）。`QuotaSpec`に`max_images`/
+  `max_subnets`/`max_network_interfaces`を追加し、`internal/image/quota.go`・
+  `internal/network/quota.go`を新設（`internal/block-storage/quota.go`と
+  同型の単一/複数次元OPA判定、`quota.rego`埋め込み）。image/networkの
+  `Service`にそれぞれ`usageMu`+in-memory`usage`マップと、コンストラクタでの
+  `rebuildUsage`（既存Image/Subnet/NetworkInterfaceの全件走査）を追加し、
+  再起動時に使用量を失わないようにした（2026-09-13に見つかった同種のバグ
+  クラスへの対策を横展開）。image/network/network-reconcilerの3バイナリに
+  `-identity-addr`フラグとidentityへのmTLSクライアント配線を新規追加
+  （これまでどちらもidentityへの依存が一切無かった）。`kyuusha tenant
+  create/update`に`-max-images`/`-max-subnets`/`-max-network-interfaces`
+  フラグを追加。実装の過程で、identity自身の`internal/identity/grpcserver`
+  にある`QuotaSpec`のproto⇔ドメイン型変換（`fromQuota`/`toQuota`）が
+  新フィールドを一切コピーしていなかったバグを発見・修正——プロトと
+  各サービスのquota強制ロジックだけ更新して、identity自体の変換層の
+  対応漏れに気づかないまま進めてしまっていた（変換層に既存のユニット
+  テストが無かったことも一因）。再発防止に`internal/identity/grpcserver/
+  server_test.go`を新設し、`QuotaSpec`の全フィールドを1つずつ突き合わせる
+  ラウンドトリップテストを追加した。playgroundで実機確認済み:
+  `-max-images=2 -max-subnets=1 -max-network-interfaces=1`のテナントに対し、
+  Image/Subnet/NetworkInterfaceそれぞれ上限到達後の3件目Createが実際の
+  gRPC経路（api-gateway→image/network）で`ResourceExhausted`相当の
+  `InvalidArgument`として拒否されることを確認（詳細は
+  [Quota仕様](specs/quota.md)「imageのQuota判定」「networkのQuota判定」参照）
+
 ## 2026-09-26
 
 - スケジューラにVolume容量ではなく**storage_connectionによるフィルタ**を追加

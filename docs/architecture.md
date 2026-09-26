@@ -288,6 +288,11 @@ message QuotaSpec {
   // 上限0（vcpu/memory_mbと違い、GPU等の希少資源は管理者の明示許可制。
   // 詳細は「PCIデバイス(GPU等)パススルー」節）
   repeated PciDeviceQuota pci_devices = 7;
+  // 以下3つはテナント合計の個数上限。vcpu/memory_mbと違い未設定(0)は
+  // 上限0（無制限ではない）。詳細はdocs/specs/quota.md
+  int32 max_images = 8;
+  int32 max_subnets = 9;
+  int32 max_network_interfaces = 10;
 }
 
 message PciDeviceQuota {
@@ -309,9 +314,11 @@ message TenantStatus {
 
 ### Quota設計
 
-Quotaの実体（vCPU/メモリ/Volume容量）はidentityではなくcompute/block-storageが持つ概念のため、
-**制限値(`QuotaSpec`)はidentityが持つが、使用量の集計・強制は各リソース所有サービスが行う**
-（サービス境界の原則をここでも維持する）。
+Quotaの実体（vCPU/メモリ/Volume容量/Image数/Subnet数/NetworkInterface数）はidentityではなく
+compute/block-storage/image/networkが持つ概念のため、**制限値(`QuotaSpec`)はidentityが持つが、
+使用量の集計・強制は各リソース所有サービスが行う**（サービス境界の原則をここでも維持する）。
+image/networkのImage数/Subnet数/NetworkInterface数は、vcpu/memory_mbのような
+「1台あたり上限」に相当する概念を持たない単一次元の判定で、他は以下と同じ設計。
 
 強制ポイントは、「スケジューラ設計」節でHypervisorの`allocatable`/`allocated`を同一トランザクションで
 更新した**予約パターンをそのままテナント単位に転用**する。
@@ -2426,10 +2433,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 2. **SR-IOV VFのライフサイクル管理**: `spec.pci_devices`は「GPUだけでなくSR-IOV NICにも
    使い回せる汎用設計」だが、VF自体の生成（`sriov_numvfs`操作）は自動化しておらず、
    オペレータが事前にVFを作りPCIアドレスを1個ずつ`-pci-devices`へ手動で並べる前提のまま
-3. **Image/Subnet/NetworkInterfaceへのQuota適用**: `QuotaSpec`はvcpu/memory/volume_gb/
-   vms/pci_devicesまでカバーしたが、Image数・Subnet数・NetworkInterface数には上限が無く、
-   1テナントが無制限に作成できる
-4. **グラフィカルコンソール（VNC/SPICE相当）**: シリアルコンソールのみで、Windows等
+3. **グラフィカルコンソール（VNC/SPICE相当）**: シリアルコンソールのみで、Windows等
    シリアル操作に頼れないゲストへの対応手段が無い（Harvester/KubeVirtの`virtctl vnc`相当）
 
 ### 解決済み（参考: 決定の経緯は各セクション本文を参照）

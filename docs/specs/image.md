@@ -40,7 +40,9 @@ sequenceDiagram
 ```
 
 - **同期バリデーション（Create時に即reject）**: `format`に対応するartifactが揃っているか
-  （`KERNEL_ROOTFS`なら`kernel.url`/`rootfs.url`両方、`QCOW2`なら`disk.url`）
+  （`KERNEL_ROOTFS`なら`kernel.url`/`rootfs.url`両方、`QCOW2`なら`disk.url`）に加えて、
+  テナントのImage数Quota（`Tenant.spec.quota.max_images`）判定も同じCreate内で同期的に
+  行う（詳細は[Quota仕様](quota.md)「imageのQuota判定」参照）
 - **非同期バリデーション**: `url`のスキームで分岐する（下記「OCIレジストリ参照（Track 2）」参照）
   - `https://`/`http://`: 従来通りHTTP HEADのみ（軽く検証する程度。実際のバイト列は取得しない、
     digestの検証もしない）。到達不可なら`Error`+`Condition{type: URLUnreachable}`

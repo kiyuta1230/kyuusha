@@ -12,7 +12,10 @@ import (
 
 func TestService_CreateRejectsFormatArtifactMismatch(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(resourcetest.Client(t))
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 
 	if _, err := svc.Create(ctx, "tenant-a", "x", Spec{Format: FormatKernelRootfs}); err == nil {
 		t.Fatal("expected validation error for KERNEL_ROOTFS with no kernel/rootfs urls")
@@ -32,7 +35,10 @@ func TestPlayground_ImageReachabilityFlipsToReady(t *testing.T) {
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer ok.Close()
 
-	svc := NewService(resourcetest.Client(t))
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 	go func() {
 		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 			t.Errorf("Run: %v", err)
@@ -74,7 +80,10 @@ func TestPlayground_ImageReachabilityFlipsToError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	svc := NewService(resourcetest.Client(t))
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 	go func() {
 		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 			t.Errorf("Run: %v", err)

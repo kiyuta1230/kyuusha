@@ -37,10 +37,12 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
 	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 func main() {
 	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for the orphaned-NetworkInterface sweep (does this NetworkInterface's vm_id still exist?)")
+	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
 	metricsAddr := flag.String("metrics-addr", ":9099", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate used when dialing compute (see internal/mtls)")
@@ -105,11 +107,21 @@ func main() {
 	}
 	defer computeConn.Close()
 
+	identityConn, err := grpc.NewClient(*identityAddr,
+		grpc.WithTransportCredentials(clientCreds),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial identity", "addr", *identityAddr, "err", err)
+		os.Exit(1)
+	}
+	defer identityConn.Close()
+
 	// A second, independent network.Service instance from the API binary's
 	// own -- both need one (Run's methods read/write through it), but
 	// neither shares process memory (including vlanPool/ipPool/
 	// nextMACOct) with the other, only the etcd state both connect to.
-	svc, err := network.NewService(ctx, etcdClient, computev1.NewVirtualMachineServiceClient(computeConn))
+	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn))
 	if err != nil {
 		slog.Error("new network service", "err", err)
 		os.Exit(1)

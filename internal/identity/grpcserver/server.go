@@ -122,12 +122,15 @@ func toSpec(s identity.TenantSpec) *identityv1.TenantSpec {
 
 func fromQuota(q *identityv1.QuotaSpec) identity.QuotaSpec {
 	out := identity.QuotaSpec{
-		MaxVCPU:          q.GetMaxVcpu(),
-		MaxMemoryMB:      q.GetMaxMemoryMb(),
-		MaxVolumeGB:      q.GetMaxVolumeGb(),
-		MaxVMs:           q.GetMaxVms(),
-		MaxVCPUPerVM:     q.GetMaxVcpuPerVm(),
-		MaxMemoryMBPerVM: q.GetMaxMemoryMbPerVm(),
+		MaxVCPU:              q.GetMaxVcpu(),
+		MaxMemoryMB:          q.GetMaxMemoryMb(),
+		MaxVolumeGB:          q.GetMaxVolumeGb(),
+		MaxVMs:               q.GetMaxVms(),
+		MaxVCPUPerVM:         q.GetMaxVcpuPerVm(),
+		MaxMemoryMBPerVM:     q.GetMaxMemoryMbPerVm(),
+		MaxImages:            q.GetMaxImages(),
+		MaxSubnets:           q.GetMaxSubnets(),
+		MaxNetworkInterfaces: q.GetMaxNetworkInterfaces(),
 	}
 	for _, p := range q.GetPciDevices() {
 		out.PciDevices = append(out.PciDevices, identity.PciDeviceQuota{
@@ -139,12 +142,15 @@ func fromQuota(q *identityv1.QuotaSpec) identity.QuotaSpec {
 
 func toQuota(q identity.QuotaSpec) *identityv1.QuotaSpec {
 	out := &identityv1.QuotaSpec{
-		MaxVcpu:          q.MaxVCPU,
-		MaxMemoryMb:      q.MaxMemoryMB,
-		MaxVolumeGb:      q.MaxVolumeGB,
-		MaxVms:           q.MaxVMs,
-		MaxVcpuPerVm:     q.MaxVCPUPerVM,
-		MaxMemoryMbPerVm: q.MaxMemoryMBPerVM,
+		MaxVcpu:              q.MaxVCPU,
+		MaxMemoryMb:          q.MaxMemoryMB,
+		MaxVolumeGb:          q.MaxVolumeGB,
+		MaxVms:               q.MaxVMs,
+		MaxVcpuPerVm:         q.MaxVCPUPerVM,
+		MaxMemoryMbPerVm:     q.MaxMemoryMBPerVM,
+		MaxImages:            q.MaxImages,
+		MaxSubnets:           q.MaxSubnets,
+		MaxNetworkInterfaces: q.MaxNetworkInterfaces,
 	}
 	for _, p := range q.PciDevices {
 		out.PciDevices = append(out.PciDevices, &identityv1.PciDeviceQuota{

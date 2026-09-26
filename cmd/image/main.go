@@ -26,11 +26,13 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/mtls"
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 	imagev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/image/v1"
 )
 
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":8083", "address to serve ImageService on")
+	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
 	metricsAddr := flag.String("metrics-addr", ":9095", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers (see internal/mtls)")
@@ -73,6 +75,21 @@ func main() {
 		}
 	}()
 
+	clientCreds, err := mtls.ClientCredentials(*tlsCert, *tlsKey, *tlsCA)
+	if err != nil {
+		slog.Error("load mTLS client credentials", "err", err)
+		os.Exit(1)
+	}
+	identityConn, err := grpc.NewClient(*identityAddr,
+		grpc.WithTransportCredentials(clientCreds),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		slog.Error("dial identity", "addr", *identityAddr, "err", err)
+		os.Exit(1)
+	}
+	defer identityConn.Close()
+
 	etcdClient, err := etcdconn.Connect(*etcdEndpoints)
 	if err != nil {
 		slog.Error("connect to etcd", "endpoints", *etcdEndpoints, "err", err)
@@ -80,7 +97,11 @@ func main() {
 	}
 	defer etcdClient.Close()
 
-	svc := image.NewService(etcdClient)
+	svc, err := image.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn))
+	if err != nil {
+		slog.Error("new image service", "err", err)
+		os.Exit(1)
+	}
 	prometheus.MustRegister(image.NewMetricsCollector(svc))
 	go func() {
 		if err := svc.Run(ctx); err != nil && ctx.Err() == nil {

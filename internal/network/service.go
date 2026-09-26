@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	identityv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/identity/v1"
 )
 
 var (
@@ -29,7 +31,8 @@ var (
 	ErrNetworkInterfaceConflict      = errors.New("network_interface: resource_version conflict")
 	ErrNetworkInterfaceHistoryPruned = errors.New("network_interface: watch resume point too old, relist required")
 
-	ErrValidation = errors.New("network: validation failed")
+	ErrValidation    = errors.New("network: validation failed")
+	ErrQuotaExceeded = errors.New("network: tenant quota exceeded")
 )
 
 type SubnetEvent = resource.Event[Subnet]
@@ -87,13 +90,24 @@ type Service struct {
 	// "does this NetworkInterface's vm_id still exist" -- the one place
 	// this service needs to know anything about a VM at all.
 	computeClient computev1.VirtualMachineServiceClient
+
+	identityClient identityv1.TenantServiceClient
+	quota          *quotaChecker
+
+	usageMu sync.Mutex
+	usage   map[string]tenantUsage
 }
 
 // NewService constructs a Service and synchronously rebuilds its VLAN/IP
-// pools from etcd (see rebuildPools) before returning -- callers must not
-// start serving Create requests until this returns, or a Create racing the
-// rebuild could hand out an id/address the rebuild was about to reserve.
-func NewService(ctx context.Context, etcdClient *clientv3.Client, computeClient computev1.VirtualMachineServiceClient) (*Service, error) {
+// pools (see rebuildPools) and tenant quota usage (see rebuildUsage) from
+// etcd before returning -- callers must not start serving Create requests
+// until this returns, or a Create racing either rebuild could hand out an
+// id/address/quota charge the rebuild was about to reserve.
+func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, computeClient computev1.VirtualMachineServiceClient) (*Service, error) {
+	quota, err := newQuotaChecker(ctx)
+	if err != nil {
+		return nil, err
+	}
 	svc := &Service{
 		subnets: resource.NewStore[Subnet, *Subnet](etcdClient, "subnet", resource.StoreErrors{
 			NotFound:      ErrSubnetNotFound,
@@ -105,14 +119,53 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, computeClient 
 			Conflict:      ErrNetworkInterfaceConflict,
 			HistoryPruned: ErrNetworkInterfaceHistoryPruned,
 		}),
-		computeClient: computeClient,
-		vlans:         newVLANPool(),
-		ips:           newIPPool(),
+		computeClient:  computeClient,
+		identityClient: identityClient,
+		quota:          quota,
+		vlans:          newVLANPool(),
+		ips:            newIPPool(),
+		usage:          make(map[string]tenantUsage),
 	}
 	if err := svc.rebuildPools(ctx); err != nil {
 		return nil, err
 	}
+	if err := svc.rebuildUsage(ctx); err != nil {
+		return nil, err
+	}
 	return svc, nil
+}
+
+// rebuildUsage restores usage's in-memory per-tenant quota accounting from
+// every existing Subnet/NetworkInterface in etcd -- same bug class as
+// rebuildPools/compute/block-storage/image's identical rebuilds: usage is
+// purely in-memory, populated only by Create/Delete calls made within this
+// process's own lifetime, so without this, every restart forgets every
+// tenant's real usage. Neither Subnet nor NetworkInterface has Finalizer/
+// soft-delete support (DeleteSubnet/DeleteNetworkInterface are direct hard
+// deletes), so every object List returns is live -- no DeletedAt check
+// needed here, unlike VirtualMachine/Volume's rebuilds.
+func (s *Service) rebuildUsage(ctx context.Context) error {
+	subnets, err := s.subnets.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("network: rebuild usage: list subnets: %w", err)
+	}
+	usage := make(map[string]tenantUsage)
+	for _, sn := range subnets {
+		u := usage[sn.Meta.TenantID]
+		u.SubnetCount++
+		usage[sn.Meta.TenantID] = u
+	}
+	ifaces, err := s.interfaces.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("network: rebuild usage: list network interfaces: %w", err)
+	}
+	for _, n := range ifaces {
+		u := usage[n.Meta.TenantID]
+		u.NetworkInterfaceCount++
+		usage[n.Meta.TenantID] = u
+	}
+	s.usage = usage
+	return nil
 }
 
 // rebuildPools restores vlans/ips/nextMACOct's in-memory allocation state
@@ -339,8 +392,24 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 		return nil, fmt.Errorf("%w: spec.allocatable_ip_ranges: %v", ErrValidation, err)
 	}
 
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+
 	if existing, ok := s.subnets.LookupByName(ctx, tenantID, name); ok {
 		return &existing, nil
+	}
+
+	limit, err := lookupQuota(ctx, s.identityClient, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	usage := s.usage[tenantID]
+	allowed, err := s.quota.allowSubnet(ctx, usage, limit)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, fmt.Errorf("%w: tenant %q", ErrQuotaExceeded, tenantID)
 	}
 
 	// Always created Pending -- the actual vlan_id allocation attempt
@@ -358,6 +427,10 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 	if err != nil {
 		return nil, err
 	}
+
+	usage.SubnetCount++
+	s.usage[tenantID] = usage
+
 	return &out, nil
 }
 
@@ -416,10 +489,21 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 // (if it ever held one -- a Subnet deleted while still Pending never did),
 // mirroring compute's capacity-release-before-delete pattern.
 func (s *Service) DeleteSubnet(ctx context.Context, tenantID, id string) error {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+
 	if sn, err := s.subnets.Get(ctx, tenantID, id); err == nil && sn.Status.Phase == SubnetPhaseReady {
 		s.vlans.release(sn.Spec.Zone, sn.Status.VLANID)
 	}
-	return s.subnets.Delete(ctx, tenantID, id)
+	if err := s.subnets.Delete(ctx, tenantID, id); err != nil {
+		return err
+	}
+
+	usage := s.usage[tenantID]
+	usage.SubnetCount--
+	s.usage[tenantID] = usage
+
+	return nil
 }
 
 func (s *Service) WatchSubnets(ctx context.Context, tenantID string, sinceRV int64) (<-chan SubnetEvent, error) {
@@ -441,6 +525,9 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 		return nil, fmt.Errorf("%w: spec.subnet_id is required", ErrValidation)
 	}
 
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+
 	if existing, ok := s.interfaces.LookupByName(ctx, tenantID, name); ok {
 		return &existing, nil
 	}
@@ -456,6 +543,19 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 		return nil, fmt.Errorf("%w: subnet %q is not Ready (phase=%s)", ErrValidation, spec.SubnetID, subnet.Status.Phase)
 	}
 
+	limit, err := lookupQuota(ctx, s.identityClient, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	usage := s.usage[tenantID]
+	allowed, err := s.quota.allowNetworkInterface(ctx, usage, limit)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, fmt.Errorf("%w: tenant %q", ErrQuotaExceeded, tenantID)
+	}
+
 	// Always created Pending, with no mac_address/ip_address set yet --
 	// nextMACOct is just as much process-local state as vlanPool/ipPool
 	// (two replicas would independently hand out the same counter value),
@@ -468,6 +568,10 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 	if err != nil {
 		return nil, err
 	}
+
+	usage.NetworkInterfaceCount++
+	s.usage[tenantID] = usage
+
 	return &out, nil
 }
 
@@ -533,10 +637,21 @@ func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInte
 // DeleteNetworkInterface releases the interface's IP back to its Subnet's
 // pool first (if it ever held one), mirroring DeleteSubnet.
 func (s *Service) DeleteNetworkInterface(ctx context.Context, tenantID, id string) error {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+
 	if n, err := s.interfaces.Get(ctx, tenantID, id); err == nil && n.Status.Phase == NetworkInterfacePhaseReady && n.Status.IPAddress != "" {
 		s.ips.release(n.Spec.SubnetID, n.Status.IPAddress)
 	}
-	return s.interfaces.Delete(ctx, tenantID, id)
+	if err := s.interfaces.Delete(ctx, tenantID, id); err != nil {
+		return err
+	}
+
+	usage := s.usage[tenantID]
+	usage.NetworkInterfaceCount--
+	s.usage[tenantID] = usage
+
+	return nil
 }
 
 func (s *Service) WatchNetworkInterfaces(ctx context.Context, tenantID string, sinceRV int64) (<-chan NetworkInterfaceEvent, error) {
