@@ -18,10 +18,9 @@ jobs:
   # (CAP_NET_ADMIN, /dev/kvm -- e.g. internal/compute-agent/netsetup,
   # internal/compute-agent/nftacl) already skip themselves gracefully when
   # unprivileged (see each test's own "skipping: ... needs CAP_NET_ADMIN"
-  # convention), so this runs unmodified on a standard hosted runner.
-  # Playground/scenario.sh end-to-end verification (real Firecracker boot,
-  # real tap wiring) stays a manual step -- see CLAUDE.md and each PR's own
-  # description -- not yet part of this workflow.
+  # convention), so this runs unmodified on a standard hosted runner. Real
+  # Firecracker/tap-wiring end-to-end verification is the separate
+  # playground-e2e job below.
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -51,36 +50,6 @@ jobs:
       - name: test
         run: go test ./...
 
-      # Diagnostic only (docs/open-questions.md「playground/scenario.shの
-      # CI自動実行をやるべきか」): whether this hosted runner exposes
-      # /dev/kvm decides if scenario.sh's real Firecracker boot could ever
-      # run here at all, before even considering a self-hosted runner.
-      # Never fails the job.
-      - name: check /dev/kvm availability (informational)
-        run: |
-          id
-          if [ ! -e /dev/kvm ]; then
-            echo "::notice::/dev/kvm not present on this runner"
-            exit 0
-          fi
-          ls -la /dev/kvm
-          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-            echo "::notice::/dev/kvm present and accessible by this user"
-            exit 0
-          fi
-          echo "::notice::/dev/kvm present but not accessible yet -- trying passwordless sudo to fix perms"
-          if sudo -n chmod 666 /dev/kvm 2>&1; then
-            ls -la /dev/kvm
-            if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-              echo "::notice::/dev/kvm accessible after sudo chmod"
-            else
-              echo "::notice::still not accessible even after sudo chmod"
-            fi
-          else
-            echo "::notice::passwordless sudo not available on this runner"
-          fi
-        continue-on-error: true
-
       # protoc-gen-go/protoc-gen-go-grpc are local buf plugins (see
       # buf.gen.yaml) -- pinned to the versions this repo's go.mod already
       # depends on (google.golang.org/protobuf, google.golang.org/grpc),
@@ -103,6 +72,40 @@ jobs:
             echo "::error::'buf generate' produced a diff -- run it locally and commit the result"
             exit 1
           fi
+
+  # Real end-to-end verification: brings up the full multi-hypervisor
+  # docker-compose stack and drives it through the real CLI, including
+  # actual Firecracker VM boots -- see playground/README.md and
+  # docs/open-questions.md「playground/scenario.shのCI自動実行をやるべきか」
+  # (resolved 2026-09-27: confirmed via a throwaway diagnostic step that
+  # GitHub-hosted ubuntu-latest runners do expose /dev/kvm, and playground's
+  # compute-agent containers already run `privileged: true`, which grants
+  # device access regardless of host-side group membership anyway -- no
+  # self-hosted runner needed). Complements build-test's unit tests: this
+  # is exactly the class of async-Pending-vs-polling drift that unit tests
+  # alone already missed twice in this repo's history (Subnet/
+  # NetworkInterface, then VolumeAttachment -- see docs/release-notes.md).
+  playground-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: run playground/scenario.sh
+        run: ./playground/scenario.sh
+
+      - name: dump service logs on failure
+        if: failure()
+        run: docker compose -f playground/docker-compose.yml logs --tail=300
+
+      - name: tear down
+        if: always()
+        run: docker compose -f playground/docker-compose.yml down -v
 
   # examples/snap-plugins/ebpf-snap is its own Go module specifically so
   # cilium/ebpf and its transitive deps never touch the root module (see

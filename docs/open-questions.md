@@ -13,13 +13,18 @@ firewallrule.go`の`validateCrossTenantRules`、`CreateNetworkInterface`/
 を実装した。詳細は[network仕様](specs/network.md)「spec.mesh_group」・
 「Create時のバリデーション」参照。
 
-## playground/scenario.shのCI自動実行をやるべきか（未着手、2026-09-27）
+## playground/scenario.shのCI自動実行をやるべきか（解決済み・実装済み、2026-09-27）
 
-`.github/workflows/ci.yml`は現状build/vet/fmt/testのみ（`docs/release-notes.md`
-参照）。実Firecracker起動を含むE2E（`playground/scenario.sh`）はGitHub Actionsの
-標準ホストrunnerに`/dev/kvm`が無い可能性があり、価値が下がる（VM起動確認部分が
-軒並みskipされる想定）。self-hosted runner（KVM可用性が要件）を用意する運用コストと
-天秤にかけて判断する必要がある——今のところ判断保留。
+GitHub-hosted `ubuntu-latest` runnerに実際に`/dev/kvm`が存在するか、CIへ一時的な
+診断ステップを追加して確認した結果、デバイス自体は存在し（`crw-rw---- root:kvm`）、
+runner自身のユーザーは`kvm`グループに属さないため直接は使えないが
+`sudo chmod 666 /dev/kvm`（パスワード不要sudoが使えることも確認済み）で解消できる
+ことを確認した。加えてplaygroundの各compute-agentコンテナはそもそも`privileged:
+true`で動いており、ホスト側のグループ権限に関係なくデバイスアクセスできるため、
+実際にはこのchmodすら不要と判明——self-hosted runnerを用意する必要は無かった。
+`.github/workflows/ci.yml`に`playground-e2e`ジョブとして追加し、push/PR両方で
+`playground/scenario.sh`を実行するようにした（診断用の一時ステップは役目を終えた
+ので削除済み）。
 
 ## コールドマイグレーションのroot disk転送（解決済み・実装済み、2026-09-26）
 

@@ -7,6 +7,17 @@
 
 ## 2026-09-27
 
+- `.github/workflows/ci.yml`に`playground-e2e`ジョブを追加し、
+  `playground/scenario.sh`（実Firecracker VM起動を含む多ハイパーバイザーE2E）を
+  push/PRのたびに自動実行するようにした（`docs/open-questions.md`
+  「playground/scenario.shのCI自動実行をやるべきか」の解消）。GitHub-hosted
+  `ubuntu-latest` runnerに一時的な診断ステップを追加して実際に確認した結果、
+  `/dev/kvm`自体は存在し（runner自身のユーザーは`kvm`グループに属さないため
+  素のままでは使えないが、パスワード不要sudoでの`chmod`で解消可能）、加えて
+  playgroundの各compute-agentコンテナは`privileged: true`で動くため、そもそも
+  ホスト側のグループ権限に関係なくデバイスアクセスできることも判明した——
+  self-hosted runnerは不要だった。診断ステップは役目を終えたので削除済み。
+
 - root disk転送のストリーミングpush化を実装した（`docs/open-questions.md`
   「ルートディスク転送のストリーミングpush化」の解消）。
   `internal/compute-agent/imagestore.PushOCIBlob`（`Migrate(transfer_root_disk=

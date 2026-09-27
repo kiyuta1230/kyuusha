@@ -20,7 +20,10 @@ VM作成自体はできるがゲストの実起動は失敗する（スタック
 ```
 
 Tenant作成→Image作成→Ready待ち→VM作成（実Firecracker起動、`/dev/kvm`があれば）→スケジュール→
-Quota強制→認可拒否まで一通り確認する（詳細は各仕様書参照）。CLIを直接使う場合は
+Quota強制→認可拒否まで一通り確認する（詳細は各仕様書参照）。`.github/workflows/ci.yml`の
+`playground-e2e`ジョブとしてpush/PRのたびに自動実行もされる（GitHub-hosted
+runnerでも実際に`/dev/kvm`が使え、実Firecracker起動まで確認できることを確認済み）。
+CLIを直接使う場合は
 `go run ./cmd/kyuusha ... -addr=localhost:8080 -token=$KYUUSHA_TOKEN`
 （`kyuusha token mint`で開発用トークンを発行）。VMのシリアルコンソールは
 `kyuusha vm console -tenant=... -id=... [-follow]`で確認できる
