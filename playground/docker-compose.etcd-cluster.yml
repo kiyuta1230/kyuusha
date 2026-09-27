@@ -1,0 +1,91 @@
+# Optional overlay: turns the base docker-compose.yml's single-member etcd
+# into a real 3-member cluster, for playground/etcd-failover-test.sh (see
+# that script and the base docker-compose.yml's own "etcd" service doc
+# comment for why this needs to be a *real* cluster rather than something
+# kyuusha's own tests fake -- Raft leader election/replication is etcd's
+# own concern, but how kyuusha's etcd client/reconcilers react to a real
+# leader failing is this codebase's concern, and a single member can never
+# exercise that at all).
+#
+# Not meant to be used on its own -- always layered on top of the base
+# file:
+#
+#   export KYUUSHA_ETCD_ENDPOINTS="etcd:2379,etcd-2:2379,etcd-3:2379"
+#   docker compose -f playground/docker-compose.yml \
+#     -f playground/docker-compose.etcd-cluster.yml up -d --build
+#
+# The base file's "etcd" service keeps its name (so every other service's
+# existing `depends_on: etcd: condition: service_healthy` still resolves
+# unchanged) but becomes cluster member 1 of 3; etcd-2/etcd-3 here are the
+# other two. Compose merges `command:` as a full replacement, not an
+# append, so "etcd" needs its entire command respecified here, not just the
+# lines that actually differ from the base file.
+#
+# etcd's own healthcheck (`etcdctl endpoint health`) only succeeds once
+# this member can actually talk to a Raft quorum -- with 3 declared members
+# that means at least 2 must be up, so every other service's existing
+# `depends_on: etcd: condition: service_healthy` naturally waits for the
+# real cluster to be quorate before starting, with no changes needed on
+# their side.
+services:
+  etcd:
+    command:
+      - etcd
+      - "--name=etcd"
+      - "--data-dir=/etcd-data"
+      - "--listen-client-urls=http://0.0.0.0:2379"
+      - "--advertise-client-urls=http://etcd:2379"
+      - "--listen-peer-urls=http://0.0.0.0:2380"
+      - "--initial-advertise-peer-urls=http://etcd:2380"
+      - "--initial-cluster=etcd=http://etcd:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380"
+      - "--initial-cluster-state=new"
+      - "--auto-compaction-mode=periodic"
+      - "--auto-compaction-retention=1h"
+
+  etcd-2:
+    image: gcr.io/etcd-development/etcd:v3.5.17
+    command:
+      - etcd
+      - "--name=etcd-2"
+      - "--data-dir=/etcd-data"
+      - "--listen-client-urls=http://0.0.0.0:2379"
+      - "--advertise-client-urls=http://etcd-2:2379"
+      - "--listen-peer-urls=http://0.0.0.0:2380"
+      - "--initial-advertise-peer-urls=http://etcd-2:2380"
+      - "--initial-cluster=etcd=http://etcd:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380"
+      - "--initial-cluster-state=new"
+      - "--auto-compaction-mode=periodic"
+      - "--auto-compaction-retention=1h"
+    volumes:
+      - etcd-2-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  etcd-3:
+    image: gcr.io/etcd-development/etcd:v3.5.17
+    command:
+      - etcd
+      - "--name=etcd-3"
+      - "--data-dir=/etcd-data"
+      - "--listen-client-urls=http://0.0.0.0:2379"
+      - "--advertise-client-urls=http://etcd-3:2379"
+      - "--listen-peer-urls=http://0.0.0.0:2380"
+      - "--initial-advertise-peer-urls=http://etcd-3:2380"
+      - "--initial-cluster=etcd=http://etcd:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380"
+      - "--initial-cluster-state=new"
+      - "--auto-compaction-mode=periodic"
+      - "--auto-compaction-retention=1h"
+    volumes:
+      - etcd-3-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  etcd-2-data:
+  etcd-3-data:

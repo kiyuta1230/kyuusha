@@ -7,6 +7,25 @@
 
 ## 2026-09-27
 
+- `playground/etcd-failover-test.sh`を追加し、実3メンバーetcdクラスタでの
+  リーダー障害を実際に検証した（本番化ロードマップPhase 03「実ノード障害での
+  reconcilerフェイルオーバー検証」——ただしetcd自体のRaft正しさではなく、
+  kyuusha自身のetcdクライアント/reconcileループが実際のリーダー障害から
+  復帰するかに絞った検証。詳細な理由は`docs/architecture.md`「正直な残課題:
+  etcdクラスタ自体の冗長化はデプロイ環境側の前提」参照）。
+  `playground/docker-compose.yml`は`-etcd-endpoints`を`${KYUUSHA_ETCD_
+  ENDPOINTS:-etcd:2379}`という変数展開に変え（未設定なら従来と完全に同じ
+  単一メンバー構成）、新設の`playground/docker-compose.etcd-cluster.yml`
+  （オーバーレイ、単体では使わない）と組み合わせて初めて3メンバー構成になる。
+  実際にリーダーのコンテナを`docker kill`（優雅な停止ではなく実ノード喪失を
+  模擬）し、6秒後に残り2台で新リーダーが選出されること、その間`compute`/
+  `network`/`block-storage`の各reconcilerプロセスが生き続けること、リーダー
+  交代を挟んで新規に作成したVirtualMachineが問題なくスケジュール・実
+  Firecracker起動まで完了すること、リーダー障害の前から張っていた
+  `kyuusha vm watch`のWatchストリームが再接続無しに配信を継続することを
+  実機で確認した——全てPASS。CIには含めない（実Raft選挙という数秒単位の
+  タイミング依存な検証で、共有CI runnerでの実行に向かないため）。
+
 - quota/スケジューラの並行性・負荷テストを追加した（本番化ロードマップPhase 02の残り、
   `docs/architecture.md`「未決事項」4番目参照）。`internal/compute/concurrency_test.go`に
   2つ追加:

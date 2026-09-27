@@ -29,6 +29,19 @@ CLIを直接使う場合は
 `kyuusha vm console -tenant=... -id=... [-follow]`で確認できる
 （[Firecracker起動仕様](../docs/specs/firecracker-boot.md)参照）。
 
+## 手動検証ツール（CI対象外）
+
+`scenario.sh`とは別に、手動・随時実行を前提としたツールがある（それぞれ自身の
+ヘッダーコメントに詳しい理由を書いている）:
+
+- `./playground/etcd-failover-test.sh`: 通常は単一メンバーのetcdを実3メンバー
+  クラスタに切り替え、実際にリーダーのコンテナを`docker kill`して、kyuushaの
+  各reconcilerとetcdクライアント自身がリーダー障害から自力で復帰するかを検証する
+  （etcd自体のRaft正しさの検証ではない——それは上流の関心事）
+- `./playground/churn.sh [max_vms] [interval_seconds]`: Grafanaダッシュボードを
+  眺めながら数字が動き続けるよう、VM+Volumeの作成・削除を延々と繰り返す
+- `./playground/demo.sh [-y]`: 日本語で読み上げるナレーション付きのプロダクトデモ
+
 ## 構成
 
 kyuusha自身のサービス（api-gateway/compute/identity/image/network/block-storage/

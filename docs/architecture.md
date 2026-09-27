@@ -2122,6 +2122,32 @@ etcdにとって軽微なので、まずは定期compactionの設定だけで様
 このクラスタ自体の可用性はetcdの標準機能でカバーされる——オンメモリだった頃の
 「既存のDBの可用性は別問題」という整理より、実質的にカバー範囲は広い。
 
+**「etcd自体のRaft正しさ」と「kyuusha自身のetcdクライアント/reconcileループが実際の
+リーダー障害に耐えるか」は別の話で、後者はkyuusha側の実装が持ちうるバグの領域として
+残っていた**——`internal/resource.Store.Watch`は自前の再接続・再試行ロジックを一切持たず
+（`clientv3.Client`が返すWatchチャネルが閉じたら、そのままこのStoreのWatch出力チャネルも
+閉じて終わる）、かつ`compute.Reconciler.Run`のようなreconcile面のメインループは起動時に
+一度だけ`Watch`を呼び、そのチャネルが尽きたらループごと`return`して`main()`が素通りして
+プロセスごと終了する（`cmd/*-reconciler/main.go`はエラーの時だけ`os.Exit(1)`し、
+チャネルが単に閉じただけ＝`err == nil`のケースはハンドリングしていない）。つまり
+「etcd自体は無事フェイルオーバーしたのに、kyuusha側のreconcileループだけ静かに
+死んで二度と復帰しない」という壊れ方が理論上ありえた。
+
+`playground/etcd-failover-test.sh`（実3メンバークラスタで実際にリーダーの
+コンテナを`docker kill`する検証、CI対象外——理由はこのスクリプト自身のヘッダー
+コメント参照）で実際に検証した結果、この懸念は実害としては再現しなかった:
+リーダーを実際に強制終了し新リーダーが選出されるまでの間も、事前に張っていた
+Watchストリーム（`compute-reconciler`自身の内部Watchも、CLIの`vm watch`が張る
+外部向けWatchも両方）は途切れず配信を継続し、`compute`/`network`/
+`block-storage`の各reconcilerプロセスも生き続け、リーダー交代を挟んで新規に
+`Create`したVirtualMachineも問題なくスケジュール・実起動まで完了した——
+`go.etcd.io/etcd/client/v3`自身が複数エンドポイント構成のクライアント接続を
+リーダー交代の裏で透過的に維持・再開しているため、kyuusha側が何もしなくても
+このケースはカバーされていた、というのが実測での結論。「一度だけ`Watch`を張って
+チャネルが閉じたら諦める」という書き方自体は依然として脆い設計ではあるものの、
+実際にそれが問題になる状況（本当にetcdクラスタ全体を失う、あるいは`WatchResponse.
+Canceled`を伴う圧縮遅れ等）は今回のリーダー障害単体では踏まなかった。
+
 ## Observability: OpenStack(Ceilometer)を反面教師にする
 
 ### Ceilometerが辿った紆余曲折
