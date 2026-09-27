@@ -73,3 +73,4 @@ protoの生成コードは`gen/go/`にコミット済み（`buf generate`の再�
 - [docs/specs/](docs/specs/README.md) — 完成した機能単位の現状仕様
 - [docs/release-notes.md](docs/release-notes.md) — 日付付きの変更履歴
 - [docs/open-questions.md](docs/open-questions.md) — 未決事項
+- [docs/rolling-upgrade.md](docs/rolling-upgrade.md) — コントロールプレーンのローリングアップグレード手順

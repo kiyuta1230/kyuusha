@@ -7,6 +7,35 @@
 
 ## 2026-09-27
 
+- `docs/rolling-upgrade.md`を新設し、コントロールプレーンのローリング
+  アップグレード手順を文書化・実地確認した（本番化ロードマップPhase 03最後の
+  項目）。API面（ステートレス複製、真のローリング）・reconcile面
+  （常に1インスタンス、recreate方式）・compute-agent（ホストごとの
+  in-placeバイナリ入れ替え）で手順が異なることを明記し、wireプロトコルの
+  互換性ポリシー（protoフィールドは追加のみ）も定めた。
+
+  実地確認: playgroundで(1) VMを`Pending`のまま`compute-reconciler`を
+  停止→確認→再起動し、API面は無停止のまま応答し続け、reconciler復帰後に
+  そのVMが自然に`Running`まで進むこと、(2) `vm get`を継続ポーリングしながら
+  `compute`（API面）をrecreateし、短い接続断（約15秒）の後に状態欠落なく
+  応答が再開すること、を確認した。
+
+  副産物: `internal/compute-agent/fcvmm`/`chvmm`の`Reconcile`（compute-agent
+  プロセス再起動を跨いで実行中のVMプロセスを再認識する、in-placeアップグレード
+  の前提となる機構）に、実装以来初めてテスト（`TestManagerReconcileAdoptsRunning
+  ProcessAcrossRestart`）を追加した——実Firecracker/cloud-hypervisorを使わず、
+  スタンドインの長命プロセス（`sleep`）で同じ検証ができることを確認。
+
+  判明した現実的な制約: 現状の`docker/Dockerfile`のcompute-agentステージは
+  バイナリ自身がコンテナのPID 1（supervisor無し）で、コンテナを作り直さずに
+  バイナリだけをin-place入れ替える手段が無い（コンテナ作り直しはネットワーク
+  名前空間ごと破棄し、そのホスト上の全VMを道連れに終了させる——
+  `docs/specs/snap.md`で既知の挙動）。ベアメタル/systemdデプロイなら
+  `systemctl restart compute-agent`で済むが、コンテナ化デプロイでの
+  in-placeアップグレードには軽量supervisorの導入という構成変更が要る
+  （`docs/open-questions.md`「compute-agentコンテナへのsupervisor導入」に
+  意図的な先送りとして記録、実際にコンテナ化デプロイでの需要が出た時点で着手）。
+
 - `playground/etcd-failover-test.sh`を追加し、実3メンバーetcdクラスタでの
   リーダー障害を実際に検証した（本番化ロードマップPhase 03「実ノード障害での
   reconcilerフェイルオーバー検証」——ただしetcd自体のRaft正しさではなく、

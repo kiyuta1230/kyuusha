@@ -3,6 +3,22 @@
 docs/architecture.md の「未決事項」は設計レベルの論点用。こちらは実装を進める中で
 出てきた、まだ判断を保留している細かい話を随時追加していくメモ。
 
+## compute-agentコンテナへのsupervisor導入（未着手、2026-09-27）
+
+`docs/rolling-upgrade.md`の作業中に判明: 現状の`docker/Dockerfile`の
+compute-agentステージはcompute-agentバイナリ自身がコンテナのPID
+1（supervisor無し）で、コンテナ自体を作り直さずにバイナリだけをin-place
+入れ替える手段が無い——コンテナ作り直しはネットワーク名前空間ごと破棄し、
+そのホスト上の全VMプロセス（Firecracker/jailerの子プロセス含む）を道連れに
+終了させる（`docs/specs/snap.md`で既に確認済みの挙動）。ベアメタル/systemd
+デプロイなら`systemctl restart compute-agent`だけで済み、`Reconcile()`の
+adopt機構（`TestManagerReconcileAdoptsRunningProcessAcrossRestart`で検証済み）
+がそのまま効くが、コンテナ化する場合はtini/dumb-init等の軽量supervisorを
+挟んでcompute-agentをその子プロセスにする構成変更が要る——シグナル転送・
+ヘルスチェック・ログの扱いに影響するため、意図的に今回は着手せず先送りした。
+実際にコンテナ化デプロイでのin-placeアップグレードが必要になった時点で
+着手する。
+
 ## ingress_rules/egress_rules周りで見送っていた2項目（解決済み・実装済み、2026-09-27）
 
 `shared_with_tenant_ids`によるクロステナントCIDR許可の検証（`internal/network/
