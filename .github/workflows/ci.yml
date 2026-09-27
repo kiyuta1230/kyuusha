@@ -58,9 +58,14 @@ jobs:
       # Never fails the job.
       - name: check /dev/kvm availability (informational)
         run: |
+          id
           if [ -e /dev/kvm ]; then
             ls -la /dev/kvm
-            echo "kvm-ok=true" >> "$GITHUB_STEP_SUMMARY"
+            if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+              echo "::notice::/dev/kvm present and accessible by this user"
+            else
+              echo "::notice::/dev/kvm present but NOT accessible by this user (permission denied)"
+            fi
           else
             echo "::notice::/dev/kvm not present on this runner"
           fi
