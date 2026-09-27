@@ -59,15 +59,25 @@ jobs:
       - name: check /dev/kvm availability (informational)
         run: |
           id
-          if [ -e /dev/kvm ]; then
+          if [ ! -e /dev/kvm ]; then
+            echo "::notice::/dev/kvm not present on this runner"
+            exit 0
+          fi
+          ls -la /dev/kvm
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "::notice::/dev/kvm present and accessible by this user"
+            exit 0
+          fi
+          echo "::notice::/dev/kvm present but not accessible yet -- trying passwordless sudo to fix perms"
+          if sudo -n chmod 666 /dev/kvm 2>&1; then
             ls -la /dev/kvm
             if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-              echo "::notice::/dev/kvm present and accessible by this user"
+              echo "::notice::/dev/kvm accessible after sudo chmod"
             else
-              echo "::notice::/dev/kvm present but NOT accessible by this user (permission denied)"
+              echo "::notice::still not accessible even after sudo chmod"
             fi
           else
-            echo "::notice::/dev/kvm not present on this runner"
+            echo "::notice::passwordless sudo not available on this runner"
           fi
         continue-on-error: true
 
