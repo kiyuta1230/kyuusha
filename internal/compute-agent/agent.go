@@ -487,7 +487,7 @@ func (a *Agent) handleStop(msg jetstream.Msg) {
 }
 
 // handleUpdateACL re-applies a NetworkInterface's current ingress_rules/
-// egress_rules (see internal/compute-agent/secacl) once the VM they belong
+// egress_rules (see internal/compute-agent/snap) once the VM they belong
 // to has actually finished booting on this host. Unlike every other
 // handleX above, this deliberately does NOT Ack on receipt: only once some
 // driver reports the tap as wired (ApplyACL's applied=true) does it Ack --

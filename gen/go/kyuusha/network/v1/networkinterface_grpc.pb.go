@@ -41,7 +41,7 @@ type NetworkInterfaceServiceClient interface {
 	// egress_rules after Create -- Update (above) rejects any request whose
 	// spec.ingress_rules/egress_rules differ from the stored value, so this
 	// path's validation and NATS-based host propagation (see
-	// docs/specs/network.md "セキュリティバックエンド") can't be bypassed.
+	// docs/specs/snap.md) can't be bypassed.
 	UpdateFirewallRules(ctx context.Context, in *UpdateFirewallRulesRequest, opts ...grpc.CallOption) (*NetworkInterface, error)
 	Delete(ctx context.Context, in *DeleteNetworkInterfaceRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Watch(ctx context.Context, in *WatchNetworkInterfacesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[NetworkInterfaceEvent], error)
@@ -146,7 +146,7 @@ type NetworkInterfaceServiceServer interface {
 	// egress_rules after Create -- Update (above) rejects any request whose
 	// spec.ingress_rules/egress_rules differ from the stored value, so this
 	// path's validation and NATS-based host propagation (see
-	// docs/specs/network.md "セキュリティバックエンド") can't be bypassed.
+	// docs/specs/snap.md) can't be bypassed.
 	UpdateFirewallRules(context.Context, *UpdateFirewallRulesRequest) (*NetworkInterface, error)
 	Delete(context.Context, *DeleteNetworkInterfaceRequest) (*emptypb.Empty, error)
 	Watch(*WatchNetworkInterfacesRequest, grpc.ServerStreamingServer[NetworkInterfaceEvent]) error

@@ -1,7 +1,7 @@
 //go:build ignore
 
-// secacl.c implements kyuusha's security-backend plugin contract
-// (internal/compute-agent/secacl) natively in eBPF, via TC-BPF attached
+// snap.c implements kyuusha's security-backend plugin contract
+// (internal/compute-agent/snap) natively in eBPF, via TC-BPF attached
 // directly to a VM's tap device -- unlike the default nftacl implementation
 // (bridge-family nftables), this does NOT require the tap to be a Linux
 // bridge port, so it also works with non-bridge VNAP tap wiring (e.g. the
@@ -58,7 +58,7 @@
 // implementation is a separate, later plugin).
 #define CONNTRACK_TIMEOUT_NS (120ULL * 1000000000ULL)
 
-// rule mirrors secacl.FirewallRule plus the SubnetCIDR/GatewayIP baseline
+// rule mirrors snap.FirewallRule plus the SubnetCIDR/GatewayIP baseline
 // main.go injects as the first two entries of each map -- see this
 // package's README for the exact wire-to-map field mapping.
 struct rule {
@@ -116,7 +116,7 @@ struct flow5 {
 	__u16 sport;
 	__u16 dport; // rule matching always checks dport regardless of
 	             // direction -- see match_ingress_rules/match_egress_rules
-	             // and secacl's README; sport exists only to make the
+	             // and snap's README; sport exists only to make the
 	             // conntrack key a genuine 5-tuple (see make_conntrack_key).
 	__u8 protocol;
 };

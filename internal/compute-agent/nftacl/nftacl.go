@@ -1,6 +1,6 @@
-// Package nftacl is secacl's default, built-in ACL enforcement backend
+// Package nftacl is snap's default, built-in ACL enforcement backend
 // (used whenever compute-agent's -security-backend-bin is empty -- see
-// internal/compute-agent/secacl's own doc comment for why ACL enforcement
+// internal/compute-agent/snap's own doc comment for why ACL enforcement
 // is a separate pluggable concern from netsetup's VNAP tap-wiring). It
 // shells out to the `nft` CLI (exec.Command, matching netsetup.runIP's own
 // exec-heavy style -- no separate Go nftables library dependency), same as
@@ -57,7 +57,7 @@ import (
 	"strings"
 )
 
-// FirewallRule mirrors secacl.FirewallRule -- its own copy, not an import,
+// FirewallRule mirrors snap.FirewallRule -- its own copy, not an import,
 // same "each layer has its own mirror struct" convention as netsetup's own
 // types.
 type FirewallRule struct {

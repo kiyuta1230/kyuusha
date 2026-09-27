@@ -9,8 +9,7 @@ import (
 
 // validateFirewallRules is shared by ingress_rules and egress_rules --
 // direction doesn't change the shape of a single rule, only which nftables
-// chain compute-agent's secacl/nftacl enforces it in (see
-// docs/specs/network.md "セキュリティバックエンド").
+// chain compute-agent's SNAP/nftacl enforces it in (see docs/specs/snap.md).
 func validateFirewallRules(rules []FirewallRule) error {
 	for i, r := range rules {
 		switch r.Protocol {

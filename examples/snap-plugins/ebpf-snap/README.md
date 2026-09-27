@@ -1,14 +1,14 @@
-# ebpf-secacl
+# ebpf-snap
 
 A reference implementation of kyuusha's security-backend plugin contract
-(`internal/compute-agent/secacl`), enforcing `ingress_rules`/`egress_rules`
+(`internal/compute-agent/snap`), enforcing `ingress_rules`/`egress_rules`
 natively in eBPF (TC-BPF, attached directly to the VM's tap device) instead
 of the default `nftacl` (bridge-family nftables). See
 `../README.md`/`docs/specs/network.md`「セキュリティバックエンド」 for the
 contract itself.
 
 **This is the stateful version.** It tracks established flows itself in a
-BPF map (see `bpf/secacl.c`'s own doc comment), since TC-BPF hooks have no
+BPF map (see `bpf/snap.c`'s own doc comment), since TC-BPF hooks have no
 access to netfilter's own conntrack the way `nftacl`'s bridge-family
 `ct state established,related` does. A hypothetical future, separate
 plugin is expected to trade this away for raw throughput -- this one
@@ -46,7 +46,7 @@ shared bridge at all.
     hands-on, not assumed -- see the veth-pair test log this plugin was
     verified with.
   - Timeout is a single fixed constant (`CONNTRACK_TIMEOUT_NS` in
-    `bpf/secacl.c`), not protocol-aware. Adjust if 120s doesn't fit your
+    `bpf/snap.c`), not protocol-aware. Adjust if 120s doesn't fit your
     workload.
 - **Rules**: up to 64 entries per direction per tap (`MAX_RULES`), first
   match wins, exactly like `nftacl`. The Subnet CIDR and gateway_ip
@@ -78,8 +78,8 @@ shared bridge at all.
 ## Build
 
 ```sh
-go generate ./...   # only if you changed bpf/secacl.c or regenerated vmlinux.h
-go build -o ebpf-secacl .
+go generate ./...   # only if you changed bpf/snap.c or regenerated vmlinux.h
+go build -o ebpf-snap .
 ```
 
 ## Use
@@ -87,7 +87,7 @@ go build -o ebpf-secacl .
 Point compute-agent at the built binary:
 
 ```sh
-compute-agent ... -security-backend-bin=/path/to/ebpf-secacl
+compute-agent ... -security-backend-bin=/path/to/ebpf-snap
 ```
 
 ## Verified

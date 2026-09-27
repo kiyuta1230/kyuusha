@@ -37,7 +37,7 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/cgroup"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/imagestore"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/netsetup"
-	"github.com/kiyuta1230/kyuusha/internal/compute-agent/secacl"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/snap"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
 )
@@ -135,9 +135,9 @@ type Manager struct {
 	// すべきか」. Empty (the default) keeps today's behavior unchanged.
 	NetworkAttachBin string
 	// SecurityBackendBin, if set, is the external security-backend plugin
-	// binary secacl.Attach/Detach delegate ACL enforcement to, instead of
+	// binary snap.Attach/Detach delegate ACL enforcement to, instead of
 	// the built-in nftacl implementation -- see internal/compute-agent/
-	// secacl's package doc comment. Empty (the default) keeps ACL
+	// snap's package doc comment. Empty (the default) keeps ACL
 	// enforcement in this process via nftacl.
 	SecurityBackendBin string
 
@@ -265,7 +265,7 @@ func (m *Manager) RootDiskPath(vmID string) (string, error) {
 }
 
 // ApplyACL looks up ifaceID's tap among vmID's already-wired interfaces (if
-// any) and, only if found, re-applies its ACL state via secacl.Attach --
+// any) and, only if found, re-applies its ACL state via snap.Attach --
 // see vmm.VMM's own doc comment for the applied=false/no-tap-yet contract.
 func (m *Manager) ApplyACL(vmID, ifaceID, subnetCIDR, gatewayIP string, ingress, egress []vmm.FirewallRule) (bool, error) {
 	m.mu.Lock()
@@ -284,18 +284,18 @@ func (m *Manager) ApplyACL(vmID, ifaceID, subnetCIDR, gatewayIP string, ingress,
 	if tap == "" {
 		return false, nil
 	}
-	err := secacl.Attach(secacl.Interface{
+	err := snap.Attach(snap.Interface{
 		IfaceID: ifaceID, VMID: vmID, TenantID: tenantID, TapName: tap,
 		SubnetCIDR: subnetCIDR, GatewayIP: gatewayIP,
-		IngressRules: toSecaclRules(ingress), EgressRules: toSecaclRules(egress),
+		IngressRules: toSnapRules(ingress), EgressRules: toSnapRules(egress),
 	}, m.SecurityBackendBin)
 	return true, err
 }
 
-func toSecaclRules(rules []vmm.FirewallRule) []secacl.FirewallRule {
-	var out []secacl.FirewallRule
+func toSnapRules(rules []vmm.FirewallRule) []snap.FirewallRule {
+	var out []snap.FirewallRule
 	for _, r := range rules {
-		out = append(out, secacl.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
+		out = append(out, snap.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
 	}
 	return out
 }
@@ -394,7 +394,7 @@ func (m *Manager) watchAdopted(vmID, vmDir string, rv *runningVM) {
 		if i < len(rv.ifaceIDs) {
 			ifaceID = rv.ifaceIDs[i]
 		}
-		_ = secacl.Detach(ifaceID, vmID, rv.tenantID, t, m.SecurityBackendBin)
+		_ = snap.Detach(ifaceID, vmID, rv.tenantID, t, m.SecurityBackendBin)
 		_ = netsetup.DeleteTap(t, ifaceID, vmID, rv.tenantID, m.NetworkAttachBin)
 	}
 	for _, p := range rv.volumeMounts {
@@ -547,7 +547,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 			if i < len(ifaceIDs) {
 				ifaceID = ifaceIDs[i]
 			}
-			_ = secacl.Detach(ifaceID, spec.VMID, spec.TenantID, t, m.SecurityBackendBin)
+			_ = snap.Detach(ifaceID, spec.VMID, spec.TenantID, t, m.SecurityBackendBin)
 			_ = netsetup.DeleteTap(t, ifaceID, spec.VMID, spec.TenantID, m.NetworkAttachBin)
 		}
 		for _, p := range volumeMounts {
@@ -572,10 +572,10 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		}
 		taps = append(taps, wired.TapName)
 		ifaceIDs = append(ifaceIDs, ni.IfaceID)
-		if err := secacl.Attach(secacl.Interface{
+		if err := snap.Attach(snap.Interface{
 			IfaceID: ni.IfaceID, VMID: spec.VMID, TenantID: spec.TenantID, TapName: wired.TapName,
 			SubnetCIDR: ni.SubnetCIDR, GatewayIP: ni.GatewayIP,
-			IngressRules: toSecaclRules(ni.IngressRules), EgressRules: toSecaclRules(ni.EgressRules),
+			IngressRules: toSnapRules(ni.IngressRules), EgressRules: toSnapRules(ni.EgressRules),
 		}, m.SecurityBackendBin); err != nil {
 			cleanup()
 			return nil, fmt.Errorf("fcvmm: apply ACL for network interface %d (%s): %w", i, ni.IfaceID, err)

@@ -1,7 +1,7 @@
 #!/bin/sh
 # frr-type5.sh -- a reference VNAP (VM Network Attach Protocol; see
 # docs/architecture.md「VMのネットワーク接続をCNIのようにプラガブルにすべきか」
-# and docs/specs/network.md「VNAP（ローカルなtap配線プラグイン契約）」) plugin
+# and docs/specs/vnap.md) plugin
 # for a pure EVPN Type-5 deployment (see docs/network-deployment-guide.md
 # 「3.5. Type-5（EVPN pure L3）デプロイの場合」).
 #
@@ -84,7 +84,7 @@ attach)
 		exit 1
 	fi
 	# "replace", not "add": attach must be idempotent (see this script's
-	# doc comment and docs/specs/network.md「VNAP」「冪等性」) -- a resent
+	# doc comment and docs/specs/vnap.md「冪等性」) -- a resent
 	# CreateCommand re-invokes Wire for a tap already wired.
 	if ! ip addr replace "${gateway_ip}/32" dev "$tap"; then
 		echo "frr-type5: assign gateway_ip to $tap failed" >&2
@@ -114,9 +114,9 @@ attach)
 	;;
 
 detach)
-	# detach's payload never carries ip_address (see docs/specs/
-	# network.md「VNAP」: removing a port never needs to know what it used
-	# to be configured with) -- recover it from the kernel's own /32 route
+	# detach's payload never carries ip_address (see docs/specs/vnap.md:
+	# removing a port never needs to know what it used to be configured
+	# with) -- recover it from the kernel's own /32 route
 	# for this tap instead, which (unlike a bridge attachment) this script
 	# itself installed at attach time and which still exists at this point
 	# (netsetup.DeleteTap calls detach before removing the tap device).

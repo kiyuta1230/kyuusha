@@ -18,8 +18,8 @@ const cmdStreamName = "NETWORK_CMD"
 
 // CmdSubjectUpdateACL is where UpdateFirewallRules notifies the hypervisor
 // currently running a NetworkInterface's VM that its ingress_rules/
-// egress_rules changed -- see internal/compute-agent/secacl and
-// docs/specs/network.md「セキュリティバックエンド」.
+// egress_rules changed -- see internal/compute-agent/snap and
+// docs/specs/snap.md.
 func CmdSubjectUpdateACL(hypervisor string) string {
 	return fmt.Sprintf("ms.network.cmd.%s.network_interface.update_acl", hypervisor)
 }

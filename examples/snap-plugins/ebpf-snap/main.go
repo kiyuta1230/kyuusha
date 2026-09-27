@@ -1,5 +1,5 @@
-// Command ebpf-secacl is a reference implementation of kyuusha's
-// security-backend plugin contract (internal/compute-agent/secacl),
+// Command ebpf-snap is a reference implementation of kyuusha's
+// security-backend plugin contract (internal/compute-agent/snap),
 // enforcing NetworkInterface ingress_rules/egress_rules natively in eBPF
 // (TC-BPF, attached directly to the VM's tap device) instead of nftacl's
 // default bridge-family nftables. Unlike nftacl, this does not require the
@@ -7,14 +7,14 @@
 // wiring (e.g. examples/vnap-plugins/frr-type5.sh's EVPN Type-5 setup).
 //
 // This is the stateful version: it tracks established flows itself (see
-// bpf/secacl.c's conntrack map), since TC-BPF hooks have no access to
+// bpf/snap.c's conntrack map), since TC-BPF hooks have no access to
 // netfilter's own conntrack. A future, separate stateless/performance-
 // focused plugin is expected to trade this away for raw throughput -- see
 // this package's README for the full trade-off discussion.
 //
 // Same contract as every other security-backend plugin: exec'd as
 // "<bin> attach" or "<bin> detach" with a JSON payload on stdin, success is
-// exit code 0 only. See internal/compute-agent/secacl's pluginRequest for
+// exit code 0 only. See internal/compute-agent/snap's pluginRequest for
 // the authoritative shape this mirrors.
 package main
 
@@ -34,12 +34,12 @@ import (
 )
 
 // pinRoot holds every tap's pinned maps/links plus the one host-wide
-// shared conntrack map -- see bpf/secacl.c's own doc comment for why
+// shared conntrack map -- see bpf/snap.c's own doc comment for why
 // conntrack is shared across taps but rules_ingress/rules_egress are not.
-const pinRoot = "/sys/fs/bpf/kyuusha-secacl"
+const pinRoot = "/sys/fs/bpf/kyuusha-snap"
 
-// firewallRule mirrors secacl.pluginFirewallRule exactly (internal/
-// compute-agent/secacl/secacl.go) -- the wire shape is part of the
+// firewallRule mirrors snap.pluginFirewallRule exactly (internal/
+// compute-agent/snap/snap.go) -- the wire shape is part of the
 // contract, not something this plugin gets to redefine.
 type firewallRule struct {
 	Protocol   string `json:"protocol"`
@@ -48,7 +48,7 @@ type firewallRule struct {
 	Action     string `json:"action"`
 }
 
-// pluginRequest mirrors secacl.pluginRequest exactly.
+// pluginRequest mirrors snap.pluginRequest exactly.
 type pluginRequest struct {
 	TapName    string `json:"tap_name"`
 	IfaceID    string `json:"iface_id"`
@@ -63,7 +63,7 @@ type pluginRequest struct {
 
 func main() {
 	if len(os.Args) != 2 || (os.Args[1] != "attach" && os.Args[1] != "detach") {
-		fmt.Fprintln(os.Stderr, "usage: ebpf-secacl attach|detach  (JSON payload on stdin)")
+		fmt.Fprintln(os.Stderr, "usage: ebpf-snap attach|detach  (JSON payload on stdin)")
 		os.Exit(2)
 	}
 
@@ -91,7 +91,7 @@ func main() {
 }
 
 func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "ebpf-secacl: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "ebpf-snap: "+format+"\n", args...)
 	os.Exit(1)
 }
 
@@ -272,14 +272,14 @@ func populateRules(m *ebpf.Map, subnetCIDR, gatewayIP string, rules []firewallRu
 	return nil
 }
 
-// maxRules must match bpf/secacl.c's MAX_RULES.
+// maxRules must match bpf/snap.c's MAX_RULES.
 const maxRules = 64
 
 // CidrAddr/CidrMask must be built with binary.NativeEndian, not
 // binary.BigEndian: cilium/ebpf serializes a Go struct's fields into the
 // map's raw bytes using the host's native byte order (bpf2go generates a
 // bpfeb/bpfel variant pair for exactly this reason), so the only way the
-// raw bytes stored in the map end up matching bpf/secacl.c's un-converted
+// raw bytes stored in the map end up matching bpf/snap.c's un-converted
 // (network-order) ip->saddr/daddr comparison is to pack them natively here
 // too -- using BigEndian on a little-endian host silently byte-swaps every
 // address and breaks all matching (found via hands-on veth testing, not
@@ -381,7 +381,7 @@ func parsePortRange(s string) (uint16, uint16, error) {
 // so simply unlinking the pin directory drops the links' and maps' last
 // reference and the kernel detaches/frees them itself, no separate
 // load-then-Close step needed. The shared conntrack map is left untouched
-// (see bpf/secacl.c's doc comment: flows aren't tap-scoped, and stale
+// (see bpf/snap.c's doc comment: flows aren't tap-scoped, and stale
 // entries age out via CONNTRACK_TIMEOUT_NS anyway -- the same non-cleanup
 // nftacl itself accepts for its own ct state table).
 func detach(req pluginRequest) error {

@@ -11,7 +11,7 @@ nftables implementation. See:
   even though the exec/stdin-JSON/exit-code mechanics are identical
 - `docs/specs/network.md`「セキュリティバックエンド」for the full wire
   contract (JSON payloads, exit codes, timeout, idempotency requirements)
-- `internal/compute-agent/secacl` for the Go-side contract these mirror
+- `internal/compute-agent/snap` for the Go-side contract these mirror
 
 These are meant to be read and adapted to your own environment, not
 deployed as-is -- see each plugin's own README/header comment for its
@@ -19,4 +19,4 @@ specific assumptions, dependencies, and trade-offs.
 
 | Plugin | Approach | Notes |
 |---|---|---|
-| `ebpf-secacl/` | TC-BPF (`cilium/ebpf`), stateful | Works with non-bridge tap wiring (e.g. `examples/vnap-plugins/frr-type5.sh`'s EVPN Type-5), unlike nftacl. Tracks its own flow state (see its README) since TC hooks have no netfilter conntrack; a separate, stateless/performance-focused plugin is expected later, not this one |
+| `ebpf-snap/` | TC-BPF (`cilium/ebpf`), stateful | Works with non-bridge tap wiring (e.g. `examples/vnap-plugins/frr-type5.sh`'s EVPN Type-5), unlike nftacl. Tracks its own flow state (see its README) since TC hooks have no netfilter conntrack; a separate, stateless/performance-focused plugin is expected later, not this one |

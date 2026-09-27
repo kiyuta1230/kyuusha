@@ -16,6 +16,8 @@
 - [Firecracker起動](firecracker-boot.md)
 - [cloud-hypervisor起動](cloud-hypervisor-boot.md)
 - [network](network.md)
+- [VNAP（VM Network Attach Protocol）](vnap.md)
+- [SNAP（Security Network Attach Protocol）](snap.md)
 - [Volume](volume.md)
 - [外部システム連携](external-integration.md)
 - [CLI](cli.md)

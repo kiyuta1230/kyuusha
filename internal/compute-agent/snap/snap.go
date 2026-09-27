@@ -1,16 +1,16 @@
-// Package secacl implements a pluggable ACL/security-backend contract for
-// a VM's NetworkInterface, deliberately separate from netsetup's VNAP
-// (tap-to-switch wiring) contract even though the mechanics are copy-pasted
+// Package snap implements SNAP (Security Network Attach Protocol), a
+// pluggable ACL/security-backend contract for a VM's NetworkInterface,
+// deliberately separate from netsetup's VNAP (VM Network Attach Protocol,
+// tap-to-switch wiring) contract even though the mechanics are copy-pasted
 // from it (exec, stdin JSON, exit-code-only success, 10s timeout, plugin-
 // side idempotency) -- wiring and ACL enforcement are orthogonal concerns
 // (an operator may want to swap one without the other, e.g. keep the
 // built-in Linux bridge but enforce ACLs with eBPF or OVS instead of
 // nftables), so they get independent flags/binaries rather than one
-// combined plugin. See docs/specs/network.md「セキュリティバックエンド」
-// for the full contract and docs/architecture.md「VMのネットワーク接続を
-// CNIのようにプラガブルにすべきか」for VNAP's own identical-shape
-// precedent this mirrors.
-package secacl
+// combined plugin. See docs/specs/snap.md for the full contract and
+// docs/specs/vnap.md for VNAP's own identical-shape precedent this
+// mirrors.
+package snap
 
 import (
 	"bytes"
@@ -136,7 +136,7 @@ const pluginTimeout = 10 * time.Second
 func runPlugin(securityBackendBin, verb string, req pluginRequest) error {
 	payload, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("secacl: marshal request: %w", err)
+		return fmt.Errorf("snap: marshal request: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pluginTimeout)
 	defer cancel()
@@ -144,7 +144,7 @@ func runPlugin(securityBackendBin, verb string, req pluginRequest) error {
 	cmd.Stdin = bytes.NewReader(payload)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("secacl: security-backend plugin %s %s: %w: %s", securityBackendBin, verb, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("snap: security-backend plugin %s %s: %w: %s", securityBackendBin, verb, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

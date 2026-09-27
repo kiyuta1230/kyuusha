@@ -1,4 +1,4 @@
-module github.com/kiyuta1230/kyuusha/examples/security-plugins/ebpf-secacl
+module github.com/kiyuta1230/kyuusha/examples/snap-plugins/ebpf-snap
 
 go 1.25.0
 

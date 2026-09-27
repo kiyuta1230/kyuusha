@@ -2514,11 +2514,12 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - **ACL(`ingress_rules`/`egress_rules`)強制もVNAPと同じ発想でプラガブルにすべきか**
   （判断確定・実装済み、2026-09-27）: VNAPが「tap配線」という1つの責務を切り出した
   のに対し、ACL強制は直交する別の関心事（配線先がLinuxブリッジかOVSかeBPFかに関わらず、
-  「何を通すか」は独立に選べるべき）と判断し、VNAPとは**別のプラグイン契約**
-  （compute-agentの`-security-backend-bin`、`internal/compute-agent/secacl`）として
-  追加した。呼び出し規約（バイナリ+stdin JSON+exit codeのみで成否判定、10秒
-  タイムアウト、プラグイン側の冪等性責務）はVNAPと同型だが、ペイロードもフラグも
-  独立しているため、tap配線とACL強制を別々に差し替えられる。
+  「何を通すか」は独立に選べるべき）と判断し、VNAPとは**別のプラグイン契約**——
+  SNAP（Security Network Attach Protocol、compute-agentの`-security-backend-bin`、
+  `internal/compute-agent/snap`）として追加した。呼び出し規約（バイナリ+stdin
+  JSON+exit codeのみで成否判定、10秒タイムアウト、プラグイン側の冪等性責務）は
+  VNAPと同型だが、ペイロードもフラグも独立しているため、tap配線とACL強制を
+  別々に差し替えられる。
 
   デフォルト実装（`internal/compute-agent/nftacl`）は、実機検証で判明した制約により
   **netdevファミリではなくbridgeファミリ**を採用した: tapごとの独立したnetdev
@@ -2527,10 +2528,10 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
   前段のフックであるためで環境依存の問題ではない）ことが実機テストで判明し断念——
   bridgeファミリのforwardフックに切り替えることでconntrackが正常に使えるようになった
   代わりに、tapがLinuxブリッジのポートであることが前提となった。非ブリッジ配線
-  （EVPN Type-5のVNAP例等）を使う場合は、この既定実装ではなく別のセキュリティ
-  バックエンドプラグインを組み合わせる必要がある——この制約は許容し、汎用的な
-  「配線方式を問わないデフォルトACL実装」は目指さないことにした（詳細な設計・
-  実機確認結果は[network仕様](specs/network.md)「セキュリティバックエンド」参照）。
+  （EVPN Type-5のVNAP例等）を使う場合は、この既定実装ではなく別のSNAP実装を
+  組み合わせる必要がある——この制約は許容し、汎用的な「配線方式を問わないデフォルト
+  ACL実装」は目指さないことにした（詳細な設計・実機確認結果は
+  [SNAP仕様](specs/snap.md)参照）。
 
   ingress_rules自体の更新（`UpdateFirewallRules`、専用RPC）は、対象VMが稼働中の
   Hypervisorへ`network`独自のNATS JetStreamストリーム（`NETWORK_CMD`）でベスト
@@ -2541,13 +2542,12 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
   NATS利用」と同じ例外（reconcilerの単一レプリカ制約とは無関係、各レプリカが独立に
   依存先へ繋ぐだけ）として扱う。
 
-  「非ブリッジ配線には別のセキュリティバックエンドが要る」という上記の制約が
-  実際にプラガブル契約で解決できることを、TC-BPF（`cilium/ebpf`、tapに直接
-  アタッチしブリッジのポートである必要が無い）による参考実装
-  `examples/security-plugins/ebpf-secacl`で検証済み（実機確認: veth
-  ペア+network namespaceでの実トラフィック、ステートフルな確立済み接続の
-  自動許可も含む。詳細は[network仕様](specs/network.md)「非ブリッジ配線向けの
-  参考実装」参照）。
+  「非ブリッジ配線には別のSNAP実装が要る」という上記の制約が実際にプラガブル契約で
+  解決できることを、TC-BPF（`cilium/ebpf`、tapに直接アタッチしブリッジのポートで
+  ある必要が無い）による参考実装`examples/snap-plugins/ebpf-snap`で検証済み
+  （実機確認: vethペア+network namespaceでの実トラフィック、ステートフルな
+  確立済み接続の自動許可も含む。詳細は[SNAP仕様](specs/snap.md)「非ブリッジ配線
+  向けの参考実装」参照）。
 
 - `vm create -subnets=`がtap配線されないまま起動するバグ（発見・修正済み、
   原因はNetworkInterfaceの非同期IP割り当てをcompute側が待たずにbootへ進んでいたこと、

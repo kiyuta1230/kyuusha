@@ -8,8 +8,8 @@ bridge implementation. See:
 
 - `docs/architecture.md`「VMのネットワーク接続をCNIのようにプラガブルにすべきか」
   for why this exists and why it deliberately isn't CNI-compatible
-- `docs/specs/network.md`「VNAP（ローカルなtap配線プラグイン契約）」for the full
-  wire contract (JSON payloads, exit codes, timeout, idempotency requirements)
+- `docs/specs/vnap.md` for the full wire contract (JSON payloads, exit
+  codes, timeout, idempotency requirements)
 - `docs/network-deployment-guide.md` for the physical-network-side
   prerequisites these examples assume
 

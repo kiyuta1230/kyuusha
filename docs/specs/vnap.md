@@ -1,0 +1,40 @@
+# VNAP（VM Network Attach Protocol）仕様
+
+`docs/architecture.md`「VMのネットワーク接続をCNIのようにプラガブルにすべきか」
+（解決済みリスト参照）で確定した設計の実装。ローカルなtap配線プラグイン契約——
+`-network-attach-bin`（compute-agentのフラグ）を指定すると、[network仕様](network.md)
+「tap配線とローカルネットワーク」の**スイッチへの実配線ステップだけ**を外部バイナリへ
+委譲できる——tapデバイス自体の作成・削除は常に`netsetup`（厩舎自身）が担う。未指定
+（既定）なら今まで通り固定のLinuxブリッジ実装のまま、既存の挙動は一切変わらない。
+
+- **CNI互換ではない**: VMのtapデバイスに対応するnetnsは存在しないため、CNIの
+  `CNI_NETNS`/`CNI_IFNAME`のようなnetns移動の契約は採用しない
+  （`docs/architecture.md`「設計原則: KubeVirtを反面教師にする」節が名指す誤りを
+  繰り返さないため）。CNIから借りているのは「バイナリ+stdin JSON+exit code」
+  という呼び出し規約パターンだけ
+- **呼び出し**: `<bin> attach`/`<bin> detach`をexec、標準入力にJSON
+  （`internal/compute-agent/netsetup`の`pluginRequest`）を渡す。ADD/DELという
+  CNI用語は使わない
+- **attachのpayload**（全フィールド）: `tap_name`/`iface_id`/`vm_id`/`tenant_id`/
+  `mac_address`/`ip_address`/`prefix_len`/`gateway_ip`/`vlan_id`/`primary`
+- **detachのpayload**（識別に要る最小限のみ）: `tap_name`/`iface_id`/`vm_id`/
+  `tenant_id`——ポートを消すのに以前の設定内容（IP/MAC/VLAN等）は不要なため
+- **成否はexit codeのみ**（0=成功）。構造化されたResult JSONは要求しない——
+  tap/IP/MACは全て厩舎が既に作成済みで、プラグインが新たに報告すべき情報が無いため
+- **タイムアウト**: 10秒（`pluginTimeout`）。ハングしたプラグインがVM起動/削除を
+  無期限にブロックしないようにする
+- **冪等性**: attach/detachはプラグイン側の責務として冪等でなければならない
+  （stuck-phase retry sweepがCreateCommandを再送すると`Wire`も再実行されるため）
+- **失敗時の扱い**: attach失敗は`Wire`の既存のエラー経路にそのまま乗る（Boot全体が
+  失敗し、それまでに配線済みのtapは既存の`cleanup()`が後始末）。detach失敗は
+  ログのみで継続——tapデバイス自体は、detachプラグインの成否に関わらず必ず削除される
+  （プラグイン障害でtapがリークすることはない）
+
+**参考実装**: `examples/vnap-plugins/frr-type5.sh`——EVPN Type-5（pure L3）
+デプロイ向けのサンプル（[network-deployment-guide.md](../network-deployment-guide.md)
+「3.5. Type-5（EVPN pure L3）デプロイの場合」参照）。共有ブリッジを使わず、
+VMごとのtapへ`gateway_ip`を`/32`で直接付与しproxy ARPを有効化した上で、VM自身の
+IPを`/32`のホストルートとしてカーネルとFRR（`vtysh`経由）の両方へ注入する。
+playgroundで実機確認済み（Firecrackerゲストがブリッジ無しで実際に起動しゲスト
+自身がgatewayへのpingに成功、VM削除時にFRR側のルートも正しく引き上げられることを
+確認）。

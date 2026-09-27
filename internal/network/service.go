@@ -708,7 +708,7 @@ func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, 
 // the same computeClient sweepOrphanedNetworkInterfaces already holds) and
 // publishes an UpdateACLCommand to it. Best-effort only: a resolve failure,
 // an unscheduled VM (empty hypervisor -- the eventual boot-time
-// secacl.Attach will carry the current rules anyway), a nil computeClient/
+// snap.Attach will carry the current rules anyway), a nil computeClient/
 // js, or a publish failure all just log-and-return, never propagate to the
 // caller -- the etcd write already succeeded, and this is host-state
 // convergence, not correctness of the API call itself.

@@ -75,9 +75,9 @@ type VMM interface {
 	// already been deleted).
 	RootDiskPath(vmID string) (string, error)
 	// ApplyACL re-applies ingress/egress firewall rules for an already-
-	// wired NetworkInterface (vmID, ifaceID), via secacl.Attach -- the
-	// post-boot counterpart to Boot's own initial secacl.Attach call (see
-	// docs/specs/network.md「セキュリティバックエンド」). subnetCIDR/
+	// wired NetworkInterface (vmID, ifaceID), via snap.Attach -- the
+	// post-boot counterpart to Boot's own initial snap.Attach call (see
+	// docs/specs/snap.md). subnetCIDR/
 	// gatewayIP are passed in fresh (from the triggering
 	// network.UpdateACLCommand) rather than looked up from this driver's
 	// own boot-time state, so nothing here needs to survive a
@@ -302,9 +302,9 @@ type NetIface struct {
 	VLANID     int32
 	Primary    bool
 	// SubnetCIDR is this interface's Subnet's own CIDR (compute.
-	// NetworkInterfaceInfo.CIDR verbatim) -- used by secacl's default
+	// NetworkInterfaceInfo.CIDR verbatim) -- used by snap's default
 	// nftacl implementation to build the "allow within own Subnet"
-	// baseline (see docs/specs/network.md「セキュリティバックエンド」),
+	// baseline (see docs/specs/snap.md),
 	// same CIDR netsetup itself never needed until now.
 	SubnetCIDR string
 	// IngressRules/EgressRules are this interface's spec fields as of Boot

@@ -213,9 +213,9 @@ type NetworkInterfaceInfo struct {
 	// end up with an ambiguous or last-one-wins default gateway.
 	Primary bool `json:"primary,omitempty"`
 	// IngressRules/EgressRules are the NetworkInterface's own spec fields,
-	// verbatim -- compute-agent's internal/compute-agent/secacl (default
-	// nftacl) enforces them at boot time; see docs/specs/network.md
-	// 「セキュリティバックエンド」. A later UpdateFirewallRules call
+	// verbatim -- compute-agent's internal/compute-agent/snap (default
+	// nftacl) enforces them at boot time; see docs/specs/snap.md. A later
+	// UpdateFirewallRules call
 	// travels a separate path (network's own NATS command, not this one --
 	// see internal/network/nats.go), so these only need to be correct as
 	// of Boot time, not kept in sync afterward.
