@@ -354,6 +354,31 @@ wait_for_volume_ready() {
   return 1
 }
 
+# wait_for_attachment_attached mirrors wait_for_volume_ready:
+# CreateVolumeAttachment itself always returns Pending (see its doc
+# comment in internal/block-storage/service.go) -- the actual
+# exclusive-attach attempt only happens in cmd/block-storage-reconciler's
+# watchPendingVolumeAttachments, reacting to this VolumeAttachment's own
+# Added event. Found 2026-09-27: this script used to check the Create
+# response itself for phase=Attached, which is the same class of bug
+# already fixed above for Subnet/NetworkInterface -- it happened to still
+# pass most of the time because the reconciler's watch loop is normally
+# fast enough to win the race, making the failure intermittent rather than
+# a hard block.
+wait_for_attachment_attached() {
+  local attach_id="$1" line=""
+  for _ in $(seq 1 20); do
+    line="$(go run ./cmd/kyuusha volattach get -addr=localhost:8080 -tenant="$tenant" -id="$attach_id")"
+    if echo "$line" | grep -q 'phase=Attached'; then
+      echo "$line"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "$line"
+  return 1
+}
+
 echo "==> registering the 'playground-nfs' StorageConnection (admin-only; declares which AZs this backend may be connected from -- see docs/open-questions.md「Hypervisor↔ストレージバックエンドの接続確立をkyuusha側で自動化すべきか」)"
 sc_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha storageconn create -addr=localhost:8080 -name=playground-nfs -zones=zone-a)"
 echo "$sc_line"
@@ -391,6 +416,9 @@ fi
 
 echo "==> attaching the Volume to already-Running vm-1 and confirming the exclusive-attach constraint (docs/architecture.md '具体的な排他制御'; vm-1 already booted so nothing actually attaches inside the guest -- attach-before-boot only, see docs/specs/volume.md. That real end-to-end path is exercised separately below)"
 first_attach_line="$(go run ./cmd/kyuusha volattach create -addr=localhost:8080 -tenant="$tenant" -name=scenario-attach-1 -vm="$vm1_id" -volume="$volume")"
+echo "$first_attach_line"
+attach1_id="$(echo "$first_attach_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+first_attach_line="$(wait_for_attachment_attached "$attach1_id")"
 echo "$first_attach_line"
 if ! echo "$first_attach_line" | grep -q 'phase=Attached'; then
   echo "!! first VolumeAttachment did not reach Attached: $first_attach_line" >&2

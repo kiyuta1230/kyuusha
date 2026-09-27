@@ -178,6 +178,23 @@
   であることも確認。詳細は`examples/security-plugins/ebpf-secacl/README.md`
   参照。
 
+- `.github/workflows/ci.yml`の`bufbuild/buf-setup-action@v1`に`github_token:
+  ${{ github.token }}`を追加し、匿名GitHub APIレート制限の警告を解消した。
+
+- `playground/scenario.sh`のVolumeAttachment検証バグを修正した（当日発見・
+  当日修正。前段のCI整備時点では「別途調査が必要」としていたが、実際は
+  block-storage側の実装ではなくこのスクリプト自身の潜在バグだった）:
+  `volattach create`の応答を直接`phase=Attached`かどうかで判定していたが、
+  `CreateVolumeAttachment`は常に`Pending`を返し、実際の排他制御チェック
+  （`tryAttach`）は`cmd/block-storage-reconciler`が`Added`イベントに反応して
+  非同期に行う（`internal/block-storage/service.go`のドキュメントコメント
+  参照）。Subnet/NetworkInterfaceの「Create直後はPending、`get`でポーリング
+  すべき」バグ（前回の`shared_with_tenant_ids`/`mesh_group`検証時に発見・
+  修正済み）と同じクラスの問題で、reconcilerの反応が速いことが多いため
+  たまたま通っていた不安定な検証だった。`wait_for_volume_ready`と同じ
+  パターンの`wait_for_attachment_attached`ポーリングヘルパーを追加して
+  修正、実機で`Pending`→`Attached`の遷移を確認した。
+
 ## 2026-09-26
 
 - スケジューラにVolume容量ではなく**storage_connectionによるフィルタ**を追加
