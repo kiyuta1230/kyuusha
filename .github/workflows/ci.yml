@@ -51,6 +51,21 @@ jobs:
       - name: test
         run: go test ./...
 
+      # Diagnostic only (docs/open-questions.md「playground/scenario.shの
+      # CI自動実行をやるべきか」): whether this hosted runner exposes
+      # /dev/kvm decides if scenario.sh's real Firecracker boot could ever
+      # run here at all, before even considering a self-hosted runner.
+      # Never fails the job.
+      - name: check /dev/kvm availability (informational)
+        run: |
+          if [ -e /dev/kvm ]; then
+            ls -la /dev/kvm
+            echo "kvm-ok=true" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::/dev/kvm not present on this runner"
+          fi
+        continue-on-error: true
+
       # protoc-gen-go/protoc-gen-go-grpc are local buf plugins (see
       # buf.gen.yaml) -- pinned to the versions this repo's go.mod already
       # depends on (google.golang.org/protobuf, google.golang.org/grpc),
