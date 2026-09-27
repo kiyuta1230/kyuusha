@@ -2437,6 +2437,16 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
    オペレータが事前にVFを作りPCIアドレスを1個ずつ`-pci-devices`へ手動で並べる前提のまま
 3. **グラフィカルコンソール（VNC/SPICE相当）**: シリアルコンソールのみで、Windows等
    シリアル操作に頼れないゲストへの対応手段が無い（Harvester/KubeVirtの`virtctl vnc`相当）
+4. **`usageMu`（テナントごとではなく全テナント共通の単一ロック）のシャーディング**:
+   「Quota設計」節の強制ポイントはcompute/network/block-storageそれぞれが持つ単一の
+   `sync.Mutex`で直列化している——`internal/compute/concurrency_test.go`の
+   `BenchmarkService_CreateUnderQuotaContention`で実測した通り、Create一回あたりの
+   処理時間（image/subnet/volume検証・identityへのQuota同期取得・admission webhook呼び出し
+   まで含む）だけ、並行数を増やしても`Create`全体のスループットが頭打ちになる
+   （テナント跨ぎで完全に直列化されるため）。現状のターゲット規模ではまだ実害が
+   出ていない想定の割り切りで、実際にボトルネックとして顕在化したらテナント単位に
+   シャーディングする、という対応方針だけ決めてある（`internal/compute/service.go`の
+   `usageMu`自身のdocコメント参照）
 
 ### 解決済み（参考: 決定の経緯は各セクション本文を参照）
 

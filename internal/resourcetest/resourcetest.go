@@ -40,7 +40,11 @@ var (
 // (clientv3.Client embeds sync/atomic-guarded fields that must not be
 // struct-copied, so this can't just clone one shared *clientv3.Client) --
 // fine for test-process lifetimes; callers don't need to Close it.
-func Client(t *testing.T) *clientv3.Client {
+//
+// testing.TB (not *testing.T) so a *testing.B can use the same fixture --
+// needed by any Benchmark* that wants a real etcd-backed Service rather
+// than reimplementing this setup.
+func Client(t testing.TB) *clientv3.Client {
 	t.Helper()
 	once.Do(func() {
 		endpoint, startErr = startEmbedded()

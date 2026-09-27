@@ -7,6 +7,26 @@
 
 ## 2026-09-27
 
+- quota/スケジューラの並行性・負荷テストを追加した（本番化ロードマップPhase 02の残り、
+  `docs/architecture.md`「未決事項」4番目参照）。`internal/compute/concurrency_test.go`に
+  2つ追加:
+  - `TestService_ConcurrentCreateNeverOverchargesTenantQuota`（通常の`go test ./...`で
+    実行される、決定的な正しさのテスト）: 厳しい`max_vms`Quotaに対して大量の`Create`を
+    並行実行し、成功数がQuota通りであること・`tenant_usage`と実際にetcdへ永続化された
+    VM数が一致することを確認する。`hypervisor_service_test.go`の既存の容量レースは
+    `reserveHypervisorCapacity`を直接叩くもので、`Service.Create`自体・`usageMu`自体を
+    通した並行テストは今回が初めて
+  - `BenchmarkService_CreateUnderQuotaContention`（`-bench`を明示しない限り実行されない
+    ベンチマーク、CIには含めない——結果がスループット特性であって正誤ではなく、共有CI
+    runnerのハードウェアはしきい値判定に使えるほど安定していないため）: `-cpu=1,4,16`で
+    実測したところ、並行数を上げてもns/opがほぼ変わらない（4.7ms→5.4ms→5.5ms）ことを
+    確認した——`usageMu`が全テナント共通の単一ロックである設計（`Service.Create`が
+    image/subnet/volume検証・identityへのQuota同期取得・admission webhook呼び出しまで
+    ロック内で行う）が実際にスループットを頭打ちにすることを実測で裏付けた
+  - `internal/resourcetest.Client`の引数型を`*testing.T`から`testing.TB`へ広げ、
+    `*testing.B`からも同じ埋め込みetcdフィクスチャを使えるようにした（既存呼び出し
+    箇所は`*testing.T`のまま、`testing.TB`を満たすので無変更で動く）
+
 - `.github/workflows/ci.yml`に`playground-e2e`ジョブを追加し、
   `playground/scenario.sh`（実Firecracker VM起動を含む多ハイパーバイザーE2E）を
   push/PRのたびに自動実行するようにした（`docs/open-questions.md`
