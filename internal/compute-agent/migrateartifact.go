@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -69,18 +68,13 @@ func (a *Agent) servePushRootDisk(cmd compute.MigrateArtifactCommand) {
 		a.publishMigrateArtifactResult(cmd.ReplySubject, compute.MigrateArtifactResult{}, err)
 		return
 	}
-	blob, err := os.ReadFile(path)
-	if err != nil {
-		a.publishMigrateArtifactResult(cmd.ReplySubject, compute.MigrateArtifactResult{}, fmt.Errorf("read root disk %s: %w", path, err))
-		return
-	}
 
 	// One tag per push (never reused): this VM may be migrated again
 	// later, and each push must land at its own distinct reference so an
 	// in-flight pull of an earlier migration's artifact can never be
 	// clobbered by a newer one under the same tag.
 	tag := fmt.Sprintf("migrate-%s-%d", cmd.VMID, time.Now().UnixNano())
-	url, digest, err := imagestore.PushOCIBlob(ctx, a.MigrationRegistry, a.MigrationRegistryRef, "kyuusha-migration/"+cmd.VMID, tag, a.MigrationRegistryPlainHTTP, blob)
+	url, digest, err := imagestore.PushOCIBlob(ctx, a.MigrationRegistry, a.MigrationRegistryRef, "kyuusha-migration/"+cmd.VMID, tag, a.MigrationRegistryPlainHTTP, path)
 	if err != nil {
 		a.publishMigrateArtifactResult(cmd.ReplySubject, compute.MigrateArtifactResult{}, fmt.Errorf("push root disk to migration registry: %w", err))
 		return

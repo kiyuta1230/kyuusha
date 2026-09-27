@@ -41,16 +41,6 @@ firewallrule.go`の`validateCrossTenantRules`、`CreateNetworkInterface`/
   スコープ外のまま——`Migrate`はコールドのみ（`Stopped`必須）という既存の
   制約は変わらない。転送するのはdiskファイルの中身だけ
 
-## ルートディスク転送のストリーミングpush化（未着手）
-
-`internal/compute-agent/imagestore.PushOCIBlob`は対象ファイルを丸ごと
-メモリへ読み込んでからpushする（`kyuusha image build`の既存実装
-`orasPushFile`と同じ制約をそのまま踏襲）。非常に大きなroot diskでは
-compute-agentのメモリを圧迫しうる。oras-go/v2の低レベルAPI
-（事前にdigest/sizeを計算した`content.Descriptor`＋`io.Reader`を直接
-`Repository.Push`へ渡す）を使えばファイル全体を一度に保持せずに済むはずだが、
-実際の需要が出るまで着手しない。
-
 ## CLIの `-tenant` フラグをトークンのクレームからデフォルトすべきか（解決済み・実装済み、2026-09-19）
 
 `kyuusha vm`/`kyuusha tenant` の各サブコマンドは `-tenant`/`-id` を常に明示指定させていた。

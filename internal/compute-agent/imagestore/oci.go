@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
+	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/registry"
@@ -66,30 +68,60 @@ func fetchOCIBlob(ctx context.Context, ref string, plainHTTP bool) (io.ReadClose
 	return blobRC, nil
 }
 
-// PushOCIBlob pushes blob to registryAddr/repo:tag as a single-layer OCI
-// artifact -- the exact same push shape cmd/kyuusha's `image build` uses
-// (orasPushFile there, duplicated rather than shared: that's a CLI-only
-// command this package can't import), so the result is byte-for-byte the
-// same artifact shape fetchOCIBlob already knows how to pull back
-// (manifest with exactly one layer). Used by Migrate(transfer_root_disk=
-// true)'s push handler (agent.go) to publish a VM's current root disk;
-// registryRef, if non-empty, is what gets embedded in the returned URL
-// instead of registryAddr -- the same "push via one address, but the
-// consuming side reaches the registry at a different address" split
-// -registry/-registry-ref gives `kyuusha image build` (e.g. compute-agent
-// containers resolve the registry via internal Docker DNS, this process
-// may not). Loading the whole file into memory (like orasPushFile already
-// does) is a known limitation for very large root disks -- see
-// docs/open-questions.md.
-func PushOCIBlob(ctx context.Context, registryAddr, registryRef, repo, tag string, plainHTTP bool, blob []byte) (url, digest string, err error) {
+// PushOCIBlob pushes the file at path to registryAddr/repo:tag as a
+// single-layer OCI artifact -- the exact same push shape cmd/kyuusha's
+// `image build` uses (orasPushFile there, duplicated rather than shared:
+// that's a CLI-only command this package can't import), so the result is
+// byte-for-byte the same artifact shape fetchOCIBlob already knows how to
+// pull back (manifest with exactly one layer). Used by
+// Migrate(transfer_root_disk=true)'s push handler (agent.go) to publish a
+// VM's current root disk; registryRef, if non-empty, is what gets embedded
+// in the returned URL instead of registryAddr -- the same "push via one
+// address, but the consuming side reaches the registry at a different
+// address" split -registry/-registry-ref gives `kyuusha image build` (e.g.
+// compute-agent containers resolve the registry via internal Docker DNS,
+// this process may not).
+//
+// Streams path straight to the registry rather than buffering it in
+// memory (resolved 2026-09-27, see docs/release-notes.md -- previously
+// this took a []byte and pushed it via oras.PushBytes, holding an entire
+// root disk in compute-agent's process memory at once). oras-go/v2's
+// registry.BlobStore.Push only needs an expected ocispec.Descriptor
+// (mediaType/digest/size) and an io.Reader, so the digest is computed with
+// one streaming pass over the file, the file is rewound, and the second
+// pass streams the actual push -- at most one os.File read-buffer's worth
+// of the content is ever held in memory, regardless of file size.
+func PushOCIBlob(ctx context.Context, registryAddr, registryRef, repo, tag string, plainHTTP bool, path string) (url, digestStr string, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return "", "", fmt.Errorf("stat %s: %w", path, err)
+	}
+	dgst, err := digest.FromReader(f)
+	if err != nil {
+		return "", "", fmt.Errorf("digest %s: %w", path, err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return "", "", fmt.Errorf("rewind %s: %w", path, err)
+	}
+
 	repository, err := remote.NewRepository(registryAddr + "/" + repo)
 	if err != nil {
 		return "", "", fmt.Errorf("open OCI repository %s/%s: %w", registryAddr, repo, err)
 	}
 	repository.PlainHTTP = plainHTTP
 
-	layerDesc, err := oras.PushBytes(ctx, repository, "application/octet-stream", blob)
-	if err != nil {
+	layerDesc := ocispec.Descriptor{
+		MediaType: "application/octet-stream",
+		Digest:    dgst,
+		Size:      info.Size(),
+	}
+	if err := repository.Push(ctx, layerDesc, f); err != nil {
 		return "", "", fmt.Errorf("push OCI blob to %s/%s:%s: %w", registryAddr, repo, tag, err)
 	}
 	manifestDesc, err := oras.PackManifest(ctx, repository, oras.PackManifestVersion1_1, "application/vnd.kyuusha.rootdisk.v1", oras.PackManifestOptions{
@@ -110,7 +142,7 @@ func PushOCIBlob(ctx context.Context, registryAddr, registryRef, repo, tag strin
 	if ref == "" {
 		ref = registryAddr
 	}
-	return fmt.Sprintf("%s%s/%s:%s", scheme, ref, repo, tag), layerDesc.Digest.String(), nil
+	return fmt.Sprintf("%s%s/%s:%s", scheme, ref, repo, tag), dgst.String(), nil
 }
 
 // DeleteOCIRef removes the manifest ref names ("<registry>/<repository>:

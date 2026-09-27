@@ -384,6 +384,19 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 		r.svc.releaseHypervisorCapacity(ctx, newHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
 		r.svc.releasePciDevices(ctx, newHypervisor, newPciDevices)
 		r.svc.releaseNumaNode(ctx, newHypervisor, newNumaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
+		// This Update carried pendingRootDiskURL (if transfer_root_disk was
+		// requested), and it never got persisted -- handleCreateResult can
+		// only clean up a URL it can find on the VM's own status, so a push
+		// that already succeeded here would otherwise leak in the migration
+		// registry forever (found via playground testing: a genuine
+		// resource_version conflict on this exact Update left an orphaned
+		// artifact behind). The next reconcile attempt (runRetrySweep still
+		// sees this VM as PhaseMigrating) pushes a fresh one under its own
+		// new tag, so this one is safe to delete now rather than wait on
+		// nothing that will ever reference it again.
+		if pendingRootDiskURL != "" {
+			r.deleteMigrationArtifact(ctx, oldHypervisor, pendingRootDiskURL)
+		}
 	}
 }
 

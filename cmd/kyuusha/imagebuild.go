@@ -4,12 +4,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	iofs "io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/registry/remote"
@@ -99,11 +101,7 @@ func imageBuild(args []string) {
 	buildExt4(rootfsDir, rootfsImg, size)
 
 	fmt.Fprintf(os.Stderr, "==> pushing to %s (plain_http=%v) as %s:%s\n", *registry, *plainHTTP, *repo, *tag)
-	blob, err := os.ReadFile(rootfsImg)
-	if err != nil {
-		fatal("read built rootfs: %v", err)
-	}
-	layerDesc := orasPushFile(context.Background(), *registry, *repo, *tag, *plainHTTP, blob)
+	layerDesc := orasPushFile(context.Background(), *registry, *repo, *tag, *plainHTTP, rootfsImg)
 
 	scheme := "oci://"
 	if *plainHTTP {
@@ -244,20 +242,50 @@ func buildExt4(rootfsDir, dest string, sizeMB int64) {
 	runStreamed(exec.Command("mkfs.ext4", "-d", rootfsDir, "-F", dest))
 }
 
-// orasPushFile pushes blob to registryAddr/repo:tag as a single-layer OCI
-// artifact and returns that layer's descriptor -- the same push shape
-// playground/ocitool uses (see its doc comment), duplicated rather than
-// shared: that tool is throwaway playground scaffolding this command is the
-// real replacement for, not a library the two should both depend on.
-func orasPushFile(ctx context.Context, registryAddr, repo, tag string, plainHTTP bool, blob []byte) ocispec.Descriptor {
+// orasPushFile pushes the file at path to registryAddr/repo:tag as a
+// single-layer OCI artifact and returns that layer's descriptor -- the
+// same push shape playground/ocitool uses (see its doc comment),
+// duplicated rather than shared: that tool is throwaway playground
+// scaffolding this command is the real replacement for, not a library the
+// two should both depend on.
+//
+// Streams path straight to the registry rather than buffering it in
+// memory (resolved 2026-09-27, same fix as
+// internal/compute-agent/imagestore.PushOCIBlob, see its doc comment for
+// the full reasoning -- a built rootfs image is exactly the kind of
+// multi-GB file this mattered for): one streaming pass computes the
+// digest, then the file is rewound and streamed again for the actual push.
+func orasPushFile(ctx context.Context, registryAddr, repo, tag string, plainHTTP bool, path string) ocispec.Descriptor {
+	f, err := os.Open(path)
+	if err != nil {
+		fatal("open %s: %v", path, err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		fatal("stat %s: %v", path, err)
+	}
+	dgst, err := digest.FromReader(f)
+	if err != nil {
+		fatal("digest %s: %v", path, err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		fatal("rewind %s: %v", path, err)
+	}
+
 	repository, err := remote.NewRepository(registryAddr + "/" + repo)
 	if err != nil {
 		fatal("open repository %s/%s: %v", registryAddr, repo, err)
 	}
 	repository.PlainHTTP = plainHTTP
 
-	layerDesc, err := oras.PushBytes(ctx, repository, "application/octet-stream", blob)
-	if err != nil {
+	layerDesc := ocispec.Descriptor{
+		MediaType: "application/octet-stream",
+		Digest:    dgst,
+		Size:      info.Size(),
+	}
+	if err := repository.Push(ctx, layerDesc, f); err != nil {
 		fatal("push blob: %v", err)
 	}
 	manifestDesc, err := oras.PackManifest(ctx, repository, oras.PackManifestVersion1_1, "application/vnd.kyuusha.rootfs.v1", oras.PackManifestOptions{

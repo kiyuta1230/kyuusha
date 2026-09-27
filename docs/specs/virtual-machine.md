@@ -399,15 +399,21 @@ Firecrackerゲストが新Hypervisor上で起動し、`NetworkInterface`のIP/MA
   fire-and-forgetコマンドが新Hypervisorへ送られる。ベストエフォート——
   一部のレジストリ（stock `registry:2`イメージ等）は既定でmanifest削除を
   無効化しており、その場合は削除に失敗してログに警告が残るだけ
-  （レジストリのストレージが消費されたままになるが、正しさには影響しない）
+  （レジストリのストレージが消費されたままになるが、正しさには影響しない）。
+  push自体は成功したがその直後の`VirtualMachine`更新が`resource_version`
+  競合で失敗した場合（`runRetrySweep`が次tickで再試行し、その回で新しい
+  タグへ改めてpushし直す）も、その場で同じ削除コマンドを送って即座に
+  片付ける——`CreateResult`の対象URLは常にetcdへ永続化された最新の
+  URLだけなので、永続化に失敗したpushをそのまま放置すると誰にも
+  参照されないまま残り続けてしまうため
 - **compute-agentの設定**: `-migration-registry`（push/delete先のOCIレジストリ
   host[:port]）、`-migration-registry-ref`（pushしたURLに埋め込むアドレスが
   `-migration-registry`と異なる場合。`kyuusha image build`の`-registry`/
   `-registry-ref`と同じ分割理由）、`-migration-registry-plain-http`
-- **既知の制約**: root diskファイル全体を一度にメモリへ読み込んでからpushする
-  （`kyuusha image build`の既存実装と同じ制約）。非常に大きなディスクでは
-  compute-agentのメモリを圧迫しうる——ストリーミングpush化は
-  [docs/open-questions.md](../open-questions.md)参照
+- **メモリ消費**: root diskファイルはストリーミングでpushする（digest計算と
+  push実転送で2回ファイルを読むが、内容全体を`[]byte`としてメモリに
+  保持することはない）ので、ディスクサイズがcompute-agentのメモリを
+  直接圧迫することはない
 
 実機確認済み: 実際にFirecracker VMを起動し、ホスト側のroot diskファイルへ
 直接書き込んだマーカーバイトが、`transfer_root_disk=true`でのMigrate後、

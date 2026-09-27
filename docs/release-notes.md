@@ -7,6 +7,40 @@
 
 ## 2026-09-27
 
+- root disk転送のストリーミングpush化を実装した（`docs/open-questions.md`
+  「ルートディスク転送のストリーミングpush化」の解消）。
+  `internal/compute-agent/imagestore.PushOCIBlob`（`Migrate(transfer_root_disk=
+  true)`用）と`cmd/kyuusha/imagebuild.go`の`orasPushFile`（`kyuusha image
+  build`用）はどちらも、対象ファイルを`[]byte`として丸ごとメモリへ読み込んで
+  から`oras.PushBytes`へ渡す実装だった——両方とも、oras-go/v2の低レベルAPI
+  （`os.File`に対して1回streamingでdigestを計算し、`Seek(0, io.SeekStart)`で
+  巻き戻してから、事前計算済みの`ocispec.Descriptor`と一緒に
+  `content.Storage.Push`へそのまま渡す2パス方式）へ書き換え、ファイル全体を
+  メモリ上の`[]byte`として保持する瞬間を無くした。マニフェストのpack/tag部分
+  （`oras.PackManifest`/`repository.Tag`）は変更していない。
+
+  テスト: `internal/compute-agent/imagestore`に、push+PUT両対応のOCI
+  Distribution APIスタブ（`newPushableTestOCIRegistry`）を新設し、実際に
+  `PushOCIBlob`でpushしてから`fetchOCIBlob`で読み戻す往復テスト
+  （`TestPushOCIBlobStreamsFileRoundTrip`、~4.2MBのファイルで検証）を追加、
+  全て通過を確認。
+
+  playground実機検証: 実VMを起動→Stop→`vm migrate -transfer-root-disk`で
+  別Hypervisorへ実際に転送し、新Hypervisor側で正しくRunningへ復帰することを
+  確認。`kyuusha image build`も実registryへストリーミングpushし、Imageが
+  Readyへ到達、そこからVMが実際に起動することを確認。
+
+  実機検証で見つけた別のバグ（今回のストリーミング化とは無関係、既存の
+  マイグレーション実装の潜在バグ）: `internal/compute/reconciler.go`の
+  `migrateVM`が、root disk転送成功後の最終`Update`（`Phase=Scheduled`と
+  `PendingRootDiskURL`を書き込む）で`resource_version`競合に遭遇すると、
+  新Hypervisorの容量予約は解放するのに、直前に成功していたはずのpushした
+  アーティファクトを削除しないまま放置していた——`PendingRootDiskURL`が
+  一度もetcdへ永続化されないため、`handleCreateResult`側の通常のクリーン
+  アップ経路が対象URLを一生知り得ず、レジストリに永久に残り続ける
+  （次のリトライで別タグへの再pushも発生するため二重消費にもなる）。
+  この`Update`失敗パスでも同じ削除コマンドをその場で送るよう修正した。
+
 - `.github/workflows/ci.yml`を新設し、初めてCIパイプラインを整備した（これまで
   playground手動実行のみが検証手段だった）。ルートモジュール（`go build`/
   `go vet`/`gofmt -l`/`go test`、および`buf generate`の生成差分チェック）と

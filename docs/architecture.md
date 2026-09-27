@@ -1420,10 +1420,11 @@ compute-agent再起動後もin-flightな予約が保持されることも確認�
 削除される（`REGISTRY_STORAGE_DELETE_ENABLED=true`を設定したplayground用
 `registry:2`で確認）ことを確認した。
 
-**既知の制約**: `PushOCIBlob`は対象ファイルを丸ごとメモリに読み込む
-（`kyuusha image build`の既存実装と同じ制約）——非常に大きなroot diskでは
-compute-agentのメモリを圧迫しうる。ストリーミングpushへの最適化は
-将来の課題として残す（[docs/open-questions.md](open-questions.md)参照）。
+`PushOCIBlob`（と`kyuusha image build`の`orasPushFile`）はファイルを丸ごと
+メモリへ読み込まず、oras-go/v2の低レベルAPI（`content.Storage.Push`に
+事前計算したdigest/sizeの`ocispec.Descriptor`と`os.File`をそのまま渡す）で
+ストリーミングpushする——digest計算とpush自体の2回、ファイルをストリームで
+読むだけで、root diskサイズ分の`[]byte`をプロセスメモリ上に保持する瞬間は無い。
 
 ## ハイパーバイザー死活監視とリカバリ、およびpet/cattleの区別の廃止
 
