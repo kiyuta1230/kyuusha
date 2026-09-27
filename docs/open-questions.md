@@ -13,6 +13,14 @@ firewallrule.go`の`validateCrossTenantRules`、`CreateNetworkInterface`/
 を実装した。詳細は[network仕様](specs/network.md)「spec.mesh_group」・
 「Create時のバリデーション」参照。
 
+## playground/scenario.shのCI自動実行をやるべきか（未着手、2026-09-27）
+
+`.github/workflows/ci.yml`は現状build/vet/fmt/testのみ（`docs/release-notes.md`
+参照）。実Firecracker起動を含むE2E（`playground/scenario.sh`）はGitHub Actionsの
+標準ホストrunnerに`/dev/kvm`が無い可能性があり、価値が下がる（VM起動確認部分が
+軒並みskipされる想定）。self-hosted runner（KVM可用性が要件）を用意する運用コストと
+天秤にかけて判断する必要がある——今のところ判断保留。
+
 ## コールドマイグレーションのroot disk転送（解決済み・実装済み、2026-09-26）
 
 `Migrate(transfer_root_disk=true)`として実装済み——既定`false`のまま

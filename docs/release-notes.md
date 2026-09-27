@@ -7,6 +7,18 @@
 
 ## 2026-09-27
 
+- `.github/workflows/ci.yml`を新設し、初めてCIパイプラインを整備した（これまで
+  playground手動実行のみが検証手段だった）。ルートモジュール（`go build`/
+  `go vet`/`gofmt -l`/`go test`、および`buf generate`の生成差分チェック）と
+  `examples/snap-plugins/ebpf-snap`（別Goモジュールのため別ジョブ、`cilium/ebpf`の
+  依存がルートに波及しないことも含めてCIで担保）の2ジョブ構成。`CAP_NET_ADMIN`/
+  `/dev/kvm`が要る実機系テスト（`internal/compute-agent/netsetup`/`nftacl`等）は
+  既存の「権限が無ければ自発的にskip」規約のまま、通常のGitHub Actionsホスト
+  runnerで無改造のまま動く。playground/scenario.shの自動実行（実Firecracker起動を
+  含むE2E）は今回のスコープ外——KVM可用性が不確実なホストrunnerでは実質的な検証
+  価値が下がるため、別途self-hosted runnerの要否とセットで判断する
+  （`docs/open-questions.md`に積む想定）。
+
 - `shared_with_tenant_ids`によるクロステナントCIDR許可の検証と、`mesh_group`が
   一致するSubnet同士の自動許可を実装（`docs/open-questions.md`に積んでいた見送り
   2項目の解消）。前者は`internal/network/firewallrule.go`の

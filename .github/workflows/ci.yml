@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Root module: every service/CLI binary. Tests that need real privileges
+  # (CAP_NET_ADMIN, /dev/kvm -- e.g. internal/compute-agent/netsetup,
+  # internal/compute-agent/nftacl) already skip themselves gracefully when
+  # unprivileged (see each test's own "skipping: ... needs CAP_NET_ADMIN"
+  # convention), so this runs unmodified on a standard hosted runner.
+  # Playground/scenario.sh end-to-end verification (real Firecracker boot,
+  # real tap wiring) stays a manual step -- see CLAUDE.md and each PR's own
+  # description -- not yet part of this workflow.
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "::error::gofmt -l found unformatted files (run 'gofmt -w' locally):"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: test
+        run: go test ./...
+
+      # protoc-gen-go/protoc-gen-go-grpc are local buf plugins (see
+      # buf.gen.yaml) -- pinned to the versions this repo's go.mod already
+      # depends on (google.golang.org/protobuf, google.golang.org/grpc),
+      # not just "@latest", so CI can't silently generate different code
+      # than a contributor running the same command locally.
+      - name: install protoc-gen-go / protoc-gen-go-grpc
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          version: "1.73.0"
+
+      - name: generated proto code is up to date
+        run: |
+          buf generate
+          if ! git diff --exit-code -- gen/; then
+            echo "::error::'buf generate' produced a diff -- run it locally and commit the result"
+            exit 1
+          fi
+
+  # examples/snap-plugins/ebpf-snap is its own Go module specifically so
+  # cilium/ebpf and its transitive deps never touch the root module (see
+  # docs/release-notes.md, 2026-09-27) -- built as a separate job for the
+  # same reason. This only builds against the BPF bytecode already checked
+  # into the repo (bpf_bpfel.go/bpf_bpfeb.go's go:embed'd .o files); it does
+  # NOT re-run `go generate` (that needs clang/bpftool/libbpf-dev, only
+  # required when actually editing bpf/snap.c -- see that module's own
+  # README).
+  ebpf-snap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: examples/snap-plugins/ebpf-snap
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: examples/snap-plugins/ebpf-snap/go.mod
+          cache: true
+          cache-dependency-path: examples/snap-plugins/ebpf-snap/go.sum
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "::error::gofmt -l found unformatted files (run 'gofmt -w' locally):"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: test
+        run: go test ./...
