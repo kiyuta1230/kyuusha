@@ -7,6 +7,23 @@
 
 ## 2026-09-27
 
+- `docs/network-deployment-guide.md`に2点追記した（ロードマップPhase 04
+  「サポートするトポロジの組み合わせを明文化」の一部）:
+  - 「全体像」直後に新節「VLAN到達範囲はアンダーレイ構成に依存する」を追加し、
+    (a)伝統的なコア/ToR構成・(b)CLOS(オーバーレイ無し、ラック単位でVM networkが
+    分断される)・(c)CLOS+VXLAN(本ガイドの既定の前提、AZ全体でストレッチ)の
+    3パターンを図示して整理した。あわせて、kyuushaのスケジューラは現状
+    「あるSubnetのVLANがそのスケジュール候補ホストへ実際に届いているか」を
+    一切見ない（ネットワークチーム側の前提条件として一切保証されない）ことを明記
+  - 「3.5. Type-5」節に、host-Leaf間の推奨参照構成（unnumbered eBGP、ASNは
+    ハイパーバイザ1台ごとに個別payout、想定台数に応じた2-byte/4-byte ASN幅の
+    選び方）を追記した。あくまで参照構成の推奨であり、
+    `examples/vnap-plugins/frr-type5.sh`自体はBGPセッションの設定
+    （ASN・eBGP/iBGPどちらか含め）に一切関与しないことも明記——実際に
+    スクリプトを読み返して確認した（プラグインはFRRのRIBへのstaticルート
+    注入のみ行い、`router bgp`設定はコメントのcompanion sketchとして
+    示すだけで実行はしない）
+
 - `docs/rolling-upgrade.md`を新設し、コントロールプレーンのローリング
   アップグレード手順を文書化・実地確認した（本番化ロードマップPhase 03最後の
   項目）。API面（ステートレス複製、真のローリング）・reconcile面
