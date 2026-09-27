@@ -57,23 +57,24 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
 - SubnetのDelete/NetworkInterfaceのDeleteは、`Ready`で実際に払い出し済みだった場合のみ
   VLAN ID/IPアドレスをプールへ返却する
 
-## `spec.mesh_group`（宣言のみ、自動許可はまだ）
+## `spec.mesh_group`（同一テナント内の自動許可、実装済み）
 
 同一テナントが複数のAZにまたがってSubnetを持つ場合（AZ毎に別Subnet/別VLANになる設計、
 `docs/architecture.md`「マルチAZにまたがるVirtualMachineは作れない」参照）、AZ間の
 **経路**はRoute Targetによる自動交換で疎通するが、`NetworkInterfaceSpec.ingress_rules`/
-`egress_rules`の**ACL**はSubnet CIDR外を既定で拒否するため（下記「セキュリティ
-バックエンド」参照、これ自体は実装済み）、AZ間で通信したい場合は本来Subnetの組み合わせ
-ごとに手動でallowルールを書く必要がある。
+`egress_rules`の**ACL**はSubnet CIDR外を既定で拒否するため（[SNAP仕様](snap.md)参照）、
+AZ間で通信したい場合は本来Subnetの組み合わせごとに手動でallowルールを書く必要がある。
 
-`spec.mesh_group`は、この手間を減らすための**意図の宣言**フィールド（`shared_with_tenant_ids`
-と同じ位置づけ）: 同一テナント内で同じ`mesh_group`値を持つSubnet同士は、デフォルトで
-互いを許可する対象とみなす、という設計上の意図だけを表す。**現状これを実際に自動許可へ
-反映する経路はまだ無い**（`shared_with_tenant_ids`によるクロステナントCIDR許可の検証も
-同様に未実装）——ACL強制自体（`ingress_rules`/`egress_rules`）は実装済みだが、
-`mesh_group`一致を根拠に暗黙のallowルールを注入する処理はまだ`UpdateFirewallRules`にも
-Create時にも組み込まれておらず、[open-questions.md](../open-questions.md)の未解決事項
-として残っている。
+`spec.mesh_group`は、この手間を減らすための宣言フィールド（`shared_with_tenant_ids`と
+同じ位置づけ）: 同一テナント内で同じ`mesh_group`値を持つSubnet同士は、デフォルトで
+互いを許可する。`Service.EffectiveFirewallRules`（`internal/network/firewallrule.go`）が、
+対象NetworkInterfaceのSubnetが非空の`mesh_group`を持つ場合、同一テナント・同じ
+`mesh_group`・自分以外の各Subnetについて`{source_cidr: <sibling CIDR>, action: allow,
+protocol: ""（=プロトコル問わず）}`という暗黙のルールを`ingress_rules`/`egress_rules`
+両方の末尾に追加する。**`spec`（etcd永続化値、`Get`/`List`で見える宣言値）には混ぜない**
+——`SubnetCIDR`/`GatewayIP`のbaseline同様、実際にcompute-agentへ送る最終ルール一覧
+（`status.effective_ingress_rules`/`effective_egress_rules`、`Create`/`Get`のみ埋める。
+下記参照）を組み立てる時にだけ合成する。
 
 ## Create時のバリデーション
 
@@ -88,6 +89,14 @@ Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
 `max_network_interfaces`）判定を同じCreate内で同期的に行う。`NetworkInterface`側は
 このQuota判定を上記のSubnet存在/Ready検証より後に行う（詳細は
 [Quota仕様](quota.md)「networkのQuota判定」参照）。
+
+`NetworkInterface.Create`/`UpdateFirewallRules`はさらに、`ingress_rules`/
+`egress_rules`の`action: allow`なルールについて、`source_cidr`が他テナントのSubnet
+CIDRへ重なる（`net.IPNet.Contains`をどちらの向きにも試す簡易判定）場合、対象Subnetの
+`shared_with_tenant_ids`に自テナントが含まれていなければ`ErrValidation`で拒否する
+（`docs/architecture.md`「ソフトウェア側の強制」、`internal/network/firewallrule.go`の
+`validateCrossTenantRules`）。`action: deny`のルールや、自テナント自身のSubnetへ
+重なるルールは対象外。
 
 ## この実装がカバーしないもの
 

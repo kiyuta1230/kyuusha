@@ -29,7 +29,7 @@ func (s *NetworkInterfaceServer) Create(ctx context.Context, req *networkv1.Crea
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return toNetworkInterface(*n), nil
+	return s.toNetworkInterfaceWithEffectiveRules(ctx, n), nil
 }
 
 func (s *NetworkInterfaceServer) Get(ctx context.Context, req *networkv1.GetNetworkInterfaceRequest) (*networkv1.NetworkInterface, error) {
@@ -37,7 +37,28 @@ func (s *NetworkInterfaceServer) Get(ctx context.Context, req *networkv1.GetNetw
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return toNetworkInterface(*n), nil
+	return s.toNetworkInterfaceWithEffectiveRules(ctx, n), nil
+}
+
+// toNetworkInterfaceWithEffectiveRules is toNetworkInterface plus
+// status.effective_ingress_rules/effective_egress_rules -- only Create and
+// Get populate these (see NetworkInterfaceStatus's own doc comment in the
+// proto for the scope decision); a resolve failure here just leaves them
+// empty rather than failing the whole RPC, since the etcd write (Create)
+// or read (Get) it's reporting on already succeeded.
+func (s *NetworkInterfaceServer) toNetworkInterfaceWithEffectiveRules(ctx context.Context, n *network.NetworkInterface) *networkv1.NetworkInterface {
+	out := toNetworkInterface(*n)
+	ingress, egress, err := s.svc.EffectiveFirewallRules(ctx, n)
+	if err != nil {
+		return out
+	}
+	for _, r := range ingress {
+		out.Status.EffectiveIngressRules = append(out.Status.EffectiveIngressRules, toFirewallRule(r))
+	}
+	for _, r := range egress {
+		out.Status.EffectiveEgressRules = append(out.Status.EffectiveEgressRules, toFirewallRule(r))
+	}
+	return out
 }
 
 func (s *NetworkInterfaceServer) List(ctx context.Context, req *networkv1.ListNetworkInterfacesRequest) (*networkv1.ListNetworkInterfacesResponse, error) {

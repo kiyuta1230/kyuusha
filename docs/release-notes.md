@@ -7,6 +7,45 @@
 
 ## 2026-09-27
 
+- `shared_with_tenant_ids`によるクロステナントCIDR許可の検証と、`mesh_group`が
+  一致するSubnet同士の自動許可を実装（`docs/open-questions.md`に積んでいた見送り
+  2項目の解消）。前者は`internal/network/firewallrule.go`の
+  `validateCrossTenantRules`——`ingress_rules`/`egress_rules`の`allow`ルールが
+  他テナントのSubnet CIDRへ重なる場合、対象Subnetの`shared_with_tenant_ids`に
+  自テナントが含まれていなければ`CreateNetworkInterface`/`UpdateFirewallRules`を
+  `ErrValidation`で拒否する（`deny`ルールと自テナント宛は対象外）。後者は
+  `Service.EffectiveFirewallRules`——対象NetworkInterfaceのSubnetが`mesh_group`を
+  持つ場合、同一テナント・同じ`mesh_group`の他Subnet CIDRへの暗黙allowを実効
+  ルールへ追加する。実効ルールは新設の`NetworkInterfaceStatus.effective_ingress_
+  rules`/`effective_egress_rules`（`spec`には混ぜない、`Create`/`Get`のみが返す）
+  として表現し、VM Boot時の経路（`internal/compute/network.go`）・
+  `UpdateFirewallRules`のNATS通知経路（`publishUpdateACL`）の両方をこちらに
+  切り替えた。`kyuusha netif create/set-firewall-rules`の表示に`effective_
+  ingress_rules`/`effective_egress_rules`を追加、`kyuusha subnet create`に
+  `-shared-with-tenant-ids`を追加（それまでCLIから設定する手段が無かった）。
+  `internal/network`にユニットテスト7件追加、全て通過を確認。
+
+  実機検証で見つけたバグ: `internal/compute-agent/nftacl`（デフォルトSNAP
+  実装）の`writeRule`が、`protocol`が`tcp`/`udp`/`icmp`のいずれでもない場合
+  （`EffectiveFirewallRules`がmesh_group由来ルールに使う`protocol: ""`＝
+  「プロトコル問わず」を含む）に**ルールを無言で捨てていた**——ユニットテストは
+  ルール生成ロジックしか見ておらず、実際にnftablesへ反映されるかは
+  playgroundで2つのSubnetを同じ`mesh_group`にして実VM間の実効ルールを
+  `nft list ruleset`で確認して初めて発覚。`writeRule`に`protocol: ""`＝
+  任意プロトコル（CIDRのみでマッチ）の分岐を追加して修正。同じ理由で
+  `examples/snap-plugins/ebpf-snap`の`ruleFromFirewallRule`も
+  `protocol: ""`を未知のプロトコルとしてエラーにしていたため、`protocol=0`
+  （BPF側は元々`0`を「任意」として扱う設計だった）として扱うよう修正。
+  `internal/compute-agent/nftacl`にこの分岐を検証するテストを追加。
+
+  playgroundで実機確認済み: 同一テナント・同じ`mesh_group`の2 Subnetにそれぞれ
+  VMを立て、明示ルール無しで`effective_ingress_rules`/`effective_egress_rules`
+  に相手Subnet CIDRへの暗黙allowが現れ、実際に稼働Hypervisorのnftablesへ
+  （両チェーンとも）反映されることを確認。他テナントの`shared_with_tenant_ids`
+  未設定Subnet CIDRへの`allow`ルールを含む`UpdateFirewallRules`が`ErrValidation`
+  で拒否され、`shared_with_tenant_ids`に自テナントを追加した後は同じ呼び出しが
+  成功し、実効ルール・nftables両方に反映されることも確認。
+
 - Image/Subnet/NetworkInterfaceにQuota適用を追加（`docs/architecture.md`
   「未決事項」節が残していた項目: `QuotaSpec`はvcpu/memory/volume_gb/vms/
   pci_devicesまでカバーしていたが、Image数・Subnet数・NetworkInterface数には

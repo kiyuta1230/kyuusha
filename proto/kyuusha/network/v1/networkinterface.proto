@@ -30,6 +30,17 @@ message NetworkInterfaceStatus {
   string ip_address = 3;
   string mac_address = 4;
   string hypervisor = 5; // the Hypervisor a tap is currently wired on, if any
+  // effective_ingress_rules/egress_rules are spec.ingress_rules/egress_rules
+  // plus any implicit mesh_group-derived allow entries (see
+  // docs/specs/network.md「spec.mesh_group」) -- this is what actually gets
+  // enforced on the host (see docs/specs/snap.md), not necessarily what's
+  // written to spec. Only populated by Create/Get (the two RPCs whose
+  // response is actually consumed for enforcement, at VM Boot and via
+  // UpdateFirewallRules's NATS propagation respectively) -- List/Watch/
+  // Update/UpdateFirewallRules's own response leave these empty, a
+  // deliberate scope decision (see docs/open-questions.md history).
+  repeated FirewallRule effective_ingress_rules = 6;
+  repeated FirewallRule effective_egress_rules = 7;
 }
 
 message NetworkInterface {

@@ -109,12 +109,17 @@ func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetS
 			return infos, err
 		}
 		info := NetworkInterfaceInfo{
-			IfaceID:      n.GetMeta().GetId(),
-			IPAddress:    n.GetStatus().GetIpAddress(),
-			MACAddress:   n.GetStatus().GetMacAddress(),
-			Primary:      a.Primary,
-			IngressRules: toFirewallRuleInfos(n.GetSpec().GetIngressRules()),
-			EgressRules:  toFirewallRuleInfos(n.GetSpec().GetEgressRules()),
+			IfaceID:    n.GetMeta().GetId(),
+			IPAddress:  n.GetStatus().GetIpAddress(),
+			MACAddress: n.GetStatus().GetMacAddress(),
+			Primary:    a.Primary,
+			// Effective, not spec: includes any mesh_group-derived implicit
+			// allow entries alongside what the tenant actually declared --
+			// see NetworkInterfaceStatus's own doc comment in the proto.
+			// Create/Get (waitForAllocation polls via Get) both populate
+			// this.
+			IngressRules: toFirewallRuleInfos(n.GetStatus().GetEffectiveIngressRules()),
+			EgressRules:  toFirewallRuleInfos(n.GetStatus().GetEffectiveEgressRules()),
 		}
 		if info.IPAddress != "" {
 			sn, err := subnetClient.Get(ctx, &networkv1.GetSubnetRequest{TenantId: tenantID, Id: a.SubnetID})

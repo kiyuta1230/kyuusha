@@ -538,6 +538,18 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 	if spec.SubnetID == "" {
 		return nil, fmt.Errorf("%w: spec.subnet_id is required", ErrValidation)
 	}
+	if err := validateFirewallRules(spec.IngressRules); err != nil {
+		return nil, err
+	}
+	if err := validateFirewallRules(spec.EgressRules); err != nil {
+		return nil, err
+	}
+	if err := s.validateCrossTenantRules(ctx, tenantID, spec.IngressRules); err != nil {
+		return nil, err
+	}
+	if err := s.validateCrossTenantRules(ctx, tenantID, spec.EgressRules); err != nil {
+		return nil, err
+	}
 
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
@@ -687,6 +699,12 @@ func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, 
 	if err := validateFirewallRules(egress); err != nil {
 		return nil, err
 	}
+	if err := s.validateCrossTenantRules(ctx, tenantID, ingress); err != nil {
+		return nil, err
+	}
+	if err := s.validateCrossTenantRules(ctx, tenantID, egress); err != nil {
+		return nil, err
+	}
 
 	n, err := s.interfaces.Get(ctx, tenantID, id)
 	if err != nil {
@@ -732,14 +750,20 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
 		gatewayIP = subnet.Spec.GatewayIP
 	}
 
+	ingress, egress, err := s.EffectiveFirewallRules(ctx, &n)
+	if err != nil {
+		slog.Warn("network: resolve effective firewall rules for update_acl failed, skipping notify", "netif_id", n.Meta.ID, "err", err)
+		return
+	}
+
 	cmd := UpdateACLCommand{
 		IfaceID:         n.Meta.ID,
 		VMID:            n.Spec.VMID,
 		TenantID:        n.Meta.TenantID,
 		SubnetCIDR:      subnetCIDR,
 		GatewayIP:       gatewayIP,
-		IngressRules:    toFirewallRuleInfos(n.Spec.IngressRules),
-		EgressRules:     toFirewallRuleInfos(n.Spec.EgressRules),
+		IngressRules:    toFirewallRuleInfos(ingress),
+		EgressRules:     toFirewallRuleInfos(egress),
 		ResourceVersion: n.Meta.ResourceVersion,
 	}
 	payload, err := json.Marshal(cmd)

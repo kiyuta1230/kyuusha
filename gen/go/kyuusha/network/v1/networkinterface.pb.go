@@ -215,14 +215,25 @@ func (x *NetworkInterfaceSpec) GetEgressRules() []*FirewallRule {
 }
 
 type NetworkInterfaceStatus struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Binding(IPAM割当+tap配線中) / Ready / Rebinding(SELF_HEAL再バインド中) / Deleting / Error
-	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	IpAddress     string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
-	MacAddress    string                 `protobuf:"bytes,4,opt,name=mac_address,json=macAddress,proto3" json:"mac_address,omitempty"`
-	Hypervisor    string                 `protobuf:"bytes,5,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"` // the Hypervisor a tap is currently wired on, if any
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Phase      string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Binding(IPAM割当+tap配線中) / Ready / Rebinding(SELF_HEAL再バインド中) / Deleting / Error
+	Conditions []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
+	IpAddress  string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	MacAddress string                 `protobuf:"bytes,4,opt,name=mac_address,json=macAddress,proto3" json:"mac_address,omitempty"`
+	Hypervisor string                 `protobuf:"bytes,5,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"` // the Hypervisor a tap is currently wired on, if any
+	// effective_ingress_rules/egress_rules are spec.ingress_rules/egress_rules
+	// plus any implicit mesh_group-derived allow entries (see
+	// docs/specs/network.md「spec.mesh_group」) -- this is what actually gets
+	// enforced on the host (see docs/specs/snap.md), not necessarily what's
+	// written to spec. Only populated by Create/Get (the two RPCs whose
+	// response is actually consumed for enforcement, at VM Boot and via
+	// UpdateFirewallRules's NATS propagation respectively) -- List/Watch/
+	// Update/UpdateFirewallRules's own response leave these empty, a
+	// deliberate scope decision (see docs/open-questions.md history).
+	EffectiveIngressRules []*FirewallRule `protobuf:"bytes,6,rep,name=effective_ingress_rules,json=effectiveIngressRules,proto3" json:"effective_ingress_rules,omitempty"`
+	EffectiveEgressRules  []*FirewallRule `protobuf:"bytes,7,rep,name=effective_egress_rules,json=effectiveEgressRules,proto3" json:"effective_egress_rules,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *NetworkInterfaceStatus) Reset() {
@@ -288,6 +299,20 @@ func (x *NetworkInterfaceStatus) GetHypervisor() string {
 		return x.Hypervisor
 	}
 	return ""
+}
+
+func (x *NetworkInterfaceStatus) GetEffectiveIngressRules() []*FirewallRule {
+	if x != nil {
+		return x.EffectiveIngressRules
+	}
+	return nil
+}
+
+func (x *NetworkInterfaceStatus) GetEffectiveEgressRules() []*FirewallRule {
+	if x != nil {
+		return x.EffectiveEgressRules
+	}
+	return nil
 }
 
 type NetworkInterface struct {
@@ -881,7 +906,7 @@ const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x1b\n" +
 	"\tsubnet_id\x18\x02 \x01(\tR\bsubnetId\x12E\n" +
 	"\ringress_rules\x18\x03 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\fingressRules\x12C\n" +
-	"\fegress_rules\x18\x04 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\vegressRules\"\xce\x01\n" +
+	"\fegress_rules\x18\x04 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\vegressRules\"\x80\x03\n" +
 	"\x16NetworkInterfaceStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -893,7 +918,9 @@ const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"macAddress\x12\x1e\n" +
 	"\n" +
 	"hypervisor\x18\x05 \x01(\tR\n" +
-	"hypervisor\"\xc9\x01\n" +
+	"hypervisor\x12X\n" +
+	"\x17effective_ingress_rules\x18\x06 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\x15effectiveIngressRules\x12V\n" +
+	"\x16effective_egress_rules\x18\a \x03(\v2 .kyuusha.network.v1.FirewallRuleR\x14effectiveEgressRules\"\xc9\x01\n" +
 	"\x10NetworkInterface\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x12<\n" +
 	"\x04spec\x18\x02 \x01(\v2(.kyuusha.network.v1.NetworkInterfaceSpecR\x04spec\x12B\n" +
@@ -982,35 +1009,37 @@ var file_kyuusha_network_v1_networkinterface_proto_depIdxs = []int32{
 	1,  // 0: kyuusha.network.v1.NetworkInterfaceSpec.ingress_rules:type_name -> kyuusha.network.v1.FirewallRule
 	1,  // 1: kyuusha.network.v1.NetworkInterfaceSpec.egress_rules:type_name -> kyuusha.network.v1.FirewallRule
 	14, // 2: kyuusha.network.v1.NetworkInterfaceStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	15, // 3: kyuusha.network.v1.NetworkInterface.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	2,  // 4: kyuusha.network.v1.NetworkInterface.spec:type_name -> kyuusha.network.v1.NetworkInterfaceSpec
-	3,  // 5: kyuusha.network.v1.NetworkInterface.status:type_name -> kyuusha.network.v1.NetworkInterfaceStatus
-	2,  // 6: kyuusha.network.v1.CreateNetworkInterfaceRequest.spec:type_name -> kyuusha.network.v1.NetworkInterfaceSpec
-	4,  // 7: kyuusha.network.v1.ListNetworkInterfacesResponse.items:type_name -> kyuusha.network.v1.NetworkInterface
-	4,  // 8: kyuusha.network.v1.UpdateNetworkInterfaceRequest.network_interface:type_name -> kyuusha.network.v1.NetworkInterface
-	1,  // 9: kyuusha.network.v1.UpdateFirewallRulesRequest.ingress_rules:type_name -> kyuusha.network.v1.FirewallRule
-	1,  // 10: kyuusha.network.v1.UpdateFirewallRulesRequest.egress_rules:type_name -> kyuusha.network.v1.FirewallRule
-	0,  // 11: kyuusha.network.v1.NetworkInterfaceEvent.type:type_name -> kyuusha.network.v1.NetworkInterfaceEvent.Type
-	4,  // 12: kyuusha.network.v1.NetworkInterfaceEvent.network_interface:type_name -> kyuusha.network.v1.NetworkInterface
-	5,  // 13: kyuusha.network.v1.NetworkInterfaceService.Create:input_type -> kyuusha.network.v1.CreateNetworkInterfaceRequest
-	6,  // 14: kyuusha.network.v1.NetworkInterfaceService.Get:input_type -> kyuusha.network.v1.GetNetworkInterfaceRequest
-	7,  // 15: kyuusha.network.v1.NetworkInterfaceService.List:input_type -> kyuusha.network.v1.ListNetworkInterfacesRequest
-	9,  // 16: kyuusha.network.v1.NetworkInterfaceService.Update:input_type -> kyuusha.network.v1.UpdateNetworkInterfaceRequest
-	10, // 17: kyuusha.network.v1.NetworkInterfaceService.UpdateFirewallRules:input_type -> kyuusha.network.v1.UpdateFirewallRulesRequest
-	11, // 18: kyuusha.network.v1.NetworkInterfaceService.Delete:input_type -> kyuusha.network.v1.DeleteNetworkInterfaceRequest
-	12, // 19: kyuusha.network.v1.NetworkInterfaceService.Watch:input_type -> kyuusha.network.v1.WatchNetworkInterfacesRequest
-	4,  // 20: kyuusha.network.v1.NetworkInterfaceService.Create:output_type -> kyuusha.network.v1.NetworkInterface
-	4,  // 21: kyuusha.network.v1.NetworkInterfaceService.Get:output_type -> kyuusha.network.v1.NetworkInterface
-	8,  // 22: kyuusha.network.v1.NetworkInterfaceService.List:output_type -> kyuusha.network.v1.ListNetworkInterfacesResponse
-	4,  // 23: kyuusha.network.v1.NetworkInterfaceService.Update:output_type -> kyuusha.network.v1.NetworkInterface
-	4,  // 24: kyuusha.network.v1.NetworkInterfaceService.UpdateFirewallRules:output_type -> kyuusha.network.v1.NetworkInterface
-	16, // 25: kyuusha.network.v1.NetworkInterfaceService.Delete:output_type -> google.protobuf.Empty
-	13, // 26: kyuusha.network.v1.NetworkInterfaceService.Watch:output_type -> kyuusha.network.v1.NetworkInterfaceEvent
-	20, // [20:27] is the sub-list for method output_type
-	13, // [13:20] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	1,  // 3: kyuusha.network.v1.NetworkInterfaceStatus.effective_ingress_rules:type_name -> kyuusha.network.v1.FirewallRule
+	1,  // 4: kyuusha.network.v1.NetworkInterfaceStatus.effective_egress_rules:type_name -> kyuusha.network.v1.FirewallRule
+	15, // 5: kyuusha.network.v1.NetworkInterface.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	2,  // 6: kyuusha.network.v1.NetworkInterface.spec:type_name -> kyuusha.network.v1.NetworkInterfaceSpec
+	3,  // 7: kyuusha.network.v1.NetworkInterface.status:type_name -> kyuusha.network.v1.NetworkInterfaceStatus
+	2,  // 8: kyuusha.network.v1.CreateNetworkInterfaceRequest.spec:type_name -> kyuusha.network.v1.NetworkInterfaceSpec
+	4,  // 9: kyuusha.network.v1.ListNetworkInterfacesResponse.items:type_name -> kyuusha.network.v1.NetworkInterface
+	4,  // 10: kyuusha.network.v1.UpdateNetworkInterfaceRequest.network_interface:type_name -> kyuusha.network.v1.NetworkInterface
+	1,  // 11: kyuusha.network.v1.UpdateFirewallRulesRequest.ingress_rules:type_name -> kyuusha.network.v1.FirewallRule
+	1,  // 12: kyuusha.network.v1.UpdateFirewallRulesRequest.egress_rules:type_name -> kyuusha.network.v1.FirewallRule
+	0,  // 13: kyuusha.network.v1.NetworkInterfaceEvent.type:type_name -> kyuusha.network.v1.NetworkInterfaceEvent.Type
+	4,  // 14: kyuusha.network.v1.NetworkInterfaceEvent.network_interface:type_name -> kyuusha.network.v1.NetworkInterface
+	5,  // 15: kyuusha.network.v1.NetworkInterfaceService.Create:input_type -> kyuusha.network.v1.CreateNetworkInterfaceRequest
+	6,  // 16: kyuusha.network.v1.NetworkInterfaceService.Get:input_type -> kyuusha.network.v1.GetNetworkInterfaceRequest
+	7,  // 17: kyuusha.network.v1.NetworkInterfaceService.List:input_type -> kyuusha.network.v1.ListNetworkInterfacesRequest
+	9,  // 18: kyuusha.network.v1.NetworkInterfaceService.Update:input_type -> kyuusha.network.v1.UpdateNetworkInterfaceRequest
+	10, // 19: kyuusha.network.v1.NetworkInterfaceService.UpdateFirewallRules:input_type -> kyuusha.network.v1.UpdateFirewallRulesRequest
+	11, // 20: kyuusha.network.v1.NetworkInterfaceService.Delete:input_type -> kyuusha.network.v1.DeleteNetworkInterfaceRequest
+	12, // 21: kyuusha.network.v1.NetworkInterfaceService.Watch:input_type -> kyuusha.network.v1.WatchNetworkInterfacesRequest
+	4,  // 22: kyuusha.network.v1.NetworkInterfaceService.Create:output_type -> kyuusha.network.v1.NetworkInterface
+	4,  // 23: kyuusha.network.v1.NetworkInterfaceService.Get:output_type -> kyuusha.network.v1.NetworkInterface
+	8,  // 24: kyuusha.network.v1.NetworkInterfaceService.List:output_type -> kyuusha.network.v1.ListNetworkInterfacesResponse
+	4,  // 25: kyuusha.network.v1.NetworkInterfaceService.Update:output_type -> kyuusha.network.v1.NetworkInterface
+	4,  // 26: kyuusha.network.v1.NetworkInterfaceService.UpdateFirewallRules:output_type -> kyuusha.network.v1.NetworkInterface
+	16, // 27: kyuusha.network.v1.NetworkInterfaceService.Delete:output_type -> google.protobuf.Empty
+	13, // 28: kyuusha.network.v1.NetworkInterfaceService.Watch:output_type -> kyuusha.network.v1.NetworkInterfaceEvent
+	22, // [22:29] is the sub-list for method output_type
+	15, // [15:22] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_network_v1_networkinterface_proto_init() }

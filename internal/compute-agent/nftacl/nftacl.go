@@ -141,19 +141,31 @@ func writeRule(b *strings.Builder, chain string, r FirewallRule, addrKeyword str
 	if r.Action == "deny" {
 		verdict = "drop" // deny is terminal: no need to wait on the other side
 	}
+	// "" means "any protocol" -- not reachable from a tenant-submitted rule
+	// (internal/network's validateFirewallRules requires tcp/udp/icmp), but
+	// used by mesh_group-derived synthetic rules (see
+	// Service.EffectiveFirewallRules), which trust a sibling Subnet's
+	// entire CIDR, not just specific protocols/ports.
 	var proto string
 	switch r.Protocol {
 	case "tcp", "udp":
 		proto = fmt.Sprintf("%s dport %s", r.Protocol, r.PortRange)
 	case "icmp":
 		proto = "ip protocol icmp"
+	case "":
+		proto = ""
 	default:
 		return // validated upstream (internal/network's validateFirewallRules); defensively skip an unrecognized protocol rather than emit a malformed rule
 	}
-	if r.SourceCIDR != "" {
+	switch {
+	case r.SourceCIDR != "" && proto != "":
 		fmt.Fprintf(b, "add rule bridge %s %s ip %s %s %s %s\n", table, chain, addrKeyword, r.SourceCIDR, proto, verdict)
-	} else {
+	case r.SourceCIDR != "":
+		fmt.Fprintf(b, "add rule bridge %s %s ip %s %s %s\n", table, chain, addrKeyword, r.SourceCIDR, verdict)
+	case proto != "":
 		fmt.Fprintf(b, "add rule bridge %s %s %s %s\n", table, chain, proto, verdict)
+	default:
+		fmt.Fprintf(b, "add rule bridge %s %s %s\n", table, chain, verdict) // any protocol, any address -- a blanket allow/deny
 	}
 }
 

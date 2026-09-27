@@ -55,7 +55,8 @@ func subnetCreate(args []string) {
 	gatewayIP := fs.String("gateway-ip", "", "gateway IP")
 	dnsServers := fs.String("dns-servers", "", "comma-separated DNS server IPs")
 	dnsSuffix := fs.String("dns-suffix", "", "DNS suffix; empty disables name resolution")
-	meshGroup := fs.String("mesh-group", "", "declares intent to default-allow other Subnets sharing this value (same tenant only); not enforced yet, see docs/specs/network.md")
+	meshGroup := fs.String("mesh-group", "", "declares intent to default-allow other Subnets sharing this value (same tenant only) -- enforced via NetworkInterface.status.effective_ingress_rules/effective_egress_rules, see docs/specs/network.md")
+	sharedWithTenantIDs := fs.String("shared-with-tenant-ids", "", "comma-separated tenant IDs allowed to allow-list this Subnet's CIDR in their own ingress_rules/egress_rules (see docs/specs/network.md「Create時のバリデーション」); a tenant not listed here gets ErrValidation instead")
 	allocatableIPRanges := fs.String("allocatable-ip-ranges", "", "comma-separated \"<start-ip>-<end-ip>\" ranges IPAM may draw from; empty means the whole cidr (minus network/broadcast/gateway-ip)")
 	fs.Parse(args)
 	if *tenant == "" {
@@ -78,6 +79,9 @@ func subnetCreate(args []string) {
 	}
 	if *dnsServers != "" {
 		spec.DnsServers = strings.Split(*dnsServers, ",")
+	}
+	if *sharedWithTenantIDs != "" {
+		spec.SharedWithTenantIds = strings.Split(*sharedWithTenantIDs, ",")
 	}
 	if *allocatableIPRanges != "" {
 		spec.AllocatableIpRanges = strings.Split(*allocatableIPRanges, ",")
@@ -204,8 +208,9 @@ func subnetDelete(args []string) {
 }
 
 func printSubnet(sn *networkv1.Subnet) {
-	fmt.Printf("id=%s name=%s tenant=%s zone=%s cidr=%s mesh_group=%s phase=%s vlan_id=%d rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s zone=%s cidr=%s mesh_group=%s shared_with=%s phase=%s vlan_id=%d rv=%d\n",
 		sn.GetMeta().GetId(), sn.GetMeta().GetName(), sn.GetMeta().GetTenantId(),
 		sn.GetSpec().GetZone(), sn.GetSpec().GetCidr(), sn.GetSpec().GetMeshGroup(),
+		strings.Join(sn.GetSpec().GetSharedWithTenantIds(), ","),
 		sn.GetStatus().GetPhase(), sn.GetStatus().GetVlanId(), sn.GetMeta().GetResourceVersion())
 }

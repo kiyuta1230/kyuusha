@@ -85,6 +85,30 @@ func TestApplyAndRemove(t *testing.T) {
 	}
 }
 
+// TestApplyAnyProtocolRule covers the empty-Protocol ("any protocol")
+// rule shape Service.EffectiveFirewallRules emits for mesh_group-derived
+// synthetic rules -- writeRule silently dropped this case entirely until
+// a real playground mesh_group test caught it (a unit test alone hadn't).
+func TestApplyAnyProtocolRule(t *testing.T) {
+	const tap = "nftacltest1"
+	t.Cleanup(func() { Remove(tap) })
+
+	iface := Interface{
+		TapName:      tap,
+		SubnetCIDR:   "10.124.0.0/24",
+		IngressRules: []FirewallRule{{SourceCIDR: "10.125.0.0/24", Action: "allow"}},
+		EgressRules:  []FirewallRule{{SourceCIDR: "10.125.0.0/24", Action: "allow"}},
+	}
+	if err := Apply(iface); err != nil {
+		t.Skipf("skipping: nftables manipulation needs CAP_NET_ADMIN: %v", err)
+	}
+
+	ruleset := mustListRuleset(t)
+	if strings.Count(ruleset, "10.125.0.0/24") != 2 {
+		t.Fatalf("expected the any-protocol rule in both %s/%s chains, got:\n%s", inChain(tap), outChain(tap), ruleset)
+	}
+}
+
 func mustListRuleset(t *testing.T) string {
 	t.Helper()
 	out, err := exec.Command("nft", "list", "ruleset").CombinedOutput()

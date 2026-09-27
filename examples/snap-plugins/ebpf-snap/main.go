@@ -306,6 +306,12 @@ func cidrRule(cidr string) (bpfRule, error) {
 }
 
 func ruleFromFirewallRule(fr firewallRule) (bpfRule, error) {
+	// "" means "any protocol" (bpf/snap.c's rule.protocol == 0 wildcard) --
+	// not reachable from a tenant-submitted rule (internal/network's
+	// validateFirewallRules requires tcp/udp/icmp), but used by
+	// mesh_group-derived synthetic rules (see Service.
+	// EffectiveFirewallRules), which trust a sibling Subnet's entire CIDR,
+	// not just specific protocols/ports.
 	var protocol uint8
 	switch fr.Protocol {
 	case "tcp":
@@ -314,6 +320,8 @@ func ruleFromFirewallRule(fr firewallRule) (bpfRule, error) {
 		protocol = 17
 	case "icmp":
 		protocol = 1
+	case "":
+		protocol = 0
 	default:
 		return bpfRule{}, fmt.Errorf("unrecognized protocol %q", fr.Protocol)
 	}
@@ -327,7 +335,7 @@ func ruleFromFirewallRule(fr firewallRule) (bpfRule, error) {
 		return bpfRule{}, fmt.Errorf("unrecognized action %q", fr.Action)
 	}
 	portLo, portHi := uint16(0), uint16(65535)
-	if protocol != 1 { // not icmp
+	if protocol != 1 && protocol != 0 { // not icmp, not "any"
 		var err error
 		portLo, portHi, err = parsePortRange(fr.PortRange)
 		if err != nil {
