@@ -2541,6 +2541,14 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
   NATS利用」と同じ例外（reconcilerの単一レプリカ制約とは無関係、各レプリカが独立に
   依存先へ繋ぐだけ）として扱う。
 
+  「非ブリッジ配線には別のセキュリティバックエンドが要る」という上記の制約が
+  実際にプラガブル契約で解決できることを、TC-BPF（`cilium/ebpf`、tapに直接
+  アタッチしブリッジのポートである必要が無い）による参考実装
+  `examples/security-plugins/ebpf-secacl`で検証済み（実機確認: veth
+  ペア+network namespaceでの実トラフィック、ステートフルな確立済み接続の
+  自動許可も含む。詳細は[network仕様](specs/network.md)「非ブリッジ配線向けの
+  参考実装」参照）。
+
 - `vm create -subnets=`がtap配線されないまま起動するバグ（発見・修正済み、
   原因はNetworkInterfaceの非同期IP割り当てをcompute側が待たずにbootへ進んでいたこと、
   `createNetworkInterfaces`に短時間ポーリングを追加して解消——詳細は

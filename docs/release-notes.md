@@ -98,6 +98,35 @@
   側の話でACL機能とは無関係のため、この変更では対応していない
   （別途調査が必要）。
 
+- セキュリティバックエンドプラグインのTC-BPF（eBPF）参考実装
+  `examples/security-plugins/ebpf-secacl`を追加（`cilium/ebpf`使用、
+  独立したGoモジュールとしてルートの`go.mod`/`go.sum`には影響しない、
+  VNAPの`examples/vnap-plugins/`と同じ「アダプトして使う参考実装」という
+  位置づけ）。`nftacl`が前提とするLinuxブリッジ配線を必要とせず、tapの
+  clsact ingress/egress両フックへTCX（`cilium/ebpf/link.AttachTCX`、
+  qdisc不要な新しいカーネルAPI）で直接アタッチするため、非ブリッジVNAP配線
+  （EVPN Type-5等）でも使える。netfilterのconntrackが無いTC-BPF向けに、
+  正規化5-tupleキーの`LRU_HASH`マップ（全tap共有）で独自のステートフル
+  実装（既存フローの自動許可）を実装した——ステートフル版として作り、
+  性能重視のステートレス版は別途後日の予定。
+
+  実装中に見つけた実機バグ: `cilium/ebpf`はBPFマップの値をホストのネイティブ
+  バイトオーダーでシリアライズするため、Go側でCIDR/マスクを`binary.BigEndian`
+  で組み立てるとリトルエンディアン環境で全アドレス比較が静かに壊れる
+  （`binary.NativeEndian`が正しい）——veth実機テストで発見・修正、単体テスト
+  だけでは気づけなかった類のバグ。
+
+  実機確認済み（vethペア+network namespaceで実トラフィックを送って確認、
+  `nft list ruleset`のテキスト確認だけだったnftacl検証より踏み込んだ検証）:
+  自Subnet CIDR/gateway_ipへの疎通は常に許可、明示allowルール一致は通過、
+  一致ルール無しの新規フローはdrop、明示denyルールでも新規フローはdrop、
+  そして核心のステートフル性——`egress_rules`のみで許可されたVM発の
+  フローについて、`ingress_rules`が空のままでも応答トラフィックが
+  conntrack経由で通ることを確認。`detach`がTCアタッチメント・当該tapの
+  pin済みマップを削除し（共有`conntrack`マップは残す）、2回呼んでも安全
+  であることも確認。詳細は`examples/security-plugins/ebpf-secacl/README.md`
+  参照。
+
 ## 2026-09-26
 
 - スケジューラにVolume容量ではなく**storage_connectionによるフィルタ**を追加

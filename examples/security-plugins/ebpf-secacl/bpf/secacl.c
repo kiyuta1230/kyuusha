@@ -1,0 +1,292 @@
+//go:build ignore
+
+// secacl.c implements kyuusha's security-backend plugin contract
+// (internal/compute-agent/secacl) natively in eBPF, via TC-BPF attached
+// directly to a VM's tap device -- unlike the default nftacl implementation
+// (bridge-family nftables), this does NOT require the tap to be a Linux
+// bridge port, so it also works with non-bridge VNAP tap wiring (e.g. the
+// EVPN Type-5 example, examples/vnap-plugins/frr-type5.sh).
+//
+// # Direction naming (same inversion nftacl documents)
+//
+// A tap's TC "ingress" hook fires for packets arriving INTO that netdev --
+// i.e. packets the VM itself just wrote (the VM's own outbound traffic).
+// TC "egress" fires for packets about to leave OUT of that netdev -- i.e.
+// packets about to be delivered TO the VM. So:
+//   - enforce_vm_egress (attached to TC ingress) enforces EgressRules
+//   - enforce_vm_ingress (attached to TC egress) enforces IngressRules
+//
+// # Statefulness
+//
+// nftacl relies on netfilter's own conntrack (`ct state established,
+// related`). TC-BPF hooks don't have netfilter conntrack available at all,
+// so this file implements its own minimal one: a single conntrack map,
+// keyed by a direction-normalized 5-tuple (so both legs of one flow hash to
+// the same key), shared across every tap's attached programs (see
+// main.go's MapReplacements use). A new flow that matches an explicit
+// allow rule (or the implicit own-Subnet-CIDR/gateway_ip baseline, encoded
+// as ordinary entries at the front of each rules_* map by main.go) records
+// itself in conntrack; any packet -- in EITHER direction -- that matches
+// an existing, unexpired conntrack entry is accepted immediately, without
+// re-checking the rule list. This is symmetric: it doesn't matter whether
+// the VM or the remote peer sent the first packet of a flow.
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+// Deliberately not #include <linux/in.h> etc: vmlinux.h's own generated
+// struct ethhdr/iphdr/tcphdr/udphdr already cover what's needed, and mixing
+// it with the real uapi headers cause redefinition errors. Same reasoning
+// for hand-writing these instead of pulling in a conflicting uapi header.
+#define ETH_P_IP_BE 0x0008 // ETH_P_IP (0x0800) already in network byte order
+#define IPPROTO_ICMP_ 1
+#define IPPROTO_TCP_ 6
+#define IPPROTO_UDP_ 17
+
+#define TC_ACT_OK 0
+#define TC_ACT_SHOT 2
+
+// MAX_RULES bounds both rules_ingress/rules_egress: generous for a single
+// NetworkInterface's ACL (2 implicit baseline entries + operator-specified
+// ones), small enough for the verifier's bounded-loop budget with #pragma
+// unroll.
+#define MAX_RULES 64
+// CONNTRACK_TIMEOUT_NS: how long a conntrack entry is honored without a
+// fresh packet refreshing it -- an approximation of TCP/UDP idle timeouts,
+// not protocol-aware (see this file's own header comment: this is the
+// stateful-but-simple version; a future stateless/perf-focused
+// implementation is a separate, later plugin).
+#define CONNTRACK_TIMEOUT_NS (120ULL * 1000000000ULL)
+
+// rule mirrors secacl.FirewallRule plus the SubnetCIDR/GatewayIP baseline
+// main.go injects as the first two entries of each map -- see this
+// package's README for the exact wire-to-map field mapping.
+struct rule {
+	__u32 cidr_addr; // network byte order
+	__u32 cidr_mask; // network byte order; 0 means "match any address"
+	__u16 port_lo;   // host byte order; ignored for ICMP
+	__u16 port_hi;
+	__u8 protocol;   // IPPROTO_* value; 0 means "match any protocol"
+	__u8 action;     // 1 = allow, 0 = deny
+	__u8 active;     // 0 = unused slot
+	__u8 _pad;
+};
+
+struct conntrack_key {
+	__u32 ip_lo;
+	__u32 ip_hi;
+	__u16 port_lo;
+	__u16 port_hi;
+	__u8 protocol;
+	__u8 _pad[3];
+};
+
+// rules_ingress holds this NetworkInterface's IngressRules (traffic
+// allowed *into* the VM) -- read by enforce_vm_ingress (TC egress).
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, MAX_RULES);
+	__type(key, __u32);
+	__type(value, struct rule);
+} rules_ingress SEC(".maps");
+
+// rules_egress holds this NetworkInterface's EgressRules (traffic allowed
+// *out of* the VM) -- read by enforce_vm_egress (TC ingress).
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, MAX_RULES);
+	__type(key, __u32);
+	__type(value, struct rule);
+} rules_egress SEC(".maps");
+
+// conntrack is shared across every tap's attached programs on this host
+// (main.go loads/pins it once and reuses it for every subsequent tap via
+// ebpf.CollectionOptions.MapReplacements) -- flows aren't tap-scoped, so
+// there's no reason for each tap to keep its own copy.
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 8192);
+	__type(key, struct conntrack_key);
+	__type(value, __u64);
+} conntrack SEC(".maps");
+
+struct flow5 {
+	__u32 saddr;
+	__u32 daddr;
+	__u16 sport;
+	__u16 dport; // rule matching always checks dport regardless of
+	             // direction -- see match_ingress_rules/match_egress_rules
+	             // and secacl's README; sport exists only to make the
+	             // conntrack key a genuine 5-tuple (see make_conntrack_key).
+	__u8 protocol;
+};
+
+static __always_inline int parse_flow(struct __sk_buff *skb, struct flow5 *f)
+{
+	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(long)skb->data_end;
+
+	struct ethhdr *eth = data;
+	if ((void *)(eth + 1) > data_end)
+		return 0;
+	if (eth->h_proto != ETH_P_IP_BE)
+		return 0;
+
+	struct iphdr *ip = (void *)(eth + 1);
+	if ((void *)(ip + 1) > data_end)
+		return 0;
+	if (ip->ihl < 5)
+		return 0;
+	void *l4 = (void *)ip + (ip->ihl * 4);
+
+	f->saddr = ip->saddr;
+	f->daddr = ip->daddr;
+	f->protocol = ip->protocol;
+	f->sport = 0;
+	f->dport = 0;
+
+	if (ip->protocol == IPPROTO_TCP_) {
+		struct tcphdr *tcp = l4;
+		if ((void *)(tcp + 1) > data_end)
+			return 0;
+		f->sport = bpf_ntohs(tcp->source);
+		f->dport = bpf_ntohs(tcp->dest);
+	} else if (ip->protocol == IPPROTO_UDP_) {
+		struct udphdr *udp = l4;
+		if ((void *)(udp + 1) > data_end)
+			return 0;
+		f->sport = bpf_ntohs(udp->source);
+		f->dport = bpf_ntohs(udp->dest);
+	} else if (ip->protocol == IPPROTO_ICMP_) {
+		// No ports to extract; sport/dport stay 0 and are never
+		// checked for ICMP (see match_*_rules below) -- the
+		// conntrack key still works fine with both left at 0, since
+		// ICMP has no concept of a port to disambiguate on anyway.
+	} else {
+		return 0; // unsupported protocol: caller treats as default-deny
+	}
+	return 1;
+}
+
+// make_conntrack_key normalizes (ip, port) endpoints so both legs of the
+// same flow hash to the same key, regardless of which direction's program
+// observes a given packet.
+static __always_inline void make_conntrack_key(struct flow5 *f, struct conntrack_key *k)
+{
+	__u64 a = ((__u64)f->saddr << 16) | f->sport;
+	__u64 b = ((__u64)f->daddr << 16) | f->dport;
+	if (a <= b) {
+		k->ip_lo = f->saddr;
+		k->port_lo = f->sport;
+		k->ip_hi = f->daddr;
+		k->port_hi = f->dport;
+	} else {
+		k->ip_lo = f->daddr;
+		k->port_lo = f->dport;
+		k->ip_hi = f->saddr;
+		k->port_hi = f->sport;
+	}
+	k->protocol = f->protocol;
+	k->_pad[0] = k->_pad[1] = k->_pad[2] = 0;
+}
+
+// match_ingress_rules/match_egress_rules are intentionally near-duplicate
+// (not one function taking a map argument): a BPF map helper call must
+// reference a statically-known map object at compile time, so the map
+// can't be a runtime parameter. Returns 1 (allow, stop), -1 (deny, stop),
+// or 0 (no rule matched -- caller applies default-deny).
+static __always_inline int match_ingress_rules(struct flow5 *f, __u32 peer_addr)
+{
+	int verdict = 0;
+#pragma unroll
+	for (int i = 0; i < MAX_RULES; i++) {
+		__u32 idx = i;
+		struct rule *r = bpf_map_lookup_elem(&rules_ingress, &idx);
+		if (!r || !r->active)
+			continue;
+		if (r->protocol != 0 && r->protocol != f->protocol)
+			continue;
+		if ((peer_addr & r->cidr_mask) != (r->cidr_addr & r->cidr_mask))
+			continue;
+		if (f->protocol != IPPROTO_ICMP_ && (f->dport < r->port_lo || f->dport > r->port_hi))
+			continue;
+		verdict = r->action ? 1 : -1;
+		break;
+	}
+	return verdict;
+}
+
+static __always_inline int match_egress_rules(struct flow5 *f, __u32 peer_addr)
+{
+	int verdict = 0;
+#pragma unroll
+	for (int i = 0; i < MAX_RULES; i++) {
+		__u32 idx = i;
+		struct rule *r = bpf_map_lookup_elem(&rules_egress, &idx);
+		if (!r || !r->active)
+			continue;
+		if (r->protocol != 0 && r->protocol != f->protocol)
+			continue;
+		if ((peer_addr & r->cidr_mask) != (r->cidr_addr & r->cidr_mask))
+			continue;
+		if (f->protocol != IPPROTO_ICMP_ && (f->dport < r->port_lo || f->dport > r->port_hi))
+			continue;
+		verdict = r->action ? 1 : -1;
+		break;
+	}
+	return verdict;
+}
+
+// enforce_vm_egress is attached to the tap's TC ingress hook -- see this
+// file's header comment for why that means "the VM's own outbound
+// traffic," enforced against EgressRules (rules_egress).
+SEC("tc")
+int enforce_vm_egress(struct __sk_buff *skb)
+{
+	struct flow5 f;
+	if (!parse_flow(skb, &f))
+		return TC_ACT_OK; // non-IPv4/unparseable: out of scope, same as nftacl (IPv4-only)
+
+	struct conntrack_key k;
+	make_conntrack_key(&f, &k);
+	__u64 now = bpf_ktime_get_ns();
+	__u64 *seen = bpf_map_lookup_elem(&conntrack, &k);
+	if (seen && now - *seen < CONNTRACK_TIMEOUT_NS) {
+		bpf_map_update_elem(&conntrack, &k, &now, BPF_ANY);
+		return TC_ACT_OK;
+	}
+
+	if (match_egress_rules(&f, f.daddr) == 1) {
+		bpf_map_update_elem(&conntrack, &k, &now, BPF_ANY);
+		return TC_ACT_OK;
+	}
+	return TC_ACT_SHOT;
+}
+
+// enforce_vm_ingress is attached to the tap's TC egress hook -- "traffic
+// about to be delivered to the VM," enforced against IngressRules
+// (rules_ingress).
+SEC("tc")
+int enforce_vm_ingress(struct __sk_buff *skb)
+{
+	struct flow5 f;
+	if (!parse_flow(skb, &f))
+		return TC_ACT_OK;
+
+	struct conntrack_key k;
+	make_conntrack_key(&f, &k);
+	__u64 now = bpf_ktime_get_ns();
+	__u64 *seen = bpf_map_lookup_elem(&conntrack, &k);
+	if (seen && now - *seen < CONNTRACK_TIMEOUT_NS) {
+		bpf_map_update_elem(&conntrack, &k, &now, BPF_ANY);
+		return TC_ACT_OK;
+	}
+
+	if (match_ingress_rules(&f, f.saddr) == 1) {
+		bpf_map_update_elem(&conntrack, &k, &now, BPF_ANY);
+		return TC_ACT_OK;
+	}
+	return TC_ACT_SHOT;
+}
+
+char _license[] SEC("license") = "GPL";

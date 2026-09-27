@@ -295,6 +295,24 @@ frr-type5.sh`のようなEVPN Type-5 pure L3構成）を使う場合、`-securit
   限らずVNAP以来のtap永続化の前提そのものに付随する、コンテナ化playground側の
   制約として認識しておく
 
+### 非ブリッジ配線向けの参考実装: `examples/security-plugins/ebpf-secacl`
+
+`nftacl`はtapがLinuxブリッジのポートであることを前提とするため、VNAPで非ブリッジ
+配線（`examples/vnap-plugins/frr-type5.sh`のようなEVPN Type-5構成）を使う場合は
+`-security-backend-bin`で別のセキュリティバックエンドを組み合わせる必要がある、と
+上で述べた。その具体例として、TC-BPF（tapデバイスのclsact ingress/egress両フックに
+`cilium/ebpf`で直接アタッチ、ブリッジのポートである必要が無い）によるステートフルな
+参考実装を`examples/security-plugins/ebpf-secacl/`に用意した——VNAPの
+`examples/vnap-plugins/`と同じ「アダプトして使う参考実装」という位置づけ（本体の
+compute-agentイメージ・ビルドには組み込まない、独立したGoモジュール）。
+
+netfilterのconntrackが使えないTC-BPFフック向けに、自前の正規化5-tupleベースの
+conntrack相当（BPFの`LRU_HASH`マップ、全tap共有）を実装しており、`nftacl`の
+`ct state established,related`と同等の双方向ステートフル動作を実機（veth
+ペア+network namespaceでの実トラフィック）で確認済み。詳細・設計判断・実機確認結果は
+`examples/security-plugins/ebpf-secacl/README.md`参照。性能重視のステートレス版は
+別途後日の課題。
+
 ### `UpdateFirewallRules`とホストへの反映
 
 `NetworkInterfaceService.UpdateFirewallRules`（`ingress_rules`/`egress_rules`を
