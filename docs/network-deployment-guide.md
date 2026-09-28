@@ -119,7 +119,11 @@ EVPN-VXLANでLeafがVTEPとしてL2をストレッチするため、あるVLAN(=
   割り当てが衝突する（後勝ちで上書きされる）ため、Subnetごとに排他的な番号自体は必須。
   ただし**その番号を実際にワイヤへ802.1Qタグとして出すかどうかは、host-ToR間の実配線を
   担うVNAPプラグイン（`-network-attach-bin`）次第**であり、上記のトランクポート設定は
-  あくまでVLANトランク方式（Type-2、本ガイドの既定の前提）の場合の話。Type-5（EVPN pure L3）
+  あくまでVLANトランク方式（Type-2、本ガイドの既定の前提）の場合の話。組み込み実装
+  （`-network-attach-bin`未指定）はホスト内のLinuxブリッジ配線のみでこのタグ付けを
+  一切行わないが、`examples/vnap-plugins/vlan-trunk.sh`という参考VNAPプラグインが
+  アップリンクNICへのVLANサブインターフェース作成を代わりに担う——ゼロから自作する
+  必要はない（[VNAP仕様](specs/vnap.md)「参考実装」参照）。Type-5（EVPN pure L3）
   デプロイでは事情が異なる——「3.5. Type-5（EVPN pure L3）デプロイの場合」参照
 
 ## 2. VRF設計とルートリークポリシー（最重要）

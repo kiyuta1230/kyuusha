@@ -15,3 +15,9 @@
 # internal/compute-agent/volumeref). scenario.sh writes real Volume backing
 # files into it at runtime; nothing here should be committed.
 /playground/volume-data/
+
+# containerlab's own lab-state directory (SSH configs, node startup
+# configs, etc.), named after playground/containerlab-clos/topo.clab.yml's
+# `name:`. run-test.sh/cleanup.sh manage its lifecycle; nothing here should
+# be committed.
+/playground/containerlab-clos/clab-clos-vlan-test/

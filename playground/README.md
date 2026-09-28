@@ -41,6 +41,13 @@ CLIを直接使う場合は
 - `./playground/churn.sh [max_vms] [interval_seconds]`: Grafanaダッシュボードを
   眺めながら数字が動き続けるよう、VM+Volumeの作成・削除を延々と繰り返す
 - `./playground/demo.sh [-y]`: 日本語で読み上げるナレーション付きのプロダクトデモ
+- `./playground/containerlab-clos/run-test.sh`（+`cleanup.sh`）: kyuushaの通常の
+  サービス群とは無関係に、[containerlab](https://containerlab.dev)でleaf-spine-leaf
+  のCLOS疑似ファブリック（本物のVLAN-aware Linuxブリッジがスイッチ役）を組み立て、
+  `examples/vnap-plugins/`のVNAP参考実装（現状`vlan-trunk.sh`）を実際のホスト跨ぎL2
+  疎通の検証に使う。containerlabとroot権限（sudo）が要る。単発のDockerネットワーク
+  では再現しない環境依存の問題を切り分ける目的もある（詳細は
+  [VNAP仕様](../docs/specs/vnap.md)「参考実装」参照）
 
 ## 構成
 

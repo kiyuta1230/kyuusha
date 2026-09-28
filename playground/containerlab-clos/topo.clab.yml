@@ -1,0 +1,28 @@
+name: clos-vlan-test
+topology:
+  nodes:
+    host1:
+      kind: linux
+      image: nicolaka/netshoot:latest
+      cmd: sleep infinity
+    host2:
+      kind: linux
+      image: nicolaka/netshoot:latest
+      cmd: sleep infinity
+    leaf1:
+      kind: linux
+      image: nicolaka/netshoot:latest
+      cmd: sleep infinity
+    leaf2:
+      kind: linux
+      image: nicolaka/netshoot:latest
+      cmd: sleep infinity
+    spine:
+      kind: linux
+      image: nicolaka/netshoot:latest
+      cmd: sleep infinity
+  links:
+    - endpoints: ["host1:eth1", "leaf1:eth1"]
+    - endpoints: ["leaf1:eth2", "spine:eth1"]
+    - endpoints: ["spine:eth2", "leaf2:eth1"]
+    - endpoints: ["leaf2:eth2", "host2:eth1"]

@@ -19,4 +19,5 @@ assumptions and dependencies.
 
 | Script | Deployment style |
 |---|---|
+| `vlan-trunk.sh` | VLAN trunk (Type-2): the built-in Linux-bridge implementation plus a real 802.1Q-tagged uplink NIC trunk, so two VMs on the same Subnet actually reach each other across Hypervisors |
 | `frr-type5.sh` | EVPN Type-5 (pure L3): no shared per-Subnet bridge, each VM's tap gets its own point-to-point-shaped `/32` presence, advertised via FRR |
