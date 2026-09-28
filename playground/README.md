@@ -48,6 +48,12 @@ CLIを直接使う場合は
   疎通の検証に使う。containerlabとroot権限（sudo）が要る。単発のDockerネットワーク
   では再現しない環境依存の問題を切り分ける目的もある（詳細は
   [VNAP仕様](../docs/specs/vnap.md)「参考実装」参照）
+- `./playground/frr-type5-clos/run-test.sh`（+`cleanup.sh`）: 上記と同じ理由・同じ
+  containerlab依存だが、スイッチ役が本物のFRR（BGP EVPN Type-5、VXLANカプセル化あり）
+  で、`examples/vnap-plugins/frr-type5.sh`の実機検証に使う。この検証で実際に
+  `frr-type5.sh`のバグ（tapをVRFへ`master`で所属させていなかったため、注入した
+  static routeが常にno-opになっていた）を発見・修正した実績があるため、
+  `frr-type5.sh`を変更した際は必ず再実行すること
 
 ## 構成
 

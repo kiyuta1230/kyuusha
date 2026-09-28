@@ -65,6 +65,23 @@
   でも問題なく疎通したため、最初の失敗は上記playground環境（長時間稼働させながら
   手動でのブリッジ設定変更を繰り返した1コンテナ）固有の何らかの状態に起因するものと
   みられる——スクリプトの設計・実装自体の欠陥ではないと判断した
+- **`examples/vnap-plugins/frr-type5.sh`の実バグを発見・修正した**: `vlan-trunk.sh`と
+  対になる形で、containerlab製の本物のBGP EVPN Type-5ラボ（`playground/frr-type5-clos/`、
+  leaf-spine-leafの4ホップ、host1/host2それぞれ個別ASNのunnumbered eBGP、
+  VXLANカプセル化あり）を新規に組み、`frr-type5.sh`をそのまま実行して初めてホスト跨ぎの
+  実機検証をした。その結果、**tapデバイスをテナントのVRFへ`master`として所属させる
+  処理が漏れていた**バグが見つかった——このため、スクリプトが`vtysh`経由でFRRへ注入する
+  static routeはFRR側の設定としては受理されるように見えても、カーネル/RIBへ実際には
+  一切インストールされない（`ip link set $tap master $vrf`が無いと、Linux kernelの
+  VRFルーティングテーブルは出力先デバイスがそのVRFのメンバーでないルートを解決できない
+  ため）。この状態ではType-5は実質全く機能していなかった。`ip link set "$tap" master
+  "$vrf"`を追加して修正し、host1↔host2間で実際にVXLANカプセル化を経由した双方向ping
+  （0%ロス）を確認した。あわせて、ネットワークチーム側の責務であるFRR設定にも
+  ドキュメント化されていなかった前提（L3VNIが`State: Up`になるには、実データ疎通が
+  無くてもSVI＝ブリッジが要る/そのSVI自体もVRFへ`master`所属が要る/`advertise-all-vni`
+  がVNI認識に要る/`redistribute connected`で各VTEPのloopbackへの到達性を確保する必要が
+  ある）が複数見つかったため、スクリプト自身の「Required companion FRR config」節に
+  追記した
 
 ## 2026-09-27
 

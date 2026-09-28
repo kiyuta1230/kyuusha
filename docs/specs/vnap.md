@@ -47,9 +47,14 @@
   デプロイ向けのサンプル（[network-deployment-guide.md](../network-deployment-guide.md)
   「3.5. Type-5（EVPN pure L3）デプロイの場合」参照）。共有ブリッジを使わず、
   VMごとのtapへ`gateway_ip`を`/32`で直接付与しproxy ARPを有効化した上で、VM自身の
-  IPを`/32`のホストルートとしてカーネルとFRR（`vtysh`経由）の両方へ注入する。
-  playgroundで実機確認済み（Firecrackerゲストがブリッジ無しで実際に起動しゲスト
-  自身がgatewayへのpingに成功、VM削除時にFRR側のルートも正しく引き上げられることを
-  確認）。BGP/EVPNの設定自体はASN方式・numbered/unnumbered等が環境ごとに大きく
-  異なるプロトコルレベルの事情を抱えるため、`vlan-trunk.sh`と違い「そのまま使える」
+  IPを`/32`のホストルートとしてカーネルとFRR（`vtysh`経由）の両方へ注入する。単一
+  Hypervisorローカルの確認（Firecrackerゲストがブリッジ無しで実際に起動しゲスト自身が
+  gatewayへのpingに成功、VM削除時にFRR側のルートも正しく引き上げられることを確認）に
+  加え、`playground/frr-type5-clos/`（containerlab製、本物のFRRがleaf-spine-leafの
+  スイッチ役を担う、BGP EVPN Type-5・VXLANカプセル化あり）でホスト跨ぎの実機確認も
+  行った——この検証で**tapをVRFへ`master`として所属させる処理が漏れていたバグ**
+  （注入したstatic routeが常にno-opになり、Type-5が実質機能しない状態だった）を
+  発見・修正した（詳細はスクリプト自身のコメントとdocs/release-notes.md参照）。
+  BGP/EVPNの設定自体はASN方式・numbered/unnumbered等が環境ごとに大きく異なる
+  プロトコルレベルの事情を抱えるため、`vlan-trunk.sh`と違い「そのまま使える」
   参考実装にはなり得ず、読んで自分の環境に合わせて作り込む前提のまま

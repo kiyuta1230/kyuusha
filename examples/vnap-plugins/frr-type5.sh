@@ -25,9 +25,21 @@
 #      different tap on this same host, or learned from FRR/BGP if it's on
 #      a different Hypervisor) rather than ever needing a real shared L2
 #      segment
-#   3. installs a kernel host route for the VM's own IP (/32, via this
-#      tap) and injects the same /32 into FRR (via vtysh, into a per-tenant
-#      VRF) as a static route
+#   3. enslaves the tap into the tenant's VRF device (`ip link set $tap
+#      master $vrf`) -- REQUIRED for the next step: a Linux kernel VRF
+#      routing table only ever resolves a route whose output device is
+#      itself a member of that VRF. Skip this and FRR will accept the
+#      "ip route ... vrf ..." config below with no error, but the route
+#      never actually installs into the kernel/RIB -- a silent no-op that
+#      was this script's own bug until verified against a real BGP EVPN
+#      lab (see docs/release-notes.md), not something to reintroduce.
+#      Requires the vrf device to already exist on this host, matching
+#      the FRR-side `vrf vrfNNNNNNNNNNNN` stanza below -- this script
+#      never creates it (a per-tenant VRF is provisioned once by the
+#      network team, shared by every VM of that tenant, not per-VM)
+#   4. installs a kernel host route for the VM's own IP (/32, via this
+#      tap) and injects the same /32 into FRR (via vtysh, into the same
+#      per-tenant VRF) as a static route
 #
 # This script only ever talks to FRR's RIB (a static route in one VRF) --
 # it is NOT responsible for BGP/EVPN configuration itself (VRF/RD/RT
@@ -81,6 +93,15 @@ attach)
 
 	if ! ip link set "$tap" up; then
 		echo "frr-type5: ip link set $tap up failed" >&2
+		exit 1
+	fi
+	# Enslave into the tenant VRF before any addr/route step below, so
+	# those operate on an already-vrf-scoped device rather than relying on
+	# the kernel's route-migration behavior when a device changes VRF
+	# membership later. See this package's own doc comment for why this
+	# step, once missing, made every route below a silent no-op.
+	if ! ip link set "$tap" master "$vrf"; then
+		echo "frr-type5: enslave $tap into vrf $vrf failed (does the vrf device exist yet?)" >&2
 		exit 1
 	fi
 	# "replace", not "add": attach must be idempotent (see this script's
@@ -142,17 +163,60 @@ esac
 
 # --- Required companion FRR config (sketch, not exhaustive) ---
 #
+# Verified end-to-end against a real containerlab BGP EVPN lab (leaf-spine-
+# leaf, unnumbered eBGP, one ASN per hypervisor -- see
+# playground/frr-type5-clos/ and docs/release-notes.md). A few pieces below
+# are easy to miss and silently leave routes unadvertised rather than
+# erroring, so they're spelled out here even though this is "the network
+# team's job, not this script's":
+#
+# ip link add vrfNNNNNNNNNNNN type vrf table <per-tenant table id>
+# ip link set vrfNNNNNNNNNNNN up
+# !
+# ip link add br-vrfNNNNNNNNNNNN type bridge          ! the "SVI" -- an
+# ip link set br-vrfNNNNNNNNNNNN master vrfNNNNNNNNNNNN ! L3VNI needs one to
+# ip link set br-vrfNNNNNNNNNNNN up                    ! reach evpn "State:
+#                                                       ! Up" even with no
+#                                                       ! real L2 traffic on
+#                                                       ! it (FRR's
+#                                                       ! symmetric-IRB
+#                                                       ! model). Must be a
+#                                                       ! VRF member itself
+#                                                       ! -- otherwise a
+#                                                       ! decapsulated
+#                                                       ! packet's route
+#                                                       ! lookup lands in
+#                                                       ! the wrong (default)
+#                                                       ! table and is
+#                                                       ! silently dropped
+# ip link add vxlanNNNNNN type vxlan id <L3VNI> dstport 4789 local <this
+#   host's own VTEP/loopback IP> nolearning
+# ip link set vxlanNNNNNN master br-vrfNNNNNNNNNNNN
+# ip link set vxlanNNNNNN up
+# !
 # vrf vrfNNNNNNNNNNNN
 #  vni <per-tenant L3VNI, network team's own numbering>
 # exit-vrf
+# !
+# router bgp <local ASN>
+#  neighbor <iface> interface remote-as external   ! per-hop underlay eBGP
+#  address-family ipv4 unicast
+#   redistribute connected   ! so every hop can route to every VTEP's own
+#  exit-address-family       ! loopback -- without this, nothing has a path
+#                             ! to the VXLAN destination IP at all
+#  address-family l2vpn evpn
+#   neighbor <iface> activate   ! on every eBGP session, including transit
+#   advertise-all-vni           ! hops -- needed for VNI/VRF recognition,
+#  exit-address-family          ! not just route origination
 # !
 # router bgp <local ASN> vrf vrfNNNNNNNNNNNN
 #  address-family ipv4 unicast
 #   redistribute static
 #  exit-address-family
 #  address-family l2vpn evpn
-#   advertise ipv4 unicast
-#  exit-address-family
+#   route-target both <RT>   ! must match across every host/leaf/spine that
+#   advertise ipv4 unicast   ! shares this tenant -- FRR's own ASN:VNI
+#  exit-address-family       ! auto-derived RT differs per host otherwise
 # !
 #
 # See docs/network-deployment-guide.md for the surrounding RT/RD

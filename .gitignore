@@ -21,3 +21,4 @@
 # `name:`. run-test.sh/cleanup.sh manage its lifecycle; nothing here should
 # be committed.
 /playground/containerlab-clos/clab-clos-vlan-test/
+/playground/frr-type5-clos/clab-type5-clos-test/

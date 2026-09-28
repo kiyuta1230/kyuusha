@@ -1,0 +1,69 @@
+name: type5-clos-test
+topology:
+  nodes:
+    host1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.5.1
+      binds:
+        - daemons:/etc/frr/daemons
+        - host1/frr.conf:/etc/frr/frr.conf
+      exec:
+        - apk add --no-cache jq iputils
+        - ip link add vrf01c9a2a0762a type vrf table 1000
+        - ip link set vrf01c9a2a0762a up
+        - ip addr add 10.255.0.1/32 dev lo
+        - ip link add br104000 type bridge vlan_filtering 0
+        - ip link set br104000 master vrf01c9a2a0762a
+        - ip link set br104000 up
+        - ip link add vxlan104000 type vxlan id 104000 dstport 4789 local 10.255.0.1 nolearning
+        - ip link set vxlan104000 master br104000
+        - ip link set vxlan104000 up
+    host2:
+      kind: linux
+      image: quay.io/frrouting/frr:10.5.1
+      binds:
+        - daemons:/etc/frr/daemons
+        - host2/frr.conf:/etc/frr/frr.conf
+      exec:
+        - apk add --no-cache jq iputils
+        - ip link add vrf01c9a2a0762a type vrf table 1000
+        - ip link set vrf01c9a2a0762a up
+        - ip addr add 10.255.0.2/32 dev lo
+        - ip link add br104000 type bridge vlan_filtering 0
+        - ip link set br104000 master vrf01c9a2a0762a
+        - ip link set br104000 up
+        - ip link add vxlan104000 type vxlan id 104000 dstport 4789 local 10.255.0.2 nolearning
+        - ip link set vxlan104000 master br104000
+        - ip link set vxlan104000 up
+    leaf1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.5.1
+      binds:
+        - daemons:/etc/frr/daemons
+        - leaf1/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip link add vrf01c9a2a0762a type vrf table 1000
+        - ip link set vrf01c9a2a0762a up
+    leaf2:
+      kind: linux
+      image: quay.io/frrouting/frr:10.5.1
+      binds:
+        - daemons:/etc/frr/daemons
+        - leaf2/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip link add vrf01c9a2a0762a type vrf table 1000
+        - ip link set vrf01c9a2a0762a up
+    spine:
+      kind: linux
+      image: quay.io/frrouting/frr:10.5.1
+      binds:
+        - daemons:/etc/frr/daemons
+        - spine/frr.conf:/etc/frr/frr.conf
+      exec:
+        - ip link add vrf01c9a2a0762a type vrf table 1000
+        - ip link set vrf01c9a2a0762a up
+  links:
+    - endpoints: ["host1:eth1", "leaf1:eth1"]
+    - endpoints: ["leaf1:eth2", "spine:eth1"]
+    - endpoints: ["spine:eth2", "leaf2:eth1"]
+    - endpoints: ["leaf2:eth2", "host2:eth1"]
