@@ -19,16 +19,6 @@ adopt機構（`TestManagerReconcileAdoptsRunningProcessAcrossRestart`で検証�
 実際にコンテナ化デプロイでのin-placeアップグレードが必要になった時点で
 着手する。
 
-## ingress_rules/egress_rules周りで見送っていた2項目（解決済み・実装済み、2026-09-27）
-
-`shared_with_tenant_ids`によるクロステナントCIDR許可の検証（`internal/network/
-firewallrule.go`の`validateCrossTenantRules`、`CreateNetworkInterface`/
-`UpdateFirewallRules`から呼び出し）と、`mesh_group`が一致するSubnet同士の自動許可
-（`Service.EffectiveFirewallRules`、`status.effective_ingress_rules`/
-`effective_egress_rules`として`Create`/`Get`のみが返す・etcdの`spec`には混ぜない）
-を実装した。詳細は[network仕様](specs/network.md)「spec.mesh_group」・
-「Create時のバリデーション」参照。
-
 ## playground/scenario.shのCI自動実行をやるべきか（解決済み・実装済み、2026-09-27）
 
 GitHub-hosted `ubuntu-latest` runnerに実際に`/dev/kvm`が存在するか、CIへ一時的な

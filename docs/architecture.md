@@ -37,7 +37,7 @@ AZごとのVLANプール(4094)といった、これまでの設計判断はそ�
 |---|---|---|---|
 | ライブマイグレーション | Novaの主要機能 | **不要** | ハイパーバイザー障害時の復旧はKaaS層(Pod再スケジュール)が担う。ハイパーバイザーはcattle。ただし運用者が明示的に起動するコールドマイグレーション（`Stopped`のVMを別Hypervisorへ、IPとVolumeデータのみ引き継いで再配置——計画メンテナンス/退役用）は実装済み。障害時の自動フェイルオーバーではない点でこの判断と矛盾しない（[VirtualMachine仕様](specs/virtual-machine.md)「マイグレーション」参照） |
 | ディスク永続化 | Cinderがフル機能(スナップショット/レプリケーション等) | **最小限**。ルートディスクはイメージからのephemeral/copy-on-write。永続化が要る場合のみブロックデバイスをattach | VM自体の長期状態保持を前提にしない |
-| テナントネットワーク | Neutronがフル機能(overlay per-tenant, router, floating IP, per-tenant security policy) | **最小限**。テナント＝KaaSクラスタ単位の**L2/L3分離のみ**担保。Pod間のマルチテナント分離はCNI/NetworkPolicy層(KaaS側)の責務 | KaaSクラスタ間が疎通しなければ良く、クラスタ内のテナント性はKaaS側の仕事 |
+| テナントネットワーク | Neutronがフル機能(overlay per-tenant, router, floating IP, per-tenant security policy) | **最小限**。テナント＝KaaSクラスタ単位の**L2/L3分離のみ**担保。Pod間のマルチテナント分離はCNI/NetworkPolicy層(KaaS側)の責務。Public IP Attach(floating IP相当)は`Subnet.spec.unique_cidr`/`visibility`/`shared_with_tenant_ids`で表現——新しいリソース種別を増やさず、Subnet/NetworkInterfaceの既存機構をそのまま流用する（後述「networkサービスのリソース」節参照）。router/LBのような複数バックエンドを束ねる共有サービスは引き続きスコープ外 | KaaSクラスタ間が疎通しなければ良く、クラスタ内のテナント性はKaaS側の仕事。ただしPublic IPはVMのライフサイクルに紐づく1:1の外部参照で、Volumeと同じ「参照するだけ、プロビジョニングはしない」性質を持つため、Subnetの一種として扱える |
 | 外部API設計 | REST、命令的CRUD+ポーリング、プロジェクトごとに規約バラバラ | **宣言的API**。spec/status分離、watch(ストリーミング)、resourceVersionによる楽観的並行性制御。ただしKubernetes CRD/Aggregated API Serverそのものにはしない——理由は「リソースモデル / API規約」節参照 | 利用者は人間ではなくKaaSのコントローラー。ポーリングではなくwatchで駆動したい |
 
 ## 設計原則: KubeVirtを反面教師にする
@@ -100,7 +100,7 @@ OpenStack固有語ではなく業界共通語として十分直接的なため�
 | `identity` | Keystone | 認証・認可・テナント（＝KaaSクラスタ）・RBAC・トークン発行 |
 | `image` | Glance | イメージのメタデータ管理＋ストレージ |
 | `compute` | Nova | VirtualMachineのライフサイクル管理、スケジューリング、compute-agentとの非同期RPC。ライブマイグレーション等の高可用機能は持たない |
-| `network` | Neutron | テナント(KaaSクラスタ)単位のネットワーク分離のみ。ルーター/floating IP/per-tenant security policyはスコープ外 |
+| `network` | Neutron | テナント(KaaSクラスタ)単位のネットワーク分離のみ。Public IP Attach(floating IP相当)はSubnetの一機能として最小限サポート。ルーター/LB/per-tenant security policyはスコープ外 |
 | `block-storage` | Cinder | ボリュームの作成・attach・detachのみ。スナップショット/レプリケーションは当面スコープ外 |
 | `api-gateway` | (Nova-api等の集約) | 外部(KaaS)向けgRPCエンドポイント集約、認証、ルーティング |
 
@@ -381,15 +381,23 @@ message HypervisorStatus {
 それぞれが独立してVLAN IDを1つ払い出される（bastionのような多足構成は複数Subnetの作成で表現する）。
 
 ```protobuf
+enum SubnetVisibility {
+  SUBNET_VISIBILITY_UNSPECIFIED = 0; // PRIVATE扱い
+  PRIVATE = 1; // 既定: 所有テナントのみ、+shared_with_tenant_idsで列挙したテナント
+  PUBLIC = 2;  // 全テナントがNetworkInterfaceをattach可能
+}
+
 message SubnetSpec {
   string zone = 1;         // 必須。このSubnet(VLAN)が属するAvailability Zone
   string cidr = 2;         // 例: "10.0.1.0/24"
   string gateway_ip = 3;
   repeated string dns_servers = 4; // 未指定かつdns_suffix設定時はkyuushaの共有リゾルバIPを補完
-  repeated string shared_with_tenant_ids = 5; // 他テナントへの経路共有を許可する意図の宣言（任意）
   string dns_suffix = 6;   // 空なら名前解決は拡張機能として無効。値を設定すると<vm名>.<dns_suffix>で解決可能になる
-  string mesh_group = 7;   // 同じ値を持つSubnet同士（同一テナント限定）はデフォルト許可、という意図の宣言（任意、ACL強制はまだ実装なし。docs/specs/network.md参照）
+  string mesh_group = 7;   // 同じ値を持つSubnet同士（同一テナント限定）はデフォルト許可、という意図の宣言（実装済み。docs/specs/network.md参照）
   repeated string allocatable_ip_ranges = 8; // 例: ["10.0.1.10-10.0.1.20"]。空ならcidr全体（ネットワーク/ブロードキャスト/gateway_ip除く）
+  bool unique_cidr = 9;    // trueなら、他のunique_cidr=trueなSubnetとのCIDR重複を全テナット横断で拒否する。Public IP用アドレス空間の宣言に使う
+  SubnetVisibility visibility = 10; // 既定PRIVATE
+  repeated string shared_with_tenant_ids = 11; // visibility==PRIVATEの時だけ意味を持つ。このSubnetへ実際にNetworkInterfaceをattachしてよい、所有テナント以外のテナントID(kyuusha.image.v1.ImageSpecの同名フィールドと全く同じ意味)
 }
 
 message SubnetStatus {
@@ -421,8 +429,24 @@ message NetworkInterfaceStatus {
 }
 ```
 
-`tenant_id`(`ObjectMeta`)は`Subnet`単位で持ち、同一テナントのVirtualMachineだけがその`Subnet`の
-`NetworkInterface`を作成できる。異なるテナントのSubnet間の非疎通性は、VLANタグそのものではなく
+`shared_with_tenant_ids`はかつて（field 5）「他テナントが自分のingress_rules/egress_rules
+の中でこのSubnetのCIDRをallow宛先として名指ししてよいか」というACL参照専用の同意
+フィールドだったが、削除した。これと同等以上の制御（例: 外部の申請システムと連携した
+事前承認済みACLルールかのチェック）が必要になった場合は、専用フィールドを増やすのではなく
+`internal/admissionwebhook`（[external-integration.md](specs/external-integration.md)
+「ゲート系(作成側): Admission Webhook」参照、現状`VirtualMachineService.Create`のみに
+配線済み）を`network`サービスの`CreateNetworkInterface`/`UpdateFirewallRules`にも配線
+する方針にする——resource-agnosticなゲートとして最初からその用途を想定して設計されている。
+
+`tenant_id`(`ObjectMeta`)は`Subnet`単位で持つが、実際に`NetworkInterface`をattachできる
+テナントは所有テナントだけとは限らない——`spec.visibility`/`spec.shared_with_tenant_ids`
+（`kyuusha.image.v1.ImageVisibility`と同じ意味）で、所有テナント以外にも許可できる
+（`PUBLIC`なら任意のテナント、`PRIVATE`なら`shared_with_tenant_ids`列挙分のみ）。
+**Public IP Attach**はこの仕組みの上に成り立つ: 管理者が`unique_cidr=true`の
+Public IP用アドレス空間をSubnetとして1つ作り、実際に使わせたいテナントを
+`shared_with_tenant_ids`（または`visibility=PUBLIC`）で許可する運用を想定する——
+`NetworkInterface.status.ip_address`がそのまま公開IPになり、新しいリソース種別は
+増やさない。異なるテナントのSubnet間の非疎通性は、VLANタグそのものではなく
 **ゲートウェイ側のVRF分離とルートリーク禁止**によって担保する（詳細は
 「ネットワーク分離の実現方式」節）。
 

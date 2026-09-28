@@ -311,7 +311,7 @@ func (s *Service) watchPendingNetworkInterfaces(ctx context.Context) {
 			continue
 		}
 		n := e.Object
-		subnet, err := s.subnets.Get(ctx, n.Meta.TenantID, n.Spec.SubnetID)
+		subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID)
 		if err != nil || subnet.Status.Phase != SubnetPhaseReady {
 			continue // retryPendingNetworkInterfaces' sweep retries once the Subnet is Ready
 		}
@@ -372,7 +372,7 @@ func (s *Service) retryPendingNetworkInterfaces(ctx context.Context) {
 		if ifaces[i].Status.Phase != NetworkInterfacePhasePending {
 			continue
 		}
-		subnet, err := s.subnets.Get(ctx, ifaces[i].Meta.TenantID, ifaces[i].Spec.SubnetID)
+		subnet, err := s.getSubnetForInterface(ctx, ifaces[i].Meta.TenantID, ifaces[i].Spec.SubnetID)
 		if err != nil || subnet.Status.Phase != SubnetPhaseReady {
 			continue
 		}
@@ -404,6 +404,11 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 	}
 	if err := validateAllocatableIPRanges(spec.CIDR, spec.AllocatableIPRanges); err != nil {
 		return nil, fmt.Errorf("%w: spec.allocatable_ip_ranges: %v", ErrValidation, err)
+	}
+	if spec.UniqueCidr {
+		if err := s.validateUniqueCIDR(ctx, "", spec.CIDR); err != nil {
+			return nil, err
+		}
 	}
 
 	s.usageMu.Lock()
@@ -492,6 +497,11 @@ func (s *Service) ListSubnets(ctx context.Context, tenantID string) ([]Subnet, e
 }
 
 func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, error) {
+	if subnet.Spec.UniqueCidr {
+		if err := s.validateUniqueCIDR(ctx, subnet.Meta.ID, subnet.Spec.CIDR); err != nil {
+			return nil, err
+		}
+	}
 	out, err := s.subnets.Update(ctx, *subnet)
 	if err != nil {
 		return nil, err
@@ -544,12 +554,6 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 	if err := validateFirewallRules(spec.EgressRules); err != nil {
 		return nil, err
 	}
-	if err := s.validateCrossTenantRules(ctx, tenantID, spec.IngressRules); err != nil {
-		return nil, err
-	}
-	if err := s.validateCrossTenantRules(ctx, tenantID, spec.EgressRules); err != nil {
-		return nil, err
-	}
 
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
@@ -558,12 +562,18 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 		return &existing, nil
 	}
 
-	subnet, err := s.subnets.Get(ctx, tenantID, spec.SubnetID)
+	subnet, err := s.getSubnetForInterface(ctx, tenantID, spec.SubnetID)
 	if err != nil {
 		if errors.Is(err, ErrSubnetNotFound) {
 			return nil, fmt.Errorf("%w: subnet_id %q does not exist", ErrValidation, spec.SubnetID)
 		}
 		return nil, err
+	}
+	// subnetUsableBy is only ever checked here, at attach time -- see its
+	// own doc comment for why getSubnetForInterface itself doesn't gate on
+	// it.
+	if !subnetUsableBy(subnet, tenantID) {
+		return nil, fmt.Errorf("%w: subnet_id %q is not usable by tenant %q", ErrValidation, spec.SubnetID, tenantID)
 	}
 	if subnet.Status.Phase != SubnetPhaseReady {
 		return nil, fmt.Errorf("%w: subnet %q is not Ready (phase=%s)", ErrValidation, spec.SubnetID, subnet.Status.Phase)
@@ -699,12 +709,6 @@ func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, 
 	if err := validateFirewallRules(egress); err != nil {
 		return nil, err
 	}
-	if err := s.validateCrossTenantRules(ctx, tenantID, ingress); err != nil {
-		return nil, err
-	}
-	if err := s.validateCrossTenantRules(ctx, tenantID, egress); err != nil {
-		return nil, err
-	}
 
 	n, err := s.interfaces.Get(ctx, tenantID, id)
 	if err != nil {
@@ -745,7 +749,7 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
 	}
 
 	var subnetCIDR, gatewayIP string
-	if subnet, err := s.subnets.Get(ctx, n.Meta.TenantID, n.Spec.SubnetID); err == nil {
+	if subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID); err == nil {
 		subnetCIDR = subnet.Spec.CIDR
 		gatewayIP = subnet.Spec.GatewayIP
 	}

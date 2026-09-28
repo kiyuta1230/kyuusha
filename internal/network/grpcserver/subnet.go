@@ -113,10 +113,12 @@ func fromSubnetSpec(s *networkv1.SubnetSpec) network.SubnetSpec {
 		CIDR:                s.GetCidr(),
 		GatewayIP:           s.GetGatewayIp(),
 		DNSServers:          s.GetDnsServers(),
-		SharedWithTenantIDs: s.GetSharedWithTenantIds(),
 		DNSSuffix:           s.GetDnsSuffix(),
 		MeshGroup:           s.GetMeshGroup(),
 		AllocatableIPRanges: s.GetAllocatableIpRanges(),
+		UniqueCidr:          s.GetUniqueCidr(),
+		Visibility:          fromSubnetVisibility(s.GetVisibility()),
+		SharedWithTenantIDs: s.GetSharedWithTenantIds(),
 	}
 }
 
@@ -126,10 +128,38 @@ func toSubnetSpec(s network.SubnetSpec) *networkv1.SubnetSpec {
 		Cidr:                s.CIDR,
 		GatewayIp:           s.GatewayIP,
 		DnsServers:          s.DNSServers,
-		SharedWithTenantIds: s.SharedWithTenantIDs,
 		DnsSuffix:           s.DNSSuffix,
 		MeshGroup:           s.MeshGroup,
 		AllocatableIpRanges: s.AllocatableIPRanges,
+		UniqueCidr:          s.UniqueCidr,
+		Visibility:          toSubnetVisibility(s.Visibility),
+		SharedWithTenantIds: s.SharedWithTenantIDs,
+	}
+}
+
+// fromSubnetVisibility/toSubnetVisibility mirror internal/image/grpcserver's
+// fromVisibility/toVisibility exactly -- own copy, not a shared helper (each
+// service's proto enum is its own type, same "each layer has its own
+// mirror" convention this codebase uses elsewhere).
+func fromSubnetVisibility(v networkv1.SubnetVisibility) network.SubnetVisibility {
+	switch v {
+	case networkv1.SubnetVisibility_PRIVATE:
+		return network.SubnetVisibilityPrivate
+	case networkv1.SubnetVisibility_PUBLIC:
+		return network.SubnetVisibilityPublic
+	default:
+		return network.SubnetVisibilityUnspecified
+	}
+}
+
+func toSubnetVisibility(v network.SubnetVisibility) networkv1.SubnetVisibility {
+	switch v {
+	case network.SubnetVisibilityPrivate:
+		return networkv1.SubnetVisibility_PRIVATE
+	case network.SubnetVisibilityPublic:
+		return networkv1.SubnetVisibility_PUBLIC
+	default:
+		return networkv1.SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED
 	}
 }
 

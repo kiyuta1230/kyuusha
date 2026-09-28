@@ -23,6 +23,59 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// SubnetVisibility mirrors kyuusha.image.v1.ImageVisibility exactly -- same
+// three-tier access model (owner-only / owner+explicit allowlist / anyone),
+// same meaning, same UNSPECIFIED-defaults-to-PRIVATE convention. See
+// SubnetSpec.visibility/shared_with_tenant_ids and docs/specs/network.md.
+type SubnetVisibility int32
+
+const (
+	SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED SubnetVisibility = 0 // treated as PRIVATE
+	SubnetVisibility_PRIVATE                       SubnetVisibility = 1 // default: only the owning tenant, plus shared_with_tenant_ids
+	SubnetVisibility_PUBLIC                        SubnetVisibility = 2 // any tenant may attach a NetworkInterface to this Subnet; shared_with_tenant_ids is then meaningless (ignored)
+)
+
+// Enum value maps for SubnetVisibility.
+var (
+	SubnetVisibility_name = map[int32]string{
+		0: "SUBNET_VISIBILITY_UNSPECIFIED",
+		1: "PRIVATE",
+		2: "PUBLIC",
+	}
+	SubnetVisibility_value = map[string]int32{
+		"SUBNET_VISIBILITY_UNSPECIFIED": 0,
+		"PRIVATE":                       1,
+		"PUBLIC":                        2,
+	}
+)
+
+func (x SubnetVisibility) Enum() *SubnetVisibility {
+	p := new(SubnetVisibility)
+	*p = x
+	return p
+}
+
+func (x SubnetVisibility) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SubnetVisibility) Descriptor() protoreflect.EnumDescriptor {
+	return file_kyuusha_network_v1_subnet_proto_enumTypes[0].Descriptor()
+}
+
+func (SubnetVisibility) Type() protoreflect.EnumType {
+	return &file_kyuusha_network_v1_subnet_proto_enumTypes[0]
+}
+
+func (x SubnetVisibility) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SubnetVisibility.Descriptor instead.
+func (SubnetVisibility) EnumDescriptor() ([]byte, []int) {
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{0}
+}
+
 type SubnetEvent_Type int32
 
 const (
@@ -62,11 +115,11 @@ func (x SubnetEvent_Type) String() string {
 }
 
 func (SubnetEvent_Type) Descriptor() protoreflect.EnumDescriptor {
-	return file_kyuusha_network_v1_subnet_proto_enumTypes[0].Descriptor()
+	return file_kyuusha_network_v1_subnet_proto_enumTypes[1].Descriptor()
 }
 
 func (SubnetEvent_Type) Type() protoreflect.EnumType {
-	return &file_kyuusha_network_v1_subnet_proto_enumTypes[0]
+	return &file_kyuusha_network_v1_subnet_proto_enumTypes[1]
 }
 
 func (x SubnetEvent_Type) Number() protoreflect.EnumNumber {
@@ -83,11 +136,27 @@ type SubnetSpec struct {
 	Zone                string                 `protobuf:"bytes,1,opt,name=zone,proto3" json:"zone,omitempty"` // required: the Availability Zone this Subnet (VLAN) belongs to
 	Cidr                string                 `protobuf:"bytes,2,opt,name=cidr,proto3" json:"cidr,omitempty"` // required, e.g. "10.0.1.0/24"
 	GatewayIp           string                 `protobuf:"bytes,3,opt,name=gateway_ip,json=gatewayIp,proto3" json:"gateway_ip,omitempty"`
-	DnsServers          []string               `protobuf:"bytes,4,rep,name=dns_servers,json=dnsServers,proto3" json:"dns_servers,omitempty"`                                // if empty and dns_suffix is set, kyuusha's shared resolver IP is implied
-	SharedWithTenantIds []string               `protobuf:"bytes,5,rep,name=shared_with_tenant_ids,json=sharedWithTenantIds,proto3" json:"shared_with_tenant_ids,omitempty"` // declares intent to share a route to other tenants (optional)
-	DnsSuffix           string                 `protobuf:"bytes,6,opt,name=dns_suffix,json=dnsSuffix,proto3" json:"dns_suffix,omitempty"`                                   // empty disables the (extension) name resolution feature
-	MeshGroup           string                 `protobuf:"bytes,7,opt,name=mesh_group,json=meshGroup,proto3" json:"mesh_group,omitempty"`                                   // declares intent: Subnets sharing a non-empty value (same tenant only) are meant to default-allow each other, bypassing the normal cross-Subnet deny -- not enforced yet, no ACL engine exists (see docs/specs/network.md)
-	AllocatableIpRanges []string               `protobuf:"bytes,8,rep,name=allocatable_ip_ranges,json=allocatableIpRanges,proto3" json:"allocatable_ip_ranges,omitempty"`   // e.g. ["10.0.1.3-10.0.1.127", "10.0.1.136-10.0.1.254"]; empty means the whole cidr (minus network/broadcast/gateway_ip) is allocatable
+	DnsServers          []string               `protobuf:"bytes,4,rep,name=dns_servers,json=dnsServers,proto3" json:"dns_servers,omitempty"`                              // if empty and dns_suffix is set, kyuusha's shared resolver IP is implied
+	DnsSuffix           string                 `protobuf:"bytes,6,opt,name=dns_suffix,json=dnsSuffix,proto3" json:"dns_suffix,omitempty"`                                 // empty disables the (extension) name resolution feature
+	MeshGroup           string                 `protobuf:"bytes,7,opt,name=mesh_group,json=meshGroup,proto3" json:"mesh_group,omitempty"`                                 // declares intent: Subnets sharing a non-empty value (same tenant only) are meant to default-allow each other, bypassing the normal cross-Subnet deny -- not enforced yet, no ACL engine exists (see docs/specs/network.md)
+	AllocatableIpRanges []string               `protobuf:"bytes,8,rep,name=allocatable_ip_ranges,json=allocatableIpRanges,proto3" json:"allocatable_ip_ranges,omitempty"` // e.g. ["10.0.1.3-10.0.1.127", "10.0.1.136-10.0.1.254"]; empty means the whole cidr (minus network/broadcast/gateway_ip) is allocatable
+	// unique_cidr declares that this Subnet's CIDR must not overlap any other
+	// Subnet (any tenant) that also has unique_cidr=true -- checked at
+	// Create/Update time. false (the default) keeps today's behavior: CIDR
+	// overlap across different mesh_groups/tenants is fine (different
+	// VRF/VLAN). Independent of visibility -- a Subnet can be Public IP
+	// address space (unique_cidr=true) shared with everyone (visibility=PUBLIC),
+	// shared with a few tenants (visibility=PRIVATE+shared_with_tenant_ids), or
+	// exclusive to its own owner, and separately a plain private Subnet could
+	// set unique_cidr=true for unrelated reasons. See docs/specs/network.md.
+	UniqueCidr bool             `protobuf:"varint,9,opt,name=unique_cidr,json=uniqueCidr,proto3" json:"unique_cidr,omitempty"`
+	Visibility SubnetVisibility `protobuf:"varint,10,opt,name=visibility,proto3,enum=kyuusha.network.v1.SubnetVisibility" json:"visibility,omitempty"` // default PRIVATE, mirrors ImageVisibility
+	// shared_with_tenant_ids is meaningful only when visibility == PRIVATE:
+	// tenants other than the owner who may actually attach a NetworkInterface
+	// to this Subnet -- same field name and meaning as
+	// kyuusha.image.v1.ImageSpec.shared_with_tenant_ids (NOT the old,
+	// removed field 5, which only ever gated firewall-rule ACL references).
+	SharedWithTenantIds []string `protobuf:"bytes,11,rep,name=shared_with_tenant_ids,json=sharedWithTenantIds,proto3" json:"shared_with_tenant_ids,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -150,13 +219,6 @@ func (x *SubnetSpec) GetDnsServers() []string {
 	return nil
 }
 
-func (x *SubnetSpec) GetSharedWithTenantIds() []string {
-	if x != nil {
-		return x.SharedWithTenantIds
-	}
-	return nil
-}
-
 func (x *SubnetSpec) GetDnsSuffix() string {
 	if x != nil {
 		return x.DnsSuffix
@@ -174,6 +236,27 @@ func (x *SubnetSpec) GetMeshGroup() string {
 func (x *SubnetSpec) GetAllocatableIpRanges() []string {
 	if x != nil {
 		return x.AllocatableIpRanges
+	}
+	return nil
+}
+
+func (x *SubnetSpec) GetUniqueCidr() bool {
+	if x != nil {
+		return x.UniqueCidr
+	}
+	return false
+}
+
+func (x *SubnetSpec) GetVisibility() SubnetVisibility {
+	if x != nil {
+		return x.Visibility
+	}
+	return SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED
+}
+
+func (x *SubnetSpec) GetSharedWithTenantIds() []string {
+	if x != nil {
+		return x.SharedWithTenantIds
 	}
 	return nil
 }
@@ -742,7 +825,7 @@ var File_kyuusha_network_v1_subnet_proto protoreflect.FileDescriptor
 
 const file_kyuusha_network_v1_subnet_proto_rawDesc = "" +
 	"\n" +
-	"\x1fkyuusha/network/v1/subnet.proto\x12\x12kyuusha.network.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\x9b\x02\n" +
+	"\x1fkyuusha/network/v1/subnet.proto\x12\x12kyuusha.network.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\x88\x03\n" +
 	"\n" +
 	"SubnetSpec\x12\x12\n" +
 	"\x04zone\x18\x01 \x01(\tR\x04zone\x12\x12\n" +
@@ -750,13 +833,19 @@ const file_kyuusha_network_v1_subnet_proto_rawDesc = "" +
 	"\n" +
 	"gateway_ip\x18\x03 \x01(\tR\tgatewayIp\x12\x1f\n" +
 	"\vdns_servers\x18\x04 \x03(\tR\n" +
-	"dnsServers\x123\n" +
-	"\x16shared_with_tenant_ids\x18\x05 \x03(\tR\x13sharedWithTenantIds\x12\x1d\n" +
+	"dnsServers\x12\x1d\n" +
 	"\n" +
 	"dns_suffix\x18\x06 \x01(\tR\tdnsSuffix\x12\x1d\n" +
 	"\n" +
 	"mesh_group\x18\a \x01(\tR\tmeshGroup\x122\n" +
-	"\x15allocatable_ip_ranges\x18\b \x03(\tR\x13allocatableIpRanges\"}\n" +
+	"\x15allocatable_ip_ranges\x18\b \x03(\tR\x13allocatableIpRanges\x12\x1f\n" +
+	"\vunique_cidr\x18\t \x01(\bR\n" +
+	"uniqueCidr\x12D\n" +
+	"\n" +
+	"visibility\x18\n" +
+	" \x01(\x0e2$.kyuusha.network.v1.SubnetVisibilityR\n" +
+	"visibility\x123\n" +
+	"\x16shared_with_tenant_ids\x18\v \x03(\tR\x13sharedWithTenantIdsJ\x04\b\x05\x10\x06\"}\n" +
 	"\fSubnetStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -799,7 +888,12 @@ const file_kyuusha_network_v1_subnet_proto_rawDesc = "" +
 	"\x05ADDED\x10\x01\x12\f\n" +
 	"\bMODIFIED\x10\x02\x12\v\n" +
 	"\aDELETED\x10\x03\x12\f\n" +
-	"\bBOOKMARK\x10\x042\xef\x03\n" +
+	"\bBOOKMARK\x10\x04*N\n" +
+	"\x10SubnetVisibility\x12!\n" +
+	"\x1dSUBNET_VISIBILITY_UNSPECIFIED\x10\x00\x12\v\n" +
+	"\aPRIVATE\x10\x01\x12\n" +
+	"\n" +
+	"\x06PUBLIC\x10\x022\xef\x03\n" +
 	"\rSubnetService\x12M\n" +
 	"\x06Create\x12'.kyuusha.network.v1.CreateSubnetRequest\x1a\x1a.kyuusha.network.v1.Subnet\x12G\n" +
 	"\x03Get\x12$.kyuusha.network.v1.GetSubnetRequest\x1a\x1a.kyuusha.network.v1.Subnet\x12W\n" +
@@ -820,52 +914,54 @@ func file_kyuusha_network_v1_subnet_proto_rawDescGZIP() []byte {
 	return file_kyuusha_network_v1_subnet_proto_rawDescData
 }
 
-var file_kyuusha_network_v1_subnet_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_kyuusha_network_v1_subnet_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_kyuusha_network_v1_subnet_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_kyuusha_network_v1_subnet_proto_goTypes = []any{
-	(SubnetEvent_Type)(0),       // 0: kyuusha.network.v1.SubnetEvent.Type
-	(*SubnetSpec)(nil),          // 1: kyuusha.network.v1.SubnetSpec
-	(*SubnetStatus)(nil),        // 2: kyuusha.network.v1.SubnetStatus
-	(*Subnet)(nil),              // 3: kyuusha.network.v1.Subnet
-	(*CreateSubnetRequest)(nil), // 4: kyuusha.network.v1.CreateSubnetRequest
-	(*GetSubnetRequest)(nil),    // 5: kyuusha.network.v1.GetSubnetRequest
-	(*ListSubnetsRequest)(nil),  // 6: kyuusha.network.v1.ListSubnetsRequest
-	(*ListSubnetsResponse)(nil), // 7: kyuusha.network.v1.ListSubnetsResponse
-	(*UpdateSubnetRequest)(nil), // 8: kyuusha.network.v1.UpdateSubnetRequest
-	(*DeleteSubnetRequest)(nil), // 9: kyuusha.network.v1.DeleteSubnetRequest
-	(*WatchSubnetsRequest)(nil), // 10: kyuusha.network.v1.WatchSubnetsRequest
-	(*SubnetEvent)(nil),         // 11: kyuusha.network.v1.SubnetEvent
-	(*v1.Condition)(nil),        // 12: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),       // 13: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),       // 14: google.protobuf.Empty
+	(SubnetVisibility)(0),       // 0: kyuusha.network.v1.SubnetVisibility
+	(SubnetEvent_Type)(0),       // 1: kyuusha.network.v1.SubnetEvent.Type
+	(*SubnetSpec)(nil),          // 2: kyuusha.network.v1.SubnetSpec
+	(*SubnetStatus)(nil),        // 3: kyuusha.network.v1.SubnetStatus
+	(*Subnet)(nil),              // 4: kyuusha.network.v1.Subnet
+	(*CreateSubnetRequest)(nil), // 5: kyuusha.network.v1.CreateSubnetRequest
+	(*GetSubnetRequest)(nil),    // 6: kyuusha.network.v1.GetSubnetRequest
+	(*ListSubnetsRequest)(nil),  // 7: kyuusha.network.v1.ListSubnetsRequest
+	(*ListSubnetsResponse)(nil), // 8: kyuusha.network.v1.ListSubnetsResponse
+	(*UpdateSubnetRequest)(nil), // 9: kyuusha.network.v1.UpdateSubnetRequest
+	(*DeleteSubnetRequest)(nil), // 10: kyuusha.network.v1.DeleteSubnetRequest
+	(*WatchSubnetsRequest)(nil), // 11: kyuusha.network.v1.WatchSubnetsRequest
+	(*SubnetEvent)(nil),         // 12: kyuusha.network.v1.SubnetEvent
+	(*v1.Condition)(nil),        // 13: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),       // 14: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),       // 15: google.protobuf.Empty
 }
 var file_kyuusha_network_v1_subnet_proto_depIdxs = []int32{
-	12, // 0: kyuusha.network.v1.SubnetStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	13, // 1: kyuusha.network.v1.Subnet.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	1,  // 2: kyuusha.network.v1.Subnet.spec:type_name -> kyuusha.network.v1.SubnetSpec
-	2,  // 3: kyuusha.network.v1.Subnet.status:type_name -> kyuusha.network.v1.SubnetStatus
-	1,  // 4: kyuusha.network.v1.CreateSubnetRequest.spec:type_name -> kyuusha.network.v1.SubnetSpec
-	3,  // 5: kyuusha.network.v1.ListSubnetsResponse.items:type_name -> kyuusha.network.v1.Subnet
-	3,  // 6: kyuusha.network.v1.UpdateSubnetRequest.subnet:type_name -> kyuusha.network.v1.Subnet
-	0,  // 7: kyuusha.network.v1.SubnetEvent.type:type_name -> kyuusha.network.v1.SubnetEvent.Type
-	3,  // 8: kyuusha.network.v1.SubnetEvent.subnet:type_name -> kyuusha.network.v1.Subnet
-	4,  // 9: kyuusha.network.v1.SubnetService.Create:input_type -> kyuusha.network.v1.CreateSubnetRequest
-	5,  // 10: kyuusha.network.v1.SubnetService.Get:input_type -> kyuusha.network.v1.GetSubnetRequest
-	6,  // 11: kyuusha.network.v1.SubnetService.List:input_type -> kyuusha.network.v1.ListSubnetsRequest
-	8,  // 12: kyuusha.network.v1.SubnetService.Update:input_type -> kyuusha.network.v1.UpdateSubnetRequest
-	9,  // 13: kyuusha.network.v1.SubnetService.Delete:input_type -> kyuusha.network.v1.DeleteSubnetRequest
-	10, // 14: kyuusha.network.v1.SubnetService.Watch:input_type -> kyuusha.network.v1.WatchSubnetsRequest
-	3,  // 15: kyuusha.network.v1.SubnetService.Create:output_type -> kyuusha.network.v1.Subnet
-	3,  // 16: kyuusha.network.v1.SubnetService.Get:output_type -> kyuusha.network.v1.Subnet
-	7,  // 17: kyuusha.network.v1.SubnetService.List:output_type -> kyuusha.network.v1.ListSubnetsResponse
-	3,  // 18: kyuusha.network.v1.SubnetService.Update:output_type -> kyuusha.network.v1.Subnet
-	14, // 19: kyuusha.network.v1.SubnetService.Delete:output_type -> google.protobuf.Empty
-	11, // 20: kyuusha.network.v1.SubnetService.Watch:output_type -> kyuusha.network.v1.SubnetEvent
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	0,  // 0: kyuusha.network.v1.SubnetSpec.visibility:type_name -> kyuusha.network.v1.SubnetVisibility
+	13, // 1: kyuusha.network.v1.SubnetStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	14, // 2: kyuusha.network.v1.Subnet.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	2,  // 3: kyuusha.network.v1.Subnet.spec:type_name -> kyuusha.network.v1.SubnetSpec
+	3,  // 4: kyuusha.network.v1.Subnet.status:type_name -> kyuusha.network.v1.SubnetStatus
+	2,  // 5: kyuusha.network.v1.CreateSubnetRequest.spec:type_name -> kyuusha.network.v1.SubnetSpec
+	4,  // 6: kyuusha.network.v1.ListSubnetsResponse.items:type_name -> kyuusha.network.v1.Subnet
+	4,  // 7: kyuusha.network.v1.UpdateSubnetRequest.subnet:type_name -> kyuusha.network.v1.Subnet
+	1,  // 8: kyuusha.network.v1.SubnetEvent.type:type_name -> kyuusha.network.v1.SubnetEvent.Type
+	4,  // 9: kyuusha.network.v1.SubnetEvent.subnet:type_name -> kyuusha.network.v1.Subnet
+	5,  // 10: kyuusha.network.v1.SubnetService.Create:input_type -> kyuusha.network.v1.CreateSubnetRequest
+	6,  // 11: kyuusha.network.v1.SubnetService.Get:input_type -> kyuusha.network.v1.GetSubnetRequest
+	7,  // 12: kyuusha.network.v1.SubnetService.List:input_type -> kyuusha.network.v1.ListSubnetsRequest
+	9,  // 13: kyuusha.network.v1.SubnetService.Update:input_type -> kyuusha.network.v1.UpdateSubnetRequest
+	10, // 14: kyuusha.network.v1.SubnetService.Delete:input_type -> kyuusha.network.v1.DeleteSubnetRequest
+	11, // 15: kyuusha.network.v1.SubnetService.Watch:input_type -> kyuusha.network.v1.WatchSubnetsRequest
+	4,  // 16: kyuusha.network.v1.SubnetService.Create:output_type -> kyuusha.network.v1.Subnet
+	4,  // 17: kyuusha.network.v1.SubnetService.Get:output_type -> kyuusha.network.v1.Subnet
+	8,  // 18: kyuusha.network.v1.SubnetService.List:output_type -> kyuusha.network.v1.ListSubnetsResponse
+	4,  // 19: kyuusha.network.v1.SubnetService.Update:output_type -> kyuusha.network.v1.Subnet
+	15, // 20: kyuusha.network.v1.SubnetService.Delete:output_type -> google.protobuf.Empty
+	12, // 21: kyuusha.network.v1.SubnetService.Watch:output_type -> kyuusha.network.v1.SubnetEvent
+	16, // [16:22] is the sub-list for method output_type
+	10, // [10:16] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_network_v1_subnet_proto_init() }
@@ -878,7 +974,7 @@ func file_kyuusha_network_v1_subnet_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_network_v1_subnet_proto_rawDesc), len(file_kyuusha_network_v1_subnet_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,

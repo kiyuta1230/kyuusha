@@ -114,7 +114,7 @@ network向け（[network仕様](network.md)参照）。`create`は`-tenant`を�
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-zone`(必須) `-cidr`(必須、例`10.0.1.0/24`) `-gateway-ip` `-dns-servers`(カンマ区切り) `-dns-suffix` `-mesh-group`(同じ値を持つSubnet同士の既定許可を宣言。ACL強制はまだ) `-allocatable-ip-ranges`(カンマ区切りの`<開始>-<終了>`範囲。未指定ならCIDR全体) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-zone`(必須) `-cidr`(必須、例`10.0.1.0/24`) `-gateway-ip` `-dns-servers`(カンマ区切り) `-dns-suffix` `-mesh-group`(同じ値を持つSubnet同士の既定許可、実装済み) `-allocatable-ip-ranges`(カンマ区切りの`<開始>-<終了>`範囲。未指定ならCIDR全体) `-unique-cidr`(他のunique_cidrなSubnetとのCIDR重複を全テナット横断で拒否。Public IP用アドレス空間の宣言に使う) `-visibility`(`private`\|`public`、既定`private`) `-shared-with-tenant-ids`(カンマ区切り、`private`時のみ意味を持つ。所有テナント以外に実際にNetworkInterfaceのattachを許可するテナントID、[Image仕様](image.md)の同名フラグと同じ意味) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |

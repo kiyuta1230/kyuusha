@@ -65,9 +65,9 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
 `egress_rules`の**ACL**はSubnet CIDR外を既定で拒否するため（[SNAP仕様](snap.md)参照）、
 AZ間で通信したい場合は本来Subnetの組み合わせごとに手動でallowルールを書く必要がある。
 
-`spec.mesh_group`は、この手間を減らすための宣言フィールド（`shared_with_tenant_ids`と
-同じ位置づけ）: 同一テナント内で同じ`mesh_group`値を持つSubnet同士は、デフォルトで
-互いを許可する。`Service.EffectiveFirewallRules`（`internal/network/firewallrule.go`）が、
+`spec.mesh_group`は、この手間を減らすための宣言フィールド: 同一テナント内で同じ
+`mesh_group`値を持つSubnet同士は、デフォルトで互いを許可する。
+`Service.EffectiveFirewallRules`（`internal/network/firewallrule.go`）が、
 対象NetworkInterfaceのSubnetが非空の`mesh_group`を持つ場合、同一テナント・同じ
 `mesh_group`・自分以外の各Subnetについて`{source_cidr: <sibling CIDR>, action: allow,
 protocol: ""（=プロトコル問わず）}`という暗黙のルールを`ingress_rules`/`egress_rules`
@@ -76,10 +76,54 @@ protocol: ""（=プロトコル問わず）}`という暗黙のルールを`ingr
 （`status.effective_ingress_rules`/`effective_egress_rules`、`Create`/`Get`のみ埋める。
 下記参照）を組み立てる時にだけ合成する。
 
+## `spec.unique_cidr` / `spec.visibility` / `spec.shared_with_tenant_ids`（Public IP Attach、実装済み）
+
+Public IP Attach（floating IP相当）は新しいリソース種別を増やさず、`Subnet`の一機能
+として最小限サポートする: `Subnet`は元々「テナントが宣言したアドレス空間の一区画を
+kyuushaが払い出し管理するだけで、自らプロビジョニングはしない」という立ち位置を持って
+おり、CIDRがプライベート空間か外部到達可能な公開IP空間かはSubnet自身にとって本質差では
+ない。**Public IP Attach = 公開IP用Subnetへのもう1本の`NetworkInterface`**であり、
+`status.ip_address`がそのまま公開IPになる。
+
+- **`spec.unique_cidr`**（bool）: trueの場合のみ、`Subnet.Create`/`Update`は他の
+  `unique_cidr=true`なSubnet（**同一テナント内・テナント間を問わず**）との`cidr`重複を
+  `ErrValidation`で拒否する（`internal/network/subnet.go`の`validateUniqueCIDR`、
+  `cidrsOverlap`によるoverlap判定）。false（既定）は従来通り: 異なる`mesh_group`/
+  テナント間ならCIDR重複を許容する（VRF/VLANが分かれているため実害がない）。主な用途は
+  公開IP用アドレス空間の宣言だが、`visibility`とは独立した概念——「誰が使えるか」と
+  「CIDRが一意でなければならないか」は直交する
+- **`spec.visibility`/`spec.shared_with_tenant_ids`**: `kyuusha.image.v1.ImageSpec`の
+  同名フィールドと全く同じ意味・同じ規約（[Image仕様](image.md)参照）。`visibility`が
+  `PUBLIC`なら任意のテナントが、`PRIVATE`（既定）なら所有テナントと
+  `shared_with_tenant_ids`に列挙されたテナントだけが、この`Subnet`へ実際に
+  `NetworkInterface`をattachできる。`internal/network/subnet.go`の
+  `subnetUsableBy`（`internal/image`の`visibleTo`のミラー）が判定し、
+  `CreateNetworkInterface`だけがこれをチェックする（後述）
+
+典型的な運用: 管理者が`unique_cidr=true`・`visibility=PRIVATE`・
+`shared_with_tenant_ids=[使わせたいテナントID...]`（または全テナントに開放するなら
+`visibility=PUBLIC`）な公開IP用Subnetを1つ作り、対象テナントがそこへ2本目の
+`NetworkInterface`を作成する。
+
+**旧`shared_with_tenant_ids`（field 5）は削除した**——「他テナントが自分の
+`ingress_rules`/`egress_rules`の中でこのSubnetのCIDRをallow宛先として名指ししてよいか」
+というACL参照専用の同意フィールド（`validateCrossTenantRules`が強制していた）で、今回の
+「実際にattachしてよいか」とは別物だった。この種のポリシー（例: 外部の申請システムと
+連携し、事前承認済みのACLルールかどうかをチェックする）が必要になった場合は、専用
+フィールドを増やすのではなく、既存の`internal/admissionwebhook`
+（[external-integration.md](external-integration.md)「ゲート系(作成側): Admission
+Webhook」、現状`VirtualMachineService.Create`のみに配線済み、resource-agnostic設計）を
+この`network`サービスの`CreateNetworkInterface`/`UpdateFirewallRules`にも配線する方針
+にする。
+
 ## Create時のバリデーション
 
-`NetworkInterface.Create`は`spec.subnet_id`が指す`Subnet`が存在し、同じテナントに属し、
-`Ready`であることを検証する（存在しない/他テナント/未Readyなら`ErrValidation`）。これは
+`NetworkInterface.Create`は`spec.subnet_id`が指す`Subnet`が存在し、`Ready`であり、
+呼び出しテナントから見て利用可能（`subnetUsableBy`、上記参照）であることを検証する
+（存在しない/未Ready/利用不可なら`ErrValidation`）。**所有テナント以外からの
+attachが常に拒否されるわけではない**点が以前と違う——`internal/network/subnet.go`の
+`getSubnetForInterface`が、呼び出しテナント自身のnamespaceで見つからなければ全テナント
+横断で`Meta.ID`一致を探し、見つかったSubnetに対して`subnetUsableBy`を判定する。これは
 「参照先が存在しない・使えない状態のリソースを作らない」という、computeのImage検証
 （[Image仕様](image.md)参照）と同じ設計原則。IPAM自体のプール枯渇は上記の通りCreateを
 拒否しない（Pendingで受理する）ため、この検証とは別軸。
@@ -88,15 +132,8 @@ protocol: ""（=プロトコル問わず）}`という暗黙のルールを`ingr
 Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
 `max_network_interfaces`）判定を同じCreate内で同期的に行う。`NetworkInterface`側は
 このQuota判定を上記のSubnet存在/Ready検証より後に行う（詳細は
-[Quota仕様](quota.md)「networkのQuota判定」参照）。
-
-`NetworkInterface.Create`/`UpdateFirewallRules`はさらに、`ingress_rules`/
-`egress_rules`の`action: allow`なルールについて、`source_cidr`が他テナントのSubnet
-CIDRへ重なる（`net.IPNet.Contains`をどちらの向きにも試す簡易判定）場合、対象Subnetの
-`shared_with_tenant_ids`に自テナントが含まれていなければ`ErrValidation`で拒否する
-（`docs/architecture.md`「ソフトウェア側の強制」、`internal/network/firewallrule.go`の
-`validateCrossTenantRules`）。`action: deny`のルールや、自テナント自身のSubnetへ
-重なるルールは対象外。
+[Quota仕様](quota.md)「networkのQuota判定」参照）。カウントは常に**呼び出し元テナント**
+（=実際にattachするテナント）に課金される——Subnetの所有テナントではない。
 
 ## この実装がカバーしないもの
 

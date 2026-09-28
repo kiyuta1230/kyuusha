@@ -5,6 +5,28 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-09-28
+
+- **Public IP Attach（floating IP相当）を`Subnet`の機能として実装**（新しいリソース
+  種別は増やさない）。`SubnetSpec`に`unique_cidr`（trueなら他の`unique_cidr=true`な
+  Subnetとの`cidr`重複を全テナット横断で拒否）と、`kyuusha.image.v1.ImageSpec`と
+  同じ意味の`visibility`(PRIVATE/PUBLIC)・`shared_with_tenant_ids`
+  （所有テナント以外に実際に`NetworkInterface`をattachしてよいテナントIDの許可
+  リスト）を追加した。`CreateNetworkInterface`は呼び出しテナント自身が所有しない
+  Subnetも全テナント横断で解決できるようになり（`getSubnetForInterface`）、
+  `subnetUsableBy`で利用可否を判定する。詳細は[network仕様](specs/network.md)
+  「`spec.unique_cidr` / `spec.visibility` / `spec.shared_with_tenant_ids`」参照
+- **破壊的変更**: `SubnetSpec.shared_with_tenant_ids`（旧field 5、
+  「他テナントが自分のingress_rules/egress_rulesの中でこのSubnetのCIDRをallow
+  宛先として名指ししてよいか」というACL参照専用の同意フィールド）を削除した
+  （`validateCrossTenantRules`ごと削除）。同じフィールド名を上記の新しい意味
+  （field 11）で再利用している。同等以上の制御が必要になった場合は、既存の
+  `internal/admissionwebhook`（現状`VirtualMachineService.Create`のみに配線済み）
+  を`network`サービスへ配線する方針にした（`docs/architecture.md`「networkサービス
+  のリソース: Subnet / NetworkInterface」参照）
+- CLI: `kyuusha subnet create`に`-unique-cidr`・`-visibility`・
+  `-shared-with-tenant-ids`（新しい意味）を追加
+
 ## 2026-09-27
 
 - `docs/network-deployment-guide.md`に2点追記した（ロードマップPhase 04

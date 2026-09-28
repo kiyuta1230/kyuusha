@@ -291,7 +291,78 @@ func TestService_CreateNetworkInterfaceRejectsOtherTenantsSubnet(t *testing.T) {
 
 	_, err = svc.CreateNetworkInterface(ctx, "tenant-b", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID})
 	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("expected ErrValidation for a different tenant's subnet, got %v", err)
+		t.Fatalf("expected ErrValidation for a default-Private, unshared subnet, got %v", err)
+	}
+}
+
+// TestService_CreateNetworkInterfaceRespectsVisibility exercises
+// getSubnetForInterface's cross-tenant resolution + subnetUsableBy's gate,
+// mirroring internal/image's Visibility/SharedWithTenantIDs semantics
+// exactly (see docs/specs/network.md「spec.visibility」).
+func TestService_CreateNetworkInterfaceRespectsVisibility(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	private := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn-private", SubnetSpec{
+		Zone: "zone-a", CIDR: "10.0.1.0/24",
+		Visibility: SubnetVisibilityPrivate, SharedWithTenantIDs: []string{"tenant-b"},
+	})
+
+	if _, err := svc.CreateNetworkInterface(ctx, "tenant-b", "nic-b", NetworkInterfaceSpec{VMID: "vm-b", SubnetID: private.Meta.ID}); err != nil {
+		t.Fatalf("expected tenant-b (listed in shared_with_tenant_ids) to attach, got %v", err)
+	}
+	if _, err := svc.CreateNetworkInterface(ctx, "tenant-c", "nic-c", NetworkInterfaceSpec{VMID: "vm-c", SubnetID: private.Meta.ID}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected ErrValidation for tenant-c (not listed), got %v", err)
+	}
+
+	public := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn-public", SubnetSpec{
+		Zone: "zone-a", CIDR: "10.0.2.0/24", Visibility: SubnetVisibilityPublic,
+	})
+	if _, err := svc.CreateNetworkInterface(ctx, "tenant-c", "nic-c2", NetworkInterfaceSpec{VMID: "vm-c2", SubnetID: public.Meta.ID}); err != nil {
+		t.Fatalf("expected any tenant to attach to a Public subnet, got %v", err)
+	}
+}
+
+// TestService_CreateSubnetUniqueCIDR covers unique_cidr's cross-tenant CIDR
+// overlap rejection, and confirms unique_cidr=false (the default) keeps the
+// pre-existing "overlap is fine, different VRF" behavior.
+func TestService_CreateSubnetUniqueCIDR(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := svc.CreateSubnet(ctx, "tenant-a", "pub1", SubnetSpec{
+		Zone: "zone-a", CIDR: "203.0.113.0/28", UniqueCidr: true,
+	}); err != nil {
+		t.Fatalf("CreateSubnet(pub1): %v", err)
+	}
+
+	// Same tenant, overlapping unique_cidr Subnet: still rejected (unlike
+	// shared_with_tenant_ids, there's no same-tenant exemption here).
+	if _, err := svc.CreateSubnet(ctx, "tenant-a", "pub2", SubnetSpec{
+		Zone: "zone-a", CIDR: "203.0.113.0/29", UniqueCidr: true,
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected ErrValidation for an overlapping unique_cidr Subnet (same tenant), got %v", err)
+	}
+
+	// Different tenant, overlapping unique_cidr Subnet: rejected.
+	if _, err := svc.CreateSubnet(ctx, "tenant-b", "pub3", SubnetSpec{
+		Zone: "zone-b", CIDR: "203.0.113.8/29", UniqueCidr: true,
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected ErrValidation for an overlapping unique_cidr Subnet (different tenant), got %v", err)
+	}
+
+	// Same CIDR, unique_cidr=false: allowed, same as today's private-Subnet
+	// overlap behavior.
+	if _, err := svc.CreateSubnet(ctx, "tenant-b", "priv1", SubnetSpec{
+		Zone: "zone-b", CIDR: "203.0.113.0/28",
+	}); err != nil {
+		t.Fatalf("expected overlap to be allowed when unique_cidr=false, got %v", err)
 	}
 }
 

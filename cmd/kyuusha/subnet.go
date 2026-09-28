@@ -56,8 +56,10 @@ func subnetCreate(args []string) {
 	dnsServers := fs.String("dns-servers", "", "comma-separated DNS server IPs")
 	dnsSuffix := fs.String("dns-suffix", "", "DNS suffix; empty disables name resolution")
 	meshGroup := fs.String("mesh-group", "", "declares intent to default-allow other Subnets sharing this value (same tenant only) -- enforced via NetworkInterface.status.effective_ingress_rules/effective_egress_rules, see docs/specs/network.md")
-	sharedWithTenantIDs := fs.String("shared-with-tenant-ids", "", "comma-separated tenant IDs allowed to allow-list this Subnet's CIDR in their own ingress_rules/egress_rules (see docs/specs/network.md「Create時のバリデーション」); a tenant not listed here gets ErrValidation instead")
 	allocatableIPRanges := fs.String("allocatable-ip-ranges", "", "comma-separated \"<start-ip>-<end-ip>\" ranges IPAM may draw from; empty means the whole cidr (minus network/broadcast/gateway-ip)")
+	uniqueCidr := fs.Bool("unique-cidr", false, "reject this cidr if it overlaps any other Subnet (any tenant) that also has -unique-cidr set; use for Public IP address space")
+	visibility := fs.String("visibility", "private", "private|public (default private) -- who besides the owning tenant may attach a NetworkInterface to this Subnet")
+	sharedWithTenantIDs := fs.String("shared-with-tenant-ids", "", "comma-separated tenant IDs (besides the owner) allowed to attach a NetworkInterface to this Subnet (private only)")
 	fs.Parse(args)
 	if *tenant == "" {
 		*tenant = resolveTenant(*token)
@@ -71,11 +73,13 @@ func subnetCreate(args []string) {
 	ctx := authedContext(context.Background(), *token)
 
 	spec := &networkv1.SubnetSpec{
-		Zone:      *zone,
-		Cidr:      *cidr,
-		GatewayIp: *gatewayIP,
-		DnsSuffix: *dnsSuffix,
-		MeshGroup: *meshGroup,
+		Zone:       *zone,
+		Cidr:       *cidr,
+		GatewayIp:  *gatewayIP,
+		DnsSuffix:  *dnsSuffix,
+		MeshGroup:  *meshGroup,
+		UniqueCidr: *uniqueCidr,
+		Visibility: parseSubnetVisibility(*visibility),
 	}
 	if *dnsServers != "" {
 		spec.DnsServers = strings.Split(*dnsServers, ",")
@@ -208,9 +212,22 @@ func subnetDelete(args []string) {
 }
 
 func printSubnet(sn *networkv1.Subnet) {
-	fmt.Printf("id=%s name=%s tenant=%s zone=%s cidr=%s mesh_group=%s shared_with=%s phase=%s vlan_id=%d rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s zone=%s cidr=%s mesh_group=%s unique_cidr=%t visibility=%s shared_with=%s phase=%s vlan_id=%d rv=%d\n",
 		sn.GetMeta().GetId(), sn.GetMeta().GetName(), sn.GetMeta().GetTenantId(),
 		sn.GetSpec().GetZone(), sn.GetSpec().GetCidr(), sn.GetSpec().GetMeshGroup(),
+		sn.GetSpec().GetUniqueCidr(), sn.GetSpec().GetVisibility(),
 		strings.Join(sn.GetSpec().GetSharedWithTenantIds(), ","),
 		sn.GetStatus().GetPhase(), sn.GetStatus().GetVlanId(), sn.GetMeta().GetResourceVersion())
+}
+
+func parseSubnetVisibility(s string) networkv1.SubnetVisibility {
+	switch s {
+	case "private", "":
+		return networkv1.SubnetVisibility_PRIVATE
+	case "public":
+		return networkv1.SubnetVisibility_PUBLIC
+	default:
+		fatal("-visibility must be private or public, got %q", s)
+		return networkv1.SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED
+	}
 }
