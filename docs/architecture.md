@@ -1579,22 +1579,36 @@ VRFインスタンスを払い出し、テナント間のデフォルトルー�
 万が一ファブリック側のVRF設定ミスでルートがリークしても、tap deviceのnftablesルールで
 実際には弾かれる。物理ファブリックの設定ミスに対する二重の防御になる。
 
-### テナント間でのSubnet共有: L2共有はせず、ルートリーク+ACLで表現する
+### テナント間でのSubnet共有: 無目的な共有は禁止、所有テナントが個別に許可した相手だけL2を共有できる
 
-`Subnet.tenant_id`による単一所有は変えない（NetworkInterfaceは同一テナントのVirtualMachineのみ作成可能、
-というルールも維持する）。同一VLANに複数テナントのVirtualMachineを混在させると、ARP spoofingや
-broadcast/multicastの盗聴といったL2レベルの攻撃面がテナント間で共有されてしまい、VRF分離の
-効果と矛盾するため、L2レベルでの共有は行わない。
+`Subnet.tenant_id`による単一所有は変えないが、`NetworkInterface`が同一テナントのVirtualMachineだけに
+限定されるわけではない——所有テナント以外にも、`SubnetSpec.visibility`/`shared_with_tenant_ids`
+（`kyuusha.image.v1.ImageVisibility`と同じ意味、[network仕様](specs/network.md)参照）で
+明示的に許可した相手だけがこのSubnet（＝同一VLAN）へ`NetworkInterface`を直接attachできる。
 
-共有インフラサービス（共有DNS、パッケージミラー、運用bastion等）が必要な場合は、専用のSubnetを
-持たせた上で、**そのSubnetへの経路だけを狭く共有**する。
+同一VLANに複数テナントのVirtualMachineを混在させると、ARP spoofingやbroadcast/multicastの盗聴
+といったL2レベルの攻撃面がテナント間で共有されてしまう。危険なのは**所有テナントが意図せず/
+検証せずに任意の相手と共有してしまうこと**であって、所有テナントが特定の相手を個別に見極めて
+招き入れること自体ではない（例: マネージドDBサービスの提供者テナントが、顧客テナント自身の
+Subnetの中に直接VMを配置する——AWS RDS等がVPC内にENIを注入するのと同じパターンで、顧客が
+明示的に許可した特定のテナントとの共有はむしろ必要）。この区別に沿って2つのフィールドを
+使い分ける:
 
-- `SubnetSpec.shared_with_tenant_ids`: このSubnetを、どのテナントに向けて共有する意図があるかを
-  宣言する。実際のVRFルートリーク設定は運用チームが行う（物理ファブリック側はこれまで通り
-  kyuushaのスコープ外。意図の記録・可視化のみをkyuushaが担う）
-- **ソフトウェア側の強制**: あるテナントの`NetworkInterface.ingress_rules`で他テナントのSubnet CIDRを
-  `allow`しようとした場合、対象Subnetの`shared_with_tenant_ids`に自テナントが含まれていなければ
-  Create時にバリデーションエラーとする。片方が同意していない共有をソフトウェアレベルで防ぐ
+- **`SharedWithTenantIDs`（所有テナントが個別に名指しする、目的のある許可）**: 所有テナントが
+  信頼する相手を1テナントずつ明示的に列挙する。所有テナント自身の判断による同意そのものが
+  安全装置なので、`unique_cidr`（下記）を問わずどのSubnetでも使える
+- **`Visibility = PUBLIC`（誰でも可、無目的な公開）**: 所有テナントが個別の相手を検証しない、
+  無条件のオープン共有。これは`unique_cidr = true`（Public IP用アドレス空間）なSubnetにしか
+  許可しない（`CreateSubnet`/`UpdateSubnet`がバリデーションで強制、`ErrValidation`）——
+  通常のプライベートSubnetでこれを許すと、ARP spoofing等の攻撃面を無条件に共有する、
+  まさに避けたかったケースそのものになってしまうため
+
+共有インフラサービス（共有DNS、パッケージミラー、運用bastion等）で、VMを直接同居させたいほど
+密結合ではない場合は、上記の直接attachではなく、専用のSubnetを持たせた上で経路だけを狭く共有する
+という手段も引き続き使える——ただし現在kyuusha側にはその意図を記録する専用フィールドは無く
+（旧`shared_with_tenant_ids`のACL参照専用の意味は削除済み）、必要になれば
+`internal/admissionwebhook`をこのサービスへ配線する形で実現する方針（前節「networkサービスの
+リソース」参照）。
 
 ### 制約と将来のエスケープパス
 

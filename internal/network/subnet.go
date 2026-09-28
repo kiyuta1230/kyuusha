@@ -47,6 +47,15 @@ type SubnetSpec struct {
 	// tenant may actually attach a NetworkInterface to this Subnet (see
 	// subnetUsableBy). Not the same thing field 5 used to be (that was
 	// ACL-reference-only consent, removed -- see the proto's own comment).
+	//
+	// Visibility=SubnetVisibilityPublic (open to any tenant, unvetted)
+	// requires UniqueCidr -- see CreateSubnet/UpdateSubnet's own guard: the
+	// no-purposeless-L2-sharing principle (docs/architecture.md「テナント間
+	// でのSubnet共有」) only accepts this on Public IP address space.
+	// SharedWithTenantIDs (an explicit, owner-named allowlist -- e.g.
+	// injecting a managed-service provider's VM directly into the owner's
+	// own Subnet) has no such requirement: the owner's per-tenant consent
+	// is itself the safeguard, on any Subnet.
 	Visibility          SubnetVisibility
 	SharedWithTenantIDs []string
 }

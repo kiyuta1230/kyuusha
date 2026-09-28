@@ -306,6 +306,11 @@ func TestService_CreateNetworkInterfaceRespectsVisibility(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
+	// Deliberately NOT unique_cidr: shared_with_tenant_ids is the
+	// owner-vetted, purposeful grant (e.g. injecting a managed-service
+	// provider's VM into the owner's own Subnet) and works on an ordinary
+	// private Subnet, unlike visibility=PUBLIC (see
+	// TestService_CreateSubnetPublicVisibilityRequiresUniqueCidr).
 	private := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn-private", SubnetSpec{
 		Zone: "zone-a", CIDR: "10.0.1.0/24",
 		Visibility: SubnetVisibilityPrivate, SharedWithTenantIDs: []string{"tenant-b"},
@@ -319,10 +324,34 @@ func TestService_CreateNetworkInterfaceRespectsVisibility(t *testing.T) {
 	}
 
 	public := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn-public", SubnetSpec{
-		Zone: "zone-a", CIDR: "10.0.2.0/24", Visibility: SubnetVisibilityPublic,
+		Zone: "zone-a", CIDR: "203.0.113.0/28", Visibility: SubnetVisibilityPublic, UniqueCidr: true,
 	})
 	if _, err := svc.CreateNetworkInterface(ctx, "tenant-c", "nic-c2", NetworkInterfaceSpec{VMID: "vm-c2", SubnetID: public.Meta.ID}); err != nil {
 		t.Fatalf("expected any tenant to attach to a Public subnet, got %v", err)
+	}
+}
+
+// TestService_CreateSubnetPublicVisibilityRequiresUniqueCidr covers the
+// guard added after realizing visibility=PUBLIC on an ordinary private
+// Subnet would reintroduce the exact unvetted cross-tenant L2-sharing risk
+// docs/architecture.md「テナント間でのSubnet共有」warns against.
+func TestService_CreateSubnetPublicVisibilityRequiresUniqueCidr(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := svc.CreateSubnet(ctx, "tenant-a", "sn1", SubnetSpec{
+		Zone: "zone-a", CIDR: "10.0.1.0/24", Visibility: SubnetVisibilityPublic,
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected ErrValidation for visibility=PUBLIC without unique_cidr, got %v", err)
+	}
+
+	if _, err := svc.CreateSubnet(ctx, "tenant-a", "sn2", SubnetSpec{
+		Zone: "zone-a", CIDR: "203.0.113.0/28", Visibility: SubnetVisibilityPublic, UniqueCidr: true,
+	}); err != nil {
+		t.Fatalf("expected visibility=PUBLIC with unique_cidr=true to succeed, got %v", err)
 	}
 }
 

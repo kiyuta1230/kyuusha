@@ -32,7 +32,13 @@ type SubnetVisibility int32
 const (
 	SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED SubnetVisibility = 0 // treated as PRIVATE
 	SubnetVisibility_PRIVATE                       SubnetVisibility = 1 // default: only the owning tenant, plus shared_with_tenant_ids
-	SubnetVisibility_PUBLIC                        SubnetVisibility = 2 // any tenant may attach a NetworkInterface to this Subnet; shared_with_tenant_ids is then meaningless (ignored)
+	// any tenant may attach a NetworkInterface to this Subnet;
+	// shared_with_tenant_ids is then meaningless (ignored). Requires
+	// unique_cidr=true (see below) -- open, unvetted cross-tenant L2 sharing
+	// is only accepted on Public IP address space; an ordinary private
+	// Subnet must use the narrower, owner-vetted shared_with_tenant_ids
+	// instead (see docs/architecture.md「テナント間でのSubnet共有」).
+	SubnetVisibility_PUBLIC SubnetVisibility = 2
 )
 
 // Enum value maps for SubnetVisibility.
@@ -156,6 +162,12 @@ type SubnetSpec struct {
 	// to this Subnet -- same field name and meaning as
 	// kyuusha.image.v1.ImageSpec.shared_with_tenant_ids (NOT the old,
 	// removed field 5, which only ever gated firewall-rule ACL references).
+	// This is the *purposeful*, owner-vetted grant (the owning tenant names
+	// each trusted tenant explicitly, e.g. injecting a managed-service
+	// provider's VM directly into its own Subnet) -- unlike visibility=PUBLIC,
+	// this works on any Subnet, not just unique_cidr ones, since the owner's
+	// explicit per-tenant consent is itself the safeguard against the
+	// unvetted L2-sharing risk docs/architecture.md warns about.
 	SharedWithTenantIds []string `protobuf:"bytes,11,rep,name=shared_with_tenant_ids,json=sharedWithTenantIds,proto3" json:"shared_with_tenant_ids,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache

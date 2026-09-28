@@ -410,6 +410,9 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 			return nil, err
 		}
 	}
+	if spec.Visibility == SubnetVisibilityPublic && !spec.UniqueCidr {
+		return nil, fmt.Errorf("%w: spec.visibility=PUBLIC requires spec.unique_cidr=true (open, unvetted cross-tenant attach is only allowed on Public IP address space; a purposeful, owner-vetted grant to specific tenants should use spec.shared_with_tenant_ids instead, on any Subnet)", ErrValidation)
+	}
 
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
@@ -501,6 +504,9 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 		if err := s.validateUniqueCIDR(ctx, subnet.Meta.ID, subnet.Spec.CIDR); err != nil {
 			return nil, err
 		}
+	}
+	if subnet.Spec.Visibility == SubnetVisibilityPublic && !subnet.Spec.UniqueCidr {
+		return nil, fmt.Errorf("%w: spec.visibility=PUBLIC requires spec.unique_cidr=true (open, unvetted cross-tenant attach is only allowed on Public IP address space; a purposeful, owner-vetted grant to specific tenants should use spec.shared_with_tenant_ids instead, on any Subnet)", ErrValidation)
 	}
 	out, err := s.subnets.Update(ctx, *subnet)
 	if err != nil {

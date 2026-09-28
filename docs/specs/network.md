@@ -90,15 +90,24 @@ kyuushaが払い出し管理するだけで、自らプロビジョニングは�
   `ErrValidation`で拒否する（`internal/network/subnet.go`の`validateUniqueCIDR`、
   `cidrsOverlap`によるoverlap判定）。false（既定）は従来通り: 異なる`mesh_group`/
   テナント間ならCIDR重複を許容する（VRF/VLANが分かれているため実害がない）。主な用途は
-  公開IP用アドレス空間の宣言だが、`visibility`とは独立した概念——「誰が使えるか」と
-  「CIDRが一意でなければならないか」は直交する
+  公開IP用アドレス空間の宣言
 - **`spec.visibility`/`spec.shared_with_tenant_ids`**: `kyuusha.image.v1.ImageSpec`の
   同名フィールドと全く同じ意味・同じ規約（[Image仕様](image.md)参照）。`visibility`が
   `PUBLIC`なら任意のテナントが、`PRIVATE`（既定）なら所有テナントと
   `shared_with_tenant_ids`に列挙されたテナントだけが、この`Subnet`へ実際に
   `NetworkInterface`をattachできる。`internal/network/subnet.go`の
   `subnetUsableBy`（`internal/image`の`visibleTo`のミラー）が判定し、
-  `CreateNetworkInterface`だけがこれをチェックする（後述）
+  `CreateNetworkInterface`だけがこれをチェックする（後述）。
+
+  **`visibility=PUBLIC`は`unique_cidr=true`を要求する**（`CreateSubnet`/
+  `UpdateSubnet`が`ErrValidation`で強制）——所有テナントが相手を個別に検証しない
+  無条件のオープン共有は、Public IP用アドレス空間に限って許容し、通常のプライベート
+  Subnetでの無目的なL2共有（ARP spoofing等の攻撃面の共有）を防ぐため
+  （[architecture.md](../architecture.md)「テナント間でのSubnet共有」参照）。
+  一方`shared_with_tenant_ids`（所有テナントが個別に名指しする許可）にはこの制約が無く、
+  `unique_cidr`を問わずどのSubnetでも使える——所有テナント自身の個別の同意そのものが
+  安全装置になるため（例: マネージドDBサービスの提供者テナントを、顧客テナント自身の
+  プライベートSubnetへ直接招き入れる）
 
 典型的な運用: 管理者が`unique_cidr=true`・`visibility=PRIVATE`・
 `shared_with_tenant_ids=[使わせたいテナントID...]`（または全テナントに開放するなら

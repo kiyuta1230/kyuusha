@@ -26,6 +26,14 @@
   のリソース: Subnet / NetworkInterface」参照）
 - CLI: `kyuusha subnet create`に`-unique-cidr`・`-visibility`・
   `-shared-with-tenant-ids`（新しい意味）を追加
+- **`spec.visibility=PUBLIC`は`spec.unique_cidr=true`を要求するよう追加でバリデーション
+  した**（`CreateSubnet`/`UpdateSubnet`、`ErrValidation`）。上記実装直後に
+  `docs/architecture.md`「テナント間でのSubnet共有」の既存原則（無目的なL2共有はしない）
+  と矛盾していることに気付いたための追加ガード——所有テナントが相手を検証しない無条件の
+  オープン共有（`visibility=PUBLIC`）はPublic IP用アドレス空間限定にし、所有テナントが
+  個別に名指しする`shared_with_tenant_ids`（マネージドサービスの顧客Subnetへの直接注入
+  等、目的のある共有）にはこの制約を課さない、という整理に合わせて
+  `docs/architecture.md`の当該節を書き直した
 
 ## 2026-09-27
 
