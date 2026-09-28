@@ -82,6 +82,16 @@
   がVNI認識に要る/`redistribute connected`で各VTEPのloopbackへの到達性を確保する必要が
   ある）が複数見つかったため、スクリプト自身の「Required companion FRR config」節に
   追記した
+- **グラフィカルコンソール（VNC/SPICE相当）を見送りと判断、クローズした**:
+  Firecrackerは設計上VGA/GPUエミュレーションを持たず、Cloud Hypervisor（kyuushaが
+  固定するv53.0含め現行の公式リリース全て）もvirtio-gpu/VNCを公式に持たない
+  （[upstream issue](https://github.com/cloud-hypervisor/cloud-hypervisor/issues/3212)
+  はclosed、[Spectrum OSの非公式パッチ](https://spectrum-os.org/software/cloud-hypervisor/)
+  のみ存在）ため、両VMMバックエンドの上流に起因する制約と判断した。パッチ済みCHの
+  採用（無改造アップストリームバイナリ方針からの逸脱）・QEMUを3つ目のVMMドライバに
+  する（バックエンドエコシステムの増殖）のどちらのコストも、実際のユースケースの
+  狭さに見合わないと判断し、見送りを選択。`docs/architecture.md`「未決事項」から
+  「解決済み」へ移動した
 
 ## 2026-09-27
 

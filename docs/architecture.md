@@ -2505,9 +2505,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 2. **SR-IOV VFのライフサイクル管理**: `spec.pci_devices`は「GPUだけでなくSR-IOV NICにも
    使い回せる汎用設計」だが、VF自体の生成（`sriov_numvfs`操作）は自動化しておらず、
    オペレータが事前にVFを作りPCIアドレスを1個ずつ`-pci-devices`へ手動で並べる前提のまま
-3. **グラフィカルコンソール（VNC/SPICE相当）**: シリアルコンソールのみで、Windows等
-   シリアル操作に頼れないゲストへの対応手段が無い（Harvester/KubeVirtの`virtctl vnc`相当）
-4. **`usageMu`（テナントごとではなく全テナント共通の単一ロック）のシャーディング**:
+3. **`usageMu`（テナントごとではなく全テナント共通の単一ロック）のシャーディング**:
    「Quota設計」節の強制ポイントはcompute/network/block-storageそれぞれが持つ単一の
    `sync.Mutex`で直列化している——`internal/compute/concurrency_test.go`の
    `BenchmarkService_CreateUnderQuotaContention`で実測した通り、Create一回あたりの
@@ -2519,6 +2517,31 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
    `usageMu`自身のdocコメント参照）
 
 ### 解決済み（参考: 決定の経緯は各セクション本文を参照）
+
+- **グラフィカルコンソール（VNC/SPICE相当）**（判断確定・見送り、2026-09-28）:
+  シリアルコンソールのみで、Windows等シリアル操作に頼れないゲストへの対応手段が
+  無い（Harvester/KubeVirtの`virtctl vnc`相当）という課題があったが、調べた結果
+  **両方のVMMバックエンドが根本的にサポートしていない**ことが分かった——
+  Firecrackerは設計上そもそもVGA/GPUエミュレーションを一切持たない（シリアル+virtio
+  のみの最小microVM、意図的な設計）。Cloud Hypervisor（kyuushaが固定している
+  v53.0含め現行の公式リリース全て）もvirtio-gpu/VNCを公式には持たない——
+  [2021年に議論されたissue](https://github.com/cloud-hypervisor/cloud-hypervisor/issues/3212)
+  はclosed（優先度低として見送り）、[Spectrum OSプロジェクトのコミュニティ
+  パッチ](https://spectrum-os.org/software/cloud-hypervisor/)がvirtio-gpuを追加して
+  いるが本家CHへの非公式フォークでしかない。
+
+  現実的な選択肢は3つ: (1)見送りのまま維持、(2)Spectrum OSのパッチ済みCHを採用、
+  (3)QEMUを3つ目のVMMドライバとして追加（VNC/SPICEは枯れた機能として最初から持つ）。
+  (2)は「無改造の公式アップストリームバイナリだけを使う」という既存方針からの逸脱で、
+  CHのバージョンアップの度にパッチを追従するコストを継続的に負う——`why-kyuusha.md`
+  がCinder/Neutronのベンダー固有ドライバエコシステムを批判した理由と同じ種類の負債。
+  (3)はFirecracker/CHの2ドライバ体制に3つ目を足すことになり、kyuushaが他の場所
+  （ストレージ・ネットワークのバックエンド抽象化）で一貫して避けてきた「バックエンド
+  エコシステムの増殖」そのものになる。加えてグラフィカルコンソールが要る場面自体、
+  kyuushaの主目的（KaaSクラスタノード、大半はLinux、cattle前提で自動プロビジョニング
+  される）からすると狭いユースケースで、(2)(3)のコストを払う理由が薄い。よって
+  (1)見送りのまま維持を選択——Cloud Hypervisorが公式にvirtio-gpu/VNCを持つように
+  なった時点で再検討する
 
 - **VMのネットワーク接続をCNIのようにプラガブルにすべきか**（判断確定・実装済み、
   2026-09-25）: きっかけはOVSが事実上の標準として使われる傾向があり、AF_XDP/vhost-user
