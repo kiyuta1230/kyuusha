@@ -7,6 +7,14 @@
 
 ## 2026-10-03
 
+- **空の`tenant_id`による全テナント横断のList/Watchを正式な契約として明文化した**
+  （kyuusha-vpcからの変更依頼A3のうち、権限付与を伴わない部分）。コードの挙動自体は以前から
+  そうだったが、storeのdocコメントでは「内部reconciler専用」とされていた。仕様は
+  [外部システム連携仕様](specs/external-integration.md)「全テナント横断のList/Watch」。
+  CLIの`vm`/`subnet`/`netif`の`list`/`watch`に`-all-tenants`を追加。playgroundで、
+  `viewer`/`network-admin`トークンでは横断で取れ、テナントメンバーのトークンでは
+  `PermissionDenied`になることを確認。依頼にあった専用ロール（networkの書き込み＋全サービスの
+  読み取り）の追加は保留中
 - **既定のSNAP実装（nftacl）とebpf-snap参考実装にアンチスプーフィングを追加した**
   （kyuusha-vpcからの変更依頼B1）。VMが送信するフレームについて、送信元MAC＝払い出された
   MAC、IPv4の送信元IP＝払い出されたIP、ARPの送信者MAC/IP＝自身のもの（`0.0.0.0`のprobeは

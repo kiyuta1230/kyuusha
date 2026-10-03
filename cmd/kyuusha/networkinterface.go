@@ -111,14 +111,18 @@ func netifList(args []string) {
 	fs := flag.NewFlagSet("netif list", flag.ExitOnError)
 	addr := fs.String("addr", "localhost:8080", "api-gateway address")
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
-	tenant := fs.String("tenant", "", "tenant ID (required)")
+	tenant := fs.String("tenant", "", "tenant ID (required unless -all-tenants)")
+	allTenants := fs.Bool("all-tenants", false, "every tenant at once (empty tenant_id); needs a cross-tenant role -- see docs/specs/authn-authz.md")
 	fs.Parse(args)
-	if *tenant == "" {
-		*tenant = resolveTenant(*token)
-	}
-
-	if *tenant == "" {
-		fatal("-tenant is required")
+	if !*allTenants {
+		if *tenant == "" {
+			*tenant = resolveTenant(*token)
+		}
+		if *tenant == "" {
+			fatal("-tenant (or -all-tenants) is required")
+		}
+	} else if *tenant != "" {
+		fatal("-tenant and -all-tenants are mutually exclusive")
 	}
 	client := dialNetworkInterfaces(*addr)
 	ctx := authedContext(context.Background(), *token)
@@ -135,15 +139,19 @@ func netifWatch(args []string) {
 	fs := flag.NewFlagSet("netif watch", flag.ExitOnError)
 	addr := fs.String("addr", "localhost:8080", "api-gateway address")
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
-	tenant := fs.String("tenant", "", "tenant ID (required)")
+	tenant := fs.String("tenant", "", "tenant ID (required unless -all-tenants)")
+	allTenants := fs.Bool("all-tenants", false, "every tenant at once (empty tenant_id); needs a cross-tenant role -- see docs/specs/authn-authz.md")
 	since := fs.Int64("since-resource-version", 0, "resume from this resource_version")
 	fs.Parse(args)
-	if *tenant == "" {
-		*tenant = resolveTenant(*token)
-	}
-
-	if *tenant == "" {
-		fatal("-tenant is required")
+	if !*allTenants {
+		if *tenant == "" {
+			*tenant = resolveTenant(*token)
+		}
+		if *tenant == "" {
+			fatal("-tenant (or -all-tenants) is required")
+		}
+	} else if *tenant != "" {
+		fatal("-tenant and -all-tenants are mutually exclusive")
 	}
 	client := dialNetworkInterfaces(*addr)
 	ctx := authedContext(context.Background(), *token)

@@ -304,8 +304,10 @@ func (s *Store[T, PT]) Get(ctx context.Context, tenantID, id string) (T, error) 
 }
 
 // List returns every object for tenantID, or every object across all
-// tenants when tenantID is empty (internal use only; external callers must
-// always pass their own tenant_id).
+// tenants when tenantID is empty. An empty tenant_id from an external caller
+// reaches here only after authz has allowed an unscoped request (cross-
+// tenant roles only -- see docs/specs/authn-authz.md); that cross-tenant
+// List/Watch is a supported contract, not an internal-only shortcut.
 func (s *Store[T, PT]) List(ctx context.Context, tenantID string) ([]T, error) {
 	prefix := s.objectPrefix()
 	if tenantID != "" {
@@ -456,8 +458,8 @@ func (s *Store[T, PT]) Delete(ctx context.Context, tenantID, id string) error {
 // Watch replays every object matching tenantID/matches as of "now" (when
 // sinceRV is 0) or every change since sinceRV (when resuming), then streams
 // live events, both scoped the same way. An empty tenantID watches across
-// all tenants, for internal use by a reconciler; external callers must
-// always pass their own tenant_id. The returned channel is closed when ctx
+// all tenants -- used by reconcilers, and by external callers holding a
+// cross-tenant role (same contract as List). The returned channel is closed when ctx
 // is done, the underlying etcd watch ends, or sinceRV has already been
 // compacted away (see errs.HistoryPruned, returned synchronously here the
 // same way the old in-memory implementation did, not as a mid-stream

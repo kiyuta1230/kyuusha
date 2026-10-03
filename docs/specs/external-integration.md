@@ -24,6 +24,21 @@ CMDB登録、ネットワーク台帳登録、独自バリデーション、削�
 自分のDBに保存しておいて再接続時にそこから再開すればよい。新しい実装は不要——
 既存のWatch RPCをそのまま使う。
 
+### 全テナント横断のList/Watch
+
+テナントにスコープを持つリソース（VirtualMachine/Subnet/NetworkInterface等）の
+`List`/`Watch`は、`tenant_id`を空にすると**全テナント横断**で返す——1プロセスで
+全テナントを見る外部コントローラー向けの正式な契約で、`resource_version`からの再開も
+テナント単位のWatchと同じく効く（`since_resource_version`は全テナント共通のetcd
+revisionなので、横断Watchでもそのまま使える）。
+
+空の`tenant_id`は認可上「テナントを指定しないリクエスト」として扱われるので、
+通るのはテナント横断のroleを持つトークンだけ（[認証・認可仕様](authn-authz.md)の
+「リクエストメッセージが`tenant_id`フィールドを持たない場合」と同じ規則）: `admin`
+（全サービス）、`network-admin`（networkサービスのみ）、`storage-admin`
+（block-storageのみ）、`viewer`（全サービスのread系のみ）。CLIでは`vm`/`subnet`/
+`netif`の`list`/`watch`に`-all-tenants`を付ける。
+
 ## ゲート系(削除側): Finalizer
 
 設計の背景・仕組み全体は`docs/architecture.md`「Finalizer」節を参照。ここでは
