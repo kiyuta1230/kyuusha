@@ -25,6 +25,21 @@ message ObjectMeta {
   // every resource in practice today; see docs/architecture.md
   // "Finalizer".
   repeated Finalizer finalizers = 7;
+  // labels/annotations are arbitrary key/value metadata for external
+  // software layered on top of kyuusha (e.g. "which VPC does this Subnet
+  // belong to") -- kyuusha itself never interprets them. Keys are
+  // "[prefix/]name" (prefix: a DNS subdomain; name: <=63 chars of
+  // [A-Za-z0-9._-], alphanumeric at both ends); label values are <=63
+  // chars of the same charset (or empty); annotation values are free-form
+  // (all annotations together <= 64KiB). Set at Create (the request's own
+  // labels/annotations fields) or replaced wholesale by Update, the same
+  // read-modify-write as finalizers. Tenant-writable like the rest of the
+  // object: anything that must not be forgeable by the tenant needs an
+  // admission webhook (docs/specs/external-integration.md). Honored on
+  // Subnet, NetworkInterface and VirtualMachine; always empty elsewhere.
+  // See docs/specs/external-integration.md「ラベルとアノテーション」.
+  map<string, string> labels = 8;
+  map<string, string> annotations = 9;
 }
 
 // See docs/architecture.md "Finalizer" 「所有者チェック」.

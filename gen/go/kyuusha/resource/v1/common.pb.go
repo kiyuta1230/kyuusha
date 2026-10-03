@@ -41,7 +41,22 @@ type ObjectMeta struct {
 	// Delete that set deleted_at can actually take effect. Empty for almost
 	// every resource in practice today; see docs/architecture.md
 	// "Finalizer".
-	Finalizers    []*Finalizer `protobuf:"bytes,7,rep,name=finalizers,proto3" json:"finalizers,omitempty"`
+	Finalizers []*Finalizer `protobuf:"bytes,7,rep,name=finalizers,proto3" json:"finalizers,omitempty"`
+	// labels/annotations are arbitrary key/value metadata for external
+	// software layered on top of kyuusha (e.g. "which VPC does this Subnet
+	// belong to") -- kyuusha itself never interprets them. Keys are
+	// "[prefix/]name" (prefix: a DNS subdomain; name: <=63 chars of
+	// [A-Za-z0-9._-], alphanumeric at both ends); label values are <=63
+	// chars of the same charset (or empty); annotation values are free-form
+	// (all annotations together <= 64KiB). Set at Create (the request's own
+	// labels/annotations fields) or replaced wholesale by Update, the same
+	// read-modify-write as finalizers. Tenant-writable like the rest of the
+	// object: anything that must not be forgeable by the tenant needs an
+	// admission webhook (docs/specs/external-integration.md). Honored on
+	// Subnet, NetworkInterface and VirtualMachine; always empty elsewhere.
+	// See docs/specs/external-integration.md「ラベルとアノテーション」.
+	Labels        map[string]string `protobuf:"bytes,8,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Annotations   map[string]string `protobuf:"bytes,9,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -121,6 +136,20 @@ func (x *ObjectMeta) GetDeletedAt() *timestamppb.Timestamp {
 func (x *ObjectMeta) GetFinalizers() []*Finalizer {
 	if x != nil {
 		return x.Finalizers
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *ObjectMeta) GetAnnotations() map[string]string {
+	if x != nil {
+		return x.Annotations
 	}
 	return nil
 }
@@ -266,7 +295,7 @@ var File_kyuusha_resource_v1_common_proto protoreflect.FileDescriptor
 
 const file_kyuusha_resource_v1_common_proto_rawDesc = "" +
 	"\n" +
-	" kyuusha/resource/v1/common.proto\x12\x13kyuusha.resource.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xae\x02\n" +
+	" kyuusha/resource/v1/common.proto\x12\x13kyuusha.resource.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc2\x04\n" +
 	"\n" +
 	"ObjectMeta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -279,7 +308,15 @@ const file_kyuusha_resource_v1_common_proto_rawDesc = "" +
 	"deleted_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tdeletedAt\x12>\n" +
 	"\n" +
 	"finalizers\x18\a \x03(\v2\x1e.kyuusha.resource.v1.FinalizerR\n" +
-	"finalizers\":\n" +
+	"finalizers\x12C\n" +
+	"\x06labels\x18\b \x03(\v2+.kyuusha.resource.v1.ObjectMeta.LabelsEntryR\x06labels\x12R\n" +
+	"\vannotations\x18\t \x03(\v20.kyuusha.resource.v1.ObjectMeta.AnnotationsEntryR\vannotations\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +
+	"\x10AnnotationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\":\n" +
 	"\tFinalizer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\badded_by\x18\x02 \x01(\tR\aaddedBy\"\xb3\x01\n" +
@@ -302,23 +339,27 @@ func file_kyuusha_resource_v1_common_proto_rawDescGZIP() []byte {
 	return file_kyuusha_resource_v1_common_proto_rawDescData
 }
 
-var file_kyuusha_resource_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_kyuusha_resource_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_kyuusha_resource_v1_common_proto_goTypes = []any{
 	(*ObjectMeta)(nil),            // 0: kyuusha.resource.v1.ObjectMeta
 	(*Finalizer)(nil),             // 1: kyuusha.resource.v1.Finalizer
 	(*Condition)(nil),             // 2: kyuusha.resource.v1.Condition
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	nil,                           // 3: kyuusha.resource.v1.ObjectMeta.LabelsEntry
+	nil,                           // 4: kyuusha.resource.v1.ObjectMeta.AnnotationsEntry
+	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
 }
 var file_kyuusha_resource_v1_common_proto_depIdxs = []int32{
-	3, // 0: kyuusha.resource.v1.ObjectMeta.created_at:type_name -> google.protobuf.Timestamp
-	3, // 1: kyuusha.resource.v1.ObjectMeta.deleted_at:type_name -> google.protobuf.Timestamp
+	5, // 0: kyuusha.resource.v1.ObjectMeta.created_at:type_name -> google.protobuf.Timestamp
+	5, // 1: kyuusha.resource.v1.ObjectMeta.deleted_at:type_name -> google.protobuf.Timestamp
 	1, // 2: kyuusha.resource.v1.ObjectMeta.finalizers:type_name -> kyuusha.resource.v1.Finalizer
-	3, // 3: kyuusha.resource.v1.Condition.last_transition_at:type_name -> google.protobuf.Timestamp
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	3, // 3: kyuusha.resource.v1.ObjectMeta.labels:type_name -> kyuusha.resource.v1.ObjectMeta.LabelsEntry
+	4, // 4: kyuusha.resource.v1.ObjectMeta.annotations:type_name -> kyuusha.resource.v1.ObjectMeta.AnnotationsEntry
+	5, // 5: kyuusha.resource.v1.Condition.last_transition_at:type_name -> google.protobuf.Timestamp
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_resource_v1_common_proto_init() }
@@ -332,7 +373,7 @@ func file_kyuusha_resource_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_resource_v1_common_proto_rawDesc), len(file_kyuusha_resource_v1_common_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

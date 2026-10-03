@@ -205,13 +205,16 @@ type NetworkInterfaceInfo struct {
 	// SubnetID/Zone identify the Subnet this interface belongs to, so a
 	// VNAP/SNAP plugin never has to reverse-resolve it from (zone, vlan_id)
 	// -- see docs/specs/vnap.md / snap.md.
-	SubnetID   string `json:"subnet_id,omitempty"`
-	Zone       string `json:"zone,omitempty"`
-	IPAddress  string `json:"ip_address,omitempty"`
-	MACAddress string `json:"mac_address,omitempty"`
-	CIDR       string `json:"cidr,omitempty"`
-	GatewayIP  string `json:"gateway_ip,omitempty"`
-	VLANID     int32  `json:"vlan_id,omitempty"`
+	SubnetID string `json:"subnet_id,omitempty"`
+	Zone     string `json:"zone,omitempty"`
+	// SubnetLabels are the Subnet's meta.labels as of scheduling time,
+	// passed on verbatim to VNAP/SNAP plugins.
+	SubnetLabels map[string]string `json:"subnet_labels,omitempty"`
+	IPAddress    string            `json:"ip_address,omitempty"`
+	MACAddress   string            `json:"mac_address,omitempty"`
+	CIDR         string            `json:"cidr,omitempty"`
+	GatewayIP    string            `json:"gateway_ip,omitempty"`
+	VLANID       int32             `json:"vlan_id,omitempty"`
 	// Primary mirrors the originating NetworkAttachment.Primary: only the
 	// primary interface gets a default route in the guest (see
 	// docker/fc-guest-init.sh) -- a VM with several NICs would otherwise

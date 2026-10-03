@@ -31,6 +31,10 @@ type ObjectMeta struct {
 	// docs/architecture.md "Finalizer"). Almost always empty in practice
 	// today -- only VirtualMachine actively uses it so far.
 	Finalizers []Finalizer
+	// Labels/Annotations are opaque key/value metadata for software layered
+	// on top of kyuusha -- see Metadata and ValidateMetadata.
+	Labels      map[string]string `json:",omitempty"`
+	Annotations map[string]string `json:",omitempty"`
 }
 
 func (m *ObjectMeta) GetID() string               { return m.ID }

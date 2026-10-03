@@ -16,6 +16,30 @@ CMDB登録、ネットワーク台帳登録、独自バリデーション、削�
 | ゲート系・削除側（外部の確認が取れるまで実削除させたくない） | VM削除時、そのインターフェースのIPが外部ACLにまだ残っていたら拒否 | **Finalizer**（実装済み、現状VirtualMachineのみ） |
 | ゲート系・作成側（作成前に外部バリデーションを通したい） | 独自ポリシーチェックをCreate前に挟む | **Admission Webhook**（`internal/admissionwebhook`、現状VirtualMachineのみ） |
 
+## ラベルとアノテーション
+
+Subnet・NetworkInterface・VirtualMachineは`meta.labels`/`meta.annotations`（任意の
+key/value）を持てる。kyuushaの上に載る外部ソフトウェアが「このSubnetはどのVPCに属するか」
+のような自分の情報を記録するためのもので、kyuusha自身は中身を一切解釈しない（`vpc_id`の
+ような専用フィールドを足してkyuushaにVPC等の概念を持ち込まないための仕組み）。
+
+- **設定**: Createリクエストの`labels`/`annotations`で作成時に付けるか、Updateで
+  `meta`ごと丸ごと置き換える（finalizersと同じread-modify-write）。名前による冪等な
+  再Createでは、specと同様に無視される。CLIは`subnet`/`netif`/`vm create`の
+  `-labels`/`-annotations`（`k=v,k2=v2`）
+- **キー**: `[prefix/]name`。prefixはDNSサブドメイン（小文字、253文字以下）、nameは
+  1〜63文字の`[A-Za-z0-9._-]`で両端は英数字（Kubernetesのラベルと同じ規則）
+- **値**: ラベルは63文字以下の同じ文字種（空も可）、最大64個。アノテーションの値は
+  自由だが、キーと値の合計で64KiBまで
+- **テナントが書き換えられる**: ラベルはオブジェクトの他の部分と同じくテナント自身が
+  書ける。テナントに偽造されては困る情報（「このSubnetはVPC Xに属する」が認可の根拠に
+  なる等）は、ラベルだけを信用せず、Admission Webhookで変更を検証するか、外部ソフト
+  ウェア側で正となる台帳を持つこと
+- **VNAP/SNAPへの伝搬**: Subnetのラベルは`subnet_labels`としてVNAP/SNAPのattach
+  payloadに載る（[VNAP仕様](vnap.md)・[SNAP仕様](snap.md)）
+- 上記3種類以外のリソースでは、protoの`ObjectMeta`にフィールドはあるが常に空
+  （保存されない）
+
 ## 通知系: Watch
 
 全リソースの`Watch(tenant_id, since_resource_version)`は、`resource_version`から

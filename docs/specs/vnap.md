@@ -16,9 +16,12 @@
   （`internal/compute-agent/netsetup`の`pluginRequest`）を渡す。ADD/DELという
   CNI用語は使わない
 - **attachのpayload**（全フィールド）: `tap_name`/`iface_id`/`vm_id`/`tenant_id`/
-  `subnet_id`/`zone`/`mac_address`/`ip_address`/`subnet_cidr`/`prefix_len`/
+  `subnet_id`/`zone`/`subnet_labels`/`mac_address`/`ip_address`/`subnet_cidr`/`prefix_len`/
   `gateway_ip`/`vlan_id`/`primary`——`subnet_id`/`zone`があるので、プラグインは
   受け取ったtapがどのSubnetのものかを(zone, vlan_id)から逆引きする必要が無い。
+  `subnet_labels`はSubnetの`meta.labels`（[外部システム連携仕様](external-integration.md)
+  「ラベルとアノテーション」）の、VMがスケジュールされた時点のスナップショット——
+  その後にSubnetのラベルを変えても、稼働中のVMのattachは呼び直されない。
   プラグインは知らないフィールドを無視すること（フィールドは今後も追加のみで増える）
 - **detachのpayload**（識別に要る最小限のみ）: `tap_name`/`iface_id`/`vm_id`/
   `tenant_id`——ポートを消すのに以前の設定内容（IP/MAC/VLAN等）は不要なため

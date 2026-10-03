@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
@@ -175,7 +176,12 @@ func TestService_UpdateFirewallRulesPublishesUpdateACLWhenScheduled(t *testing.T
 		t.Fatalf("NewService: %v", err)
 	}
 	const tenant = "tenant-a"
-	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
+	subnet, err := svc.CreateSubnetWithMetadata(ctx, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"},
+		resource.Metadata{Labels: map[string]string{"vpc.example.com/id": "vpc-1"}})
+	if err != nil {
+		t.Fatalf("CreateSubnetWithMetadata: %v", err)
+	}
+	svc.tryAllocateVLAN(ctx, subnet)
 	n := mustCreateAndAllocateNetworkInterface(t, ctx, svc, tenant, "netif-1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: subnet.Meta.ID}, subnet)
 
 	received := subscribeUpdateACLCommands(t, ctx, js, "hypervisor-1")
@@ -199,6 +205,9 @@ func TestService_UpdateFirewallRulesPublishesUpdateACLWhenScheduled(t *testing.T
 	}
 	if cmd.SubnetCIDR != "10.0.1.0/24" || cmd.GatewayIP != "10.0.1.1" || cmd.SubnetID != subnet.Meta.ID {
 		t.Fatalf("UpdateACLCommand subnet info = %+v, want subnet_id=%s cidr=10.0.1.0/24 gateway=10.0.1.1", cmd, subnet.Meta.ID)
+	}
+	if cmd.SubnetLabels["vpc.example.com/id"] != "vpc-1" {
+		t.Fatalf("UpdateACLCommand.SubnetLabels = %v, want the Subnet's labels", cmd.SubnetLabels)
 	}
 	if cmd.IPAddress == "" || cmd.IPAddress != n.Status.IPAddress || cmd.MACAddress == "" || cmd.MACAddress != n.Status.MACAddress {
 		t.Fatalf("UpdateACLCommand address = ip %q mac %q, want the interface's own ip %q mac %q", cmd.IPAddress, cmd.MACAddress, n.Status.IPAddress, n.Status.MACAddress)

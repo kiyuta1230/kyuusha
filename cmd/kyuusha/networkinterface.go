@@ -52,6 +52,8 @@ func netifCreate(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	name := fs.String("name", "", "network interface name (idempotency key)")
+	labels := fs.String("labels", "", "comma-separated key=value meta.labels (see docs/specs/external-integration.md)")
+	annotations := fs.String("annotations", "", "comma-separated key=value meta.annotations (values can't contain commas here; use the API for that)")
 	vmID := fs.String("vm", "", "VM ID (required)")
 	subnetID := fs.String("subnet", "", "subnet ID (required)")
 	ingressRules := fs.String("ingress-rules", "", "comma-separated rules allowed into the VM, protocol:port_range:source_cidr:action (e.g. tcp:22:0.0.0.0/0:allow)")
@@ -69,8 +71,10 @@ func netifCreate(args []string) {
 	ctx := authedContext(context.Background(), *token)
 
 	n, err := client.Create(ctx, &networkv1.CreateNetworkInterfaceRequest{
-		TenantId: *tenant,
-		Name:     *name,
+		TenantId:    *tenant,
+		Name:        *name,
+		Labels:      parseKeyValues("-labels", *labels),
+		Annotations: parseKeyValues("-annotations", *annotations),
 		Spec: &networkv1.NetworkInterfaceSpec{
 			VmId:         *vmID,
 			SubnetId:     *subnetID,
@@ -253,8 +257,8 @@ func netifDelete(args []string) {
 }
 
 func printNetworkInterface(n *networkv1.NetworkInterface) {
-	fmt.Printf("id=%s name=%s tenant=%s vm=%s subnet=%s phase=%s ip=%s mac=%s ingress_rules=%s egress_rules=%s effective_ingress_rules=%s effective_egress_rules=%s rv=%d\n",
-		n.GetMeta().GetId(), n.GetMeta().GetName(), n.GetMeta().GetTenantId(),
+	fmt.Printf("id=%s name=%s tenant=%s labels=%s vm=%s subnet=%s phase=%s ip=%s mac=%s ingress_rules=%s egress_rules=%s effective_ingress_rules=%s effective_egress_rules=%s rv=%d\n",
+		n.GetMeta().GetId(), n.GetMeta().GetName(), n.GetMeta().GetTenantId(), formatKeyValues(n.GetMeta().GetLabels()),
 		n.GetSpec().GetVmId(), n.GetSpec().GetSubnetId(),
 		n.GetStatus().GetPhase(), n.GetStatus().GetIpAddress(), n.GetStatus().GetMacAddress(),
 		formatFirewallRules(n.GetSpec().GetIngressRules()), formatFirewallRules(n.GetSpec().GetEgressRules()),

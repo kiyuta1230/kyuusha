@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -195,6 +196,8 @@ func vmCreate(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	name := fs.String("name", "", "VM name (idempotency key)")
+	labels := fs.String("labels", "", "comma-separated key=value meta.labels (see docs/specs/external-integration.md)")
+	annotations := fs.String("annotations", "", "comma-separated key=value meta.annotations (values can't contain commas here; use the API for that)")
 	image := fs.String("image", "", "image ID (required)")
 	vcpu := fs.Int("vcpu", 1, "vCPU count")
 	memoryMB := fs.Int64("memory-mb", 1024, "memory in MB")
@@ -263,8 +266,10 @@ func vmCreate(args []string) {
 	ctx := authedContext(context.Background(), *token)
 
 	vm, err := client.Create(ctx, &computev1.CreateVirtualMachineRequest{
-		TenantId: *tenant,
-		Name:     *name,
+		TenantId:    *tenant,
+		Name:        *name,
+		Labels:      parseKeyValues("-labels", *labels),
+		Annotations: parseKeyValues("-annotations", *annotations),
 		Spec: &computev1.VirtualMachineSpec{
 			ImageId:           *image,
 			Vcpu:              int32(*vcpu),
@@ -726,14 +731,44 @@ func printVM(vm *computev1.VirtualMachine) {
 	if n := vm.GetStatus().GetAllocatedNumaNode(); n >= 0 {
 		numaNode = strconv.Itoa(int(n))
 	}
-	fmt.Printf("id=%s name=%s tenant=%s phase=%s hypervisor=%s interfaces=%s pci_devices=%s numa_node=%s finalizers=%s deleted_at=%s rv=%d\n",
-		vm.GetMeta().GetId(), vm.GetMeta().GetName(), vm.GetMeta().GetTenantId(),
+	fmt.Printf("id=%s name=%s tenant=%s labels=%s phase=%s hypervisor=%s interfaces=%s pci_devices=%s numa_node=%s finalizers=%s deleted_at=%s rv=%d\n",
+		vm.GetMeta().GetId(), vm.GetMeta().GetName(), vm.GetMeta().GetTenantId(), formatKeyValues(vm.GetMeta().GetLabels()),
 		vm.GetStatus().GetPhase(), vm.GetStatus().GetHypervisor(),
 		strings.Join(vm.GetStatus().GetInterfaceRefs(), ","),
 		strings.Join(vm.GetStatus().GetAllocatedPciDevices(), ","),
 		numaNode,
 		strings.Join(finalizerNames, ","), deletedAtString(vm.GetMeta().GetDeletedAt()),
 		vm.GetMeta().GetResourceVersion())
+}
+
+// parseKeyValues parses a "k=v,k2=v2" flag value into a map (nil for "").
+func parseKeyValues(flagName, s string) map[string]string {
+	if s == "" {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, kv := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			fatal("%s: %q is not key=value", flagName, kv)
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// formatKeyValues is parseKeyValues' inverse, sorted by key for stable output.
+func formatKeyValues(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + m[k]
+	}
+	return strings.Join(parts, ",")
 }
 
 func deletedAtString(t *timestamppb.Timestamp) string {

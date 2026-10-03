@@ -585,11 +585,14 @@ func (x *VirtualMachine) GetStatus() *VirtualMachineStatus {
 }
 
 type CreateVirtualMachineRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing VM
-	Spec          *VirtualMachineSpec    `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
-	DryRun        bool                   `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Name     string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing VM
+	Spec     *VirtualMachineSpec    `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
+	DryRun   bool                   `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	// Become meta.labels/meta.annotations -- see kyuusha.resource.v1.ObjectMeta.
+	Labels        map[string]string `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Annotations   map[string]string `protobuf:"bytes,6,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -650,6 +653,20 @@ func (x *CreateVirtualMachineRequest) GetDryRun() bool {
 		return x.DryRun
 	}
 	return false
+}
+
+func (x *CreateVirtualMachineRequest) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *CreateVirtualMachineRequest) GetAnnotations() map[string]string {
+	if x != nil {
+		return x.Annotations
+	}
+	return nil
 }
 
 type GetVirtualMachineRequest struct {
@@ -1643,12 +1660,20 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x0eVirtualMachine\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x12:\n" +
 	"\x04spec\x18\x02 \x01(\v2&.kyuusha.compute.v1.VirtualMachineSpecR\x04spec\x12@\n" +
-	"\x06status\x18\x03 \x01(\v2(.kyuusha.compute.v1.VirtualMachineStatusR\x06status\"\xa3\x01\n" +
+	"\x06status\x18\x03 \x01(\v2(.kyuusha.compute.v1.VirtualMachineStatusR\x06status\"\xd7\x03\n" +
 	"\x1bCreateVirtualMachineRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12:\n" +
 	"\x04spec\x18\x03 \x01(\v2&.kyuusha.compute.v1.VirtualMachineSpecR\x04spec\x12\x17\n" +
-	"\adry_run\x18\x04 \x01(\bR\x06dryRun\"G\n" +
+	"\adry_run\x18\x04 \x01(\bR\x06dryRun\x12S\n" +
+	"\x06labels\x18\x05 \x03(\v2;.kyuusha.compute.v1.CreateVirtualMachineRequest.LabelsEntryR\x06labels\x12b\n" +
+	"\vannotations\x18\x06 \x03(\v2@.kyuusha.compute.v1.CreateVirtualMachineRequest.AnnotationsEntryR\vannotations\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +
+	"\x10AnnotationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"G\n" +
 	"\x18GetVirtualMachineRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\"9\n" +
@@ -1746,7 +1771,7 @@ func file_kyuusha_compute_v1_vm_proto_rawDescGZIP() []byte {
 }
 
 var file_kyuusha_compute_v1_vm_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kyuusha_compute_v1_vm_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_kyuusha_compute_v1_vm_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_kyuusha_compute_v1_vm_proto_goTypes = []any{
 	(VmmDriver)(0),                       // 0: kyuusha.compute.v1.VmmDriver
 	(VirtualMachineEvent_Type)(0),        // 1: kyuusha.compute.v1.VirtualMachineEvent.Type
@@ -1772,55 +1797,59 @@ var file_kyuusha_compute_v1_vm_proto_goTypes = []any{
 	(*VirtualMachineEvent)(nil),          // 21: kyuusha.compute.v1.VirtualMachineEvent
 	(*StreamConsoleRequest)(nil),         // 22: kyuusha.compute.v1.StreamConsoleRequest
 	(*ConsoleChunk)(nil),                 // 23: kyuusha.compute.v1.ConsoleChunk
-	(*v1.Condition)(nil),                 // 24: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),                // 25: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),                // 26: google.protobuf.Empty
+	nil,                                  // 24: kyuusha.compute.v1.CreateVirtualMachineRequest.LabelsEntry
+	nil,                                  // 25: kyuusha.compute.v1.CreateVirtualMachineRequest.AnnotationsEntry
+	(*v1.Condition)(nil),                 // 26: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),                // 27: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),                // 28: google.protobuf.Empty
 }
 var file_kyuusha_compute_v1_vm_proto_depIdxs = []int32{
 	2,  // 0: kyuusha.compute.v1.VirtualMachineSpec.network_interfaces:type_name -> kyuusha.compute.v1.NetworkAttachment
 	3,  // 1: kyuusha.compute.v1.VirtualMachineSpec.volumes:type_name -> kyuusha.compute.v1.VolumeRequest
 	0,  // 2: kyuusha.compute.v1.VirtualMachineSpec.driver_hint:type_name -> kyuusha.compute.v1.VmmDriver
 	4,  // 3: kyuusha.compute.v1.VirtualMachineSpec.pci_devices:type_name -> kyuusha.compute.v1.PciDeviceRequest
-	24, // 4: kyuusha.compute.v1.VirtualMachineStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	25, // 5: kyuusha.compute.v1.VirtualMachine.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	26, // 4: kyuusha.compute.v1.VirtualMachineStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	27, // 5: kyuusha.compute.v1.VirtualMachine.meta:type_name -> kyuusha.resource.v1.ObjectMeta
 	5,  // 6: kyuusha.compute.v1.VirtualMachine.spec:type_name -> kyuusha.compute.v1.VirtualMachineSpec
 	6,  // 7: kyuusha.compute.v1.VirtualMachine.status:type_name -> kyuusha.compute.v1.VirtualMachineStatus
 	5,  // 8: kyuusha.compute.v1.CreateVirtualMachineRequest.spec:type_name -> kyuusha.compute.v1.VirtualMachineSpec
-	7,  // 9: kyuusha.compute.v1.ListVirtualMachinesResponse.items:type_name -> kyuusha.compute.v1.VirtualMachine
-	7,  // 10: kyuusha.compute.v1.UpdateVirtualMachineRequest.vm:type_name -> kyuusha.compute.v1.VirtualMachine
-	1,  // 11: kyuusha.compute.v1.VirtualMachineEvent.type:type_name -> kyuusha.compute.v1.VirtualMachineEvent.Type
-	7,  // 12: kyuusha.compute.v1.VirtualMachineEvent.vm:type_name -> kyuusha.compute.v1.VirtualMachine
-	8,  // 13: kyuusha.compute.v1.VirtualMachineService.Create:input_type -> kyuusha.compute.v1.CreateVirtualMachineRequest
-	9,  // 14: kyuusha.compute.v1.VirtualMachineService.Get:input_type -> kyuusha.compute.v1.GetVirtualMachineRequest
-	10, // 15: kyuusha.compute.v1.VirtualMachineService.List:input_type -> kyuusha.compute.v1.ListVirtualMachinesRequest
-	12, // 16: kyuusha.compute.v1.VirtualMachineService.Update:input_type -> kyuusha.compute.v1.UpdateVirtualMachineRequest
-	13, // 17: kyuusha.compute.v1.VirtualMachineService.Delete:input_type -> kyuusha.compute.v1.DeleteVirtualMachineRequest
-	14, // 18: kyuusha.compute.v1.VirtualMachineService.Stop:input_type -> kyuusha.compute.v1.StopVirtualMachineRequest
-	15, // 19: kyuusha.compute.v1.VirtualMachineService.Start:input_type -> kyuusha.compute.v1.StartVirtualMachineRequest
-	16, // 20: kyuusha.compute.v1.VirtualMachineService.Resize:input_type -> kyuusha.compute.v1.ResizeVirtualMachineRequest
-	17, // 21: kyuusha.compute.v1.VirtualMachineService.AttachVolume:input_type -> kyuusha.compute.v1.AttachVolumeRequest
-	18, // 22: kyuusha.compute.v1.VirtualMachineService.DetachVolume:input_type -> kyuusha.compute.v1.DetachVolumeRequest
-	19, // 23: kyuusha.compute.v1.VirtualMachineService.Migrate:input_type -> kyuusha.compute.v1.MigrateVirtualMachineRequest
-	20, // 24: kyuusha.compute.v1.VirtualMachineService.Watch:input_type -> kyuusha.compute.v1.WatchVirtualMachinesRequest
-	22, // 25: kyuusha.compute.v1.VirtualMachineService.StreamConsole:input_type -> kyuusha.compute.v1.StreamConsoleRequest
-	7,  // 26: kyuusha.compute.v1.VirtualMachineService.Create:output_type -> kyuusha.compute.v1.VirtualMachine
-	7,  // 27: kyuusha.compute.v1.VirtualMachineService.Get:output_type -> kyuusha.compute.v1.VirtualMachine
-	11, // 28: kyuusha.compute.v1.VirtualMachineService.List:output_type -> kyuusha.compute.v1.ListVirtualMachinesResponse
-	7,  // 29: kyuusha.compute.v1.VirtualMachineService.Update:output_type -> kyuusha.compute.v1.VirtualMachine
-	26, // 30: kyuusha.compute.v1.VirtualMachineService.Delete:output_type -> google.protobuf.Empty
-	7,  // 31: kyuusha.compute.v1.VirtualMachineService.Stop:output_type -> kyuusha.compute.v1.VirtualMachine
-	7,  // 32: kyuusha.compute.v1.VirtualMachineService.Start:output_type -> kyuusha.compute.v1.VirtualMachine
-	7,  // 33: kyuusha.compute.v1.VirtualMachineService.Resize:output_type -> kyuusha.compute.v1.VirtualMachine
-	7,  // 34: kyuusha.compute.v1.VirtualMachineService.AttachVolume:output_type -> kyuusha.compute.v1.VirtualMachine
-	7,  // 35: kyuusha.compute.v1.VirtualMachineService.DetachVolume:output_type -> kyuusha.compute.v1.VirtualMachine
-	7,  // 36: kyuusha.compute.v1.VirtualMachineService.Migrate:output_type -> kyuusha.compute.v1.VirtualMachine
-	21, // 37: kyuusha.compute.v1.VirtualMachineService.Watch:output_type -> kyuusha.compute.v1.VirtualMachineEvent
-	23, // 38: kyuusha.compute.v1.VirtualMachineService.StreamConsole:output_type -> kyuusha.compute.v1.ConsoleChunk
-	26, // [26:39] is the sub-list for method output_type
-	13, // [13:26] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	24, // 9: kyuusha.compute.v1.CreateVirtualMachineRequest.labels:type_name -> kyuusha.compute.v1.CreateVirtualMachineRequest.LabelsEntry
+	25, // 10: kyuusha.compute.v1.CreateVirtualMachineRequest.annotations:type_name -> kyuusha.compute.v1.CreateVirtualMachineRequest.AnnotationsEntry
+	7,  // 11: kyuusha.compute.v1.ListVirtualMachinesResponse.items:type_name -> kyuusha.compute.v1.VirtualMachine
+	7,  // 12: kyuusha.compute.v1.UpdateVirtualMachineRequest.vm:type_name -> kyuusha.compute.v1.VirtualMachine
+	1,  // 13: kyuusha.compute.v1.VirtualMachineEvent.type:type_name -> kyuusha.compute.v1.VirtualMachineEvent.Type
+	7,  // 14: kyuusha.compute.v1.VirtualMachineEvent.vm:type_name -> kyuusha.compute.v1.VirtualMachine
+	8,  // 15: kyuusha.compute.v1.VirtualMachineService.Create:input_type -> kyuusha.compute.v1.CreateVirtualMachineRequest
+	9,  // 16: kyuusha.compute.v1.VirtualMachineService.Get:input_type -> kyuusha.compute.v1.GetVirtualMachineRequest
+	10, // 17: kyuusha.compute.v1.VirtualMachineService.List:input_type -> kyuusha.compute.v1.ListVirtualMachinesRequest
+	12, // 18: kyuusha.compute.v1.VirtualMachineService.Update:input_type -> kyuusha.compute.v1.UpdateVirtualMachineRequest
+	13, // 19: kyuusha.compute.v1.VirtualMachineService.Delete:input_type -> kyuusha.compute.v1.DeleteVirtualMachineRequest
+	14, // 20: kyuusha.compute.v1.VirtualMachineService.Stop:input_type -> kyuusha.compute.v1.StopVirtualMachineRequest
+	15, // 21: kyuusha.compute.v1.VirtualMachineService.Start:input_type -> kyuusha.compute.v1.StartVirtualMachineRequest
+	16, // 22: kyuusha.compute.v1.VirtualMachineService.Resize:input_type -> kyuusha.compute.v1.ResizeVirtualMachineRequest
+	17, // 23: kyuusha.compute.v1.VirtualMachineService.AttachVolume:input_type -> kyuusha.compute.v1.AttachVolumeRequest
+	18, // 24: kyuusha.compute.v1.VirtualMachineService.DetachVolume:input_type -> kyuusha.compute.v1.DetachVolumeRequest
+	19, // 25: kyuusha.compute.v1.VirtualMachineService.Migrate:input_type -> kyuusha.compute.v1.MigrateVirtualMachineRequest
+	20, // 26: kyuusha.compute.v1.VirtualMachineService.Watch:input_type -> kyuusha.compute.v1.WatchVirtualMachinesRequest
+	22, // 27: kyuusha.compute.v1.VirtualMachineService.StreamConsole:input_type -> kyuusha.compute.v1.StreamConsoleRequest
+	7,  // 28: kyuusha.compute.v1.VirtualMachineService.Create:output_type -> kyuusha.compute.v1.VirtualMachine
+	7,  // 29: kyuusha.compute.v1.VirtualMachineService.Get:output_type -> kyuusha.compute.v1.VirtualMachine
+	11, // 30: kyuusha.compute.v1.VirtualMachineService.List:output_type -> kyuusha.compute.v1.ListVirtualMachinesResponse
+	7,  // 31: kyuusha.compute.v1.VirtualMachineService.Update:output_type -> kyuusha.compute.v1.VirtualMachine
+	28, // 32: kyuusha.compute.v1.VirtualMachineService.Delete:output_type -> google.protobuf.Empty
+	7,  // 33: kyuusha.compute.v1.VirtualMachineService.Stop:output_type -> kyuusha.compute.v1.VirtualMachine
+	7,  // 34: kyuusha.compute.v1.VirtualMachineService.Start:output_type -> kyuusha.compute.v1.VirtualMachine
+	7,  // 35: kyuusha.compute.v1.VirtualMachineService.Resize:output_type -> kyuusha.compute.v1.VirtualMachine
+	7,  // 36: kyuusha.compute.v1.VirtualMachineService.AttachVolume:output_type -> kyuusha.compute.v1.VirtualMachine
+	7,  // 37: kyuusha.compute.v1.VirtualMachineService.DetachVolume:output_type -> kyuusha.compute.v1.VirtualMachine
+	7,  // 38: kyuusha.compute.v1.VirtualMachineService.Migrate:output_type -> kyuusha.compute.v1.VirtualMachine
+	21, // 39: kyuusha.compute.v1.VirtualMachineService.Watch:output_type -> kyuusha.compute.v1.VirtualMachineEvent
+	23, // 40: kyuusha.compute.v1.VirtualMachineService.StreamConsole:output_type -> kyuusha.compute.v1.ConsoleChunk
+	28, // [28:41] is the sub-list for method output_type
+	15, // [15:28] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_compute_v1_vm_proto_init() }
@@ -1834,7 +1863,7 @@ func file_kyuusha_compute_v1_vm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_compute_v1_vm_proto_rawDesc), len(file_kyuusha_compute_v1_vm_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   22,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

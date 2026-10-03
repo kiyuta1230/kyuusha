@@ -128,6 +128,7 @@ func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetS
 				return infos, err
 			}
 			info.Zone = sn.GetSpec().GetZone()
+			info.SubnetLabels = sn.GetMeta().GetLabels()
 			info.CIDR = sn.GetSpec().GetCidr()
 			info.GatewayIP = sn.GetSpec().GetGatewayIp()
 			info.VLANID = sn.GetStatus().GetVlanId()

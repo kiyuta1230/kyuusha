@@ -286,7 +286,7 @@ func (m *Manager) ApplyACL(vmID string, u vmm.ACLUpdate) (bool, error) {
 	}
 	err := snap.Attach(snap.Interface{
 		IfaceID: u.IfaceID, VMID: vmID, TenantID: tenantID, TapName: tap,
-		SubnetID: u.SubnetID, SubnetCIDR: u.SubnetCIDR, GatewayIP: u.GatewayIP,
+		SubnetID: u.SubnetID, SubnetLabels: u.SubnetLabels, SubnetCIDR: u.SubnetCIDR, GatewayIP: u.GatewayIP,
 		IPAddress: u.IPAddress, MACAddress: u.MACAddress,
 		IngressRules: toSnapRules(u.IngressRules), EgressRules: toSnapRules(u.EgressRules),
 	}, m.SecurityBackendBin)
@@ -557,18 +557,19 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 	}
 	for i, ni := range spec.NetworkInterfaces {
 		wired, err := netsetup.Wire(netsetup.Interface{
-			IfaceID:    ni.IfaceID,
-			VMID:       spec.VMID,
-			TenantID:   spec.TenantID,
-			SubnetID:   ni.SubnetID,
-			Zone:       ni.Zone,
-			MACAddress: ni.MACAddress,
-			IPAddress:  ni.IPAddress,
-			SubnetCIDR: ni.SubnetCIDR,
-			GatewayIP:  ni.GatewayIP,
-			PrefixLen:  ni.PrefixLen,
-			VLANID:     ni.VLANID,
-			Primary:    ni.Primary,
+			IfaceID:      ni.IfaceID,
+			VMID:         spec.VMID,
+			TenantID:     spec.TenantID,
+			SubnetID:     ni.SubnetID,
+			Zone:         ni.Zone,
+			SubnetLabels: ni.SubnetLabels,
+			MACAddress:   ni.MACAddress,
+			IPAddress:    ni.IPAddress,
+			SubnetCIDR:   ni.SubnetCIDR,
+			GatewayIP:    ni.GatewayIP,
+			PrefixLen:    ni.PrefixLen,
+			VLANID:       ni.VLANID,
+			Primary:      ni.Primary,
 		}, m.NetworkAttachBin)
 		if err != nil {
 			cleanup()
@@ -578,7 +579,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		ifaceIDs = append(ifaceIDs, ni.IfaceID)
 		if err := snap.Attach(snap.Interface{
 			IfaceID: ni.IfaceID, VMID: spec.VMID, TenantID: spec.TenantID, TapName: wired.TapName,
-			SubnetID: ni.SubnetID, SubnetCIDR: ni.SubnetCIDR, GatewayIP: ni.GatewayIP,
+			SubnetID: ni.SubnetID, SubnetLabels: ni.SubnetLabels, SubnetCIDR: ni.SubnetCIDR, GatewayIP: ni.GatewayIP,
 			IPAddress: ni.IPAddress, MACAddress: wired.MACAddress,
 			IngressRules: toSnapRules(ni.IngressRules), EgressRules: toSnapRules(ni.EgressRules),
 		}, m.SecurityBackendBin); err != nil {

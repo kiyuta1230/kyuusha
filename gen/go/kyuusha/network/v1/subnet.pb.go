@@ -394,11 +394,14 @@ func (x *Subnet) GetStatus() *SubnetStatus {
 }
 
 type CreateSubnetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing Subnet
-	Spec          *SubnetSpec            `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
-	DryRun        bool                   `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Name     string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"` // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing Subnet
+	Spec     *SubnetSpec            `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
+	DryRun   bool                   `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	// Become meta.labels/meta.annotations -- see kyuusha.resource.v1.ObjectMeta.
+	Labels        map[string]string `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Annotations   map[string]string `protobuf:"bytes,6,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -459,6 +462,20 @@ func (x *CreateSubnetRequest) GetDryRun() bool {
 		return x.DryRun
 	}
 	return false
+}
+
+func (x *CreateSubnetRequest) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *CreateSubnetRequest) GetAnnotations() map[string]string {
+	if x != nil {
+		return x.Annotations
+	}
+	return nil
 }
 
 type GetSubnetRequest struct {
@@ -867,12 +884,20 @@ const file_kyuusha_network_v1_subnet_proto_rawDesc = "" +
 	"\x06Subnet\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x122\n" +
 	"\x04spec\x18\x02 \x01(\v2\x1e.kyuusha.network.v1.SubnetSpecR\x04spec\x128\n" +
-	"\x06status\x18\x03 \x01(\v2 .kyuusha.network.v1.SubnetStatusR\x06status\"\x93\x01\n" +
+	"\x06status\x18\x03 \x01(\v2 .kyuusha.network.v1.SubnetStatusR\x06status\"\xb7\x03\n" +
 	"\x13CreateSubnetRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x122\n" +
 	"\x04spec\x18\x03 \x01(\v2\x1e.kyuusha.network.v1.SubnetSpecR\x04spec\x12\x17\n" +
-	"\adry_run\x18\x04 \x01(\bR\x06dryRun\"?\n" +
+	"\adry_run\x18\x04 \x01(\bR\x06dryRun\x12K\n" +
+	"\x06labels\x18\x05 \x03(\v23.kyuusha.network.v1.CreateSubnetRequest.LabelsEntryR\x06labels\x12Z\n" +
+	"\vannotations\x18\x06 \x03(\v28.kyuusha.network.v1.CreateSubnetRequest.AnnotationsEntryR\vannotations\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a>\n" +
+	"\x10AnnotationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"?\n" +
 	"\x10GetSubnetRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\"1\n" +
@@ -927,7 +952,7 @@ func file_kyuusha_network_v1_subnet_proto_rawDescGZIP() []byte {
 }
 
 var file_kyuusha_network_v1_subnet_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kyuusha_network_v1_subnet_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_kyuusha_network_v1_subnet_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_kyuusha_network_v1_subnet_proto_goTypes = []any{
 	(SubnetVisibility)(0),       // 0: kyuusha.network.v1.SubnetVisibility
 	(SubnetEvent_Type)(0),       // 1: kyuusha.network.v1.SubnetEvent.Type
@@ -942,38 +967,42 @@ var file_kyuusha_network_v1_subnet_proto_goTypes = []any{
 	(*DeleteSubnetRequest)(nil), // 10: kyuusha.network.v1.DeleteSubnetRequest
 	(*WatchSubnetsRequest)(nil), // 11: kyuusha.network.v1.WatchSubnetsRequest
 	(*SubnetEvent)(nil),         // 12: kyuusha.network.v1.SubnetEvent
-	(*v1.Condition)(nil),        // 13: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),       // 14: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),       // 15: google.protobuf.Empty
+	nil,                         // 13: kyuusha.network.v1.CreateSubnetRequest.LabelsEntry
+	nil,                         // 14: kyuusha.network.v1.CreateSubnetRequest.AnnotationsEntry
+	(*v1.Condition)(nil),        // 15: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),       // 16: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),       // 17: google.protobuf.Empty
 }
 var file_kyuusha_network_v1_subnet_proto_depIdxs = []int32{
 	0,  // 0: kyuusha.network.v1.SubnetSpec.visibility:type_name -> kyuusha.network.v1.SubnetVisibility
-	13, // 1: kyuusha.network.v1.SubnetStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	14, // 2: kyuusha.network.v1.Subnet.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	15, // 1: kyuusha.network.v1.SubnetStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	16, // 2: kyuusha.network.v1.Subnet.meta:type_name -> kyuusha.resource.v1.ObjectMeta
 	2,  // 3: kyuusha.network.v1.Subnet.spec:type_name -> kyuusha.network.v1.SubnetSpec
 	3,  // 4: kyuusha.network.v1.Subnet.status:type_name -> kyuusha.network.v1.SubnetStatus
 	2,  // 5: kyuusha.network.v1.CreateSubnetRequest.spec:type_name -> kyuusha.network.v1.SubnetSpec
-	4,  // 6: kyuusha.network.v1.ListSubnetsResponse.items:type_name -> kyuusha.network.v1.Subnet
-	4,  // 7: kyuusha.network.v1.UpdateSubnetRequest.subnet:type_name -> kyuusha.network.v1.Subnet
-	1,  // 8: kyuusha.network.v1.SubnetEvent.type:type_name -> kyuusha.network.v1.SubnetEvent.Type
-	4,  // 9: kyuusha.network.v1.SubnetEvent.subnet:type_name -> kyuusha.network.v1.Subnet
-	5,  // 10: kyuusha.network.v1.SubnetService.Create:input_type -> kyuusha.network.v1.CreateSubnetRequest
-	6,  // 11: kyuusha.network.v1.SubnetService.Get:input_type -> kyuusha.network.v1.GetSubnetRequest
-	7,  // 12: kyuusha.network.v1.SubnetService.List:input_type -> kyuusha.network.v1.ListSubnetsRequest
-	9,  // 13: kyuusha.network.v1.SubnetService.Update:input_type -> kyuusha.network.v1.UpdateSubnetRequest
-	10, // 14: kyuusha.network.v1.SubnetService.Delete:input_type -> kyuusha.network.v1.DeleteSubnetRequest
-	11, // 15: kyuusha.network.v1.SubnetService.Watch:input_type -> kyuusha.network.v1.WatchSubnetsRequest
-	4,  // 16: kyuusha.network.v1.SubnetService.Create:output_type -> kyuusha.network.v1.Subnet
-	4,  // 17: kyuusha.network.v1.SubnetService.Get:output_type -> kyuusha.network.v1.Subnet
-	8,  // 18: kyuusha.network.v1.SubnetService.List:output_type -> kyuusha.network.v1.ListSubnetsResponse
-	4,  // 19: kyuusha.network.v1.SubnetService.Update:output_type -> kyuusha.network.v1.Subnet
-	15, // 20: kyuusha.network.v1.SubnetService.Delete:output_type -> google.protobuf.Empty
-	12, // 21: kyuusha.network.v1.SubnetService.Watch:output_type -> kyuusha.network.v1.SubnetEvent
-	16, // [16:22] is the sub-list for method output_type
-	10, // [10:16] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	13, // 6: kyuusha.network.v1.CreateSubnetRequest.labels:type_name -> kyuusha.network.v1.CreateSubnetRequest.LabelsEntry
+	14, // 7: kyuusha.network.v1.CreateSubnetRequest.annotations:type_name -> kyuusha.network.v1.CreateSubnetRequest.AnnotationsEntry
+	4,  // 8: kyuusha.network.v1.ListSubnetsResponse.items:type_name -> kyuusha.network.v1.Subnet
+	4,  // 9: kyuusha.network.v1.UpdateSubnetRequest.subnet:type_name -> kyuusha.network.v1.Subnet
+	1,  // 10: kyuusha.network.v1.SubnetEvent.type:type_name -> kyuusha.network.v1.SubnetEvent.Type
+	4,  // 11: kyuusha.network.v1.SubnetEvent.subnet:type_name -> kyuusha.network.v1.Subnet
+	5,  // 12: kyuusha.network.v1.SubnetService.Create:input_type -> kyuusha.network.v1.CreateSubnetRequest
+	6,  // 13: kyuusha.network.v1.SubnetService.Get:input_type -> kyuusha.network.v1.GetSubnetRequest
+	7,  // 14: kyuusha.network.v1.SubnetService.List:input_type -> kyuusha.network.v1.ListSubnetsRequest
+	9,  // 15: kyuusha.network.v1.SubnetService.Update:input_type -> kyuusha.network.v1.UpdateSubnetRequest
+	10, // 16: kyuusha.network.v1.SubnetService.Delete:input_type -> kyuusha.network.v1.DeleteSubnetRequest
+	11, // 17: kyuusha.network.v1.SubnetService.Watch:input_type -> kyuusha.network.v1.WatchSubnetsRequest
+	4,  // 18: kyuusha.network.v1.SubnetService.Create:output_type -> kyuusha.network.v1.Subnet
+	4,  // 19: kyuusha.network.v1.SubnetService.Get:output_type -> kyuusha.network.v1.Subnet
+	8,  // 20: kyuusha.network.v1.SubnetService.List:output_type -> kyuusha.network.v1.ListSubnetsResponse
+	4,  // 21: kyuusha.network.v1.SubnetService.Update:output_type -> kyuusha.network.v1.Subnet
+	17, // 22: kyuusha.network.v1.SubnetService.Delete:output_type -> google.protobuf.Empty
+	12, // 23: kyuusha.network.v1.SubnetService.Watch:output_type -> kyuusha.network.v1.SubnetEvent
+	18, // [18:24] is the sub-list for method output_type
+	12, // [12:18] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_network_v1_subnet_proto_init() }
@@ -987,7 +1016,7 @@ func file_kyuusha_network_v1_subnet_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_network_v1_subnet_proto_rawDesc), len(file_kyuusha_network_v1_subnet_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

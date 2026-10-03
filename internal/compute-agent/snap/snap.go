@@ -38,13 +38,14 @@ type FirewallRule struct {
 // Interface is everything Attach/Detach need for one VM network
 // attachment's ACL enforcement, mirroring netsetup.Interface's own shape.
 type Interface struct {
-	IfaceID    string
-	VMID       string
-	TenantID   string
-	TapName    string
-	SubnetID   string
-	SubnetCIDR string
-	GatewayIP  string
+	IfaceID      string
+	VMID         string
+	TenantID     string
+	TapName      string
+	SubnetID     string
+	SubnetLabels map[string]string
+	SubnetCIDR   string
+	GatewayIP    string
 	// IPAddress/MACAddress are the VM's own allocated address on this
 	// interface: the anti-spoofing input (see docs/specs/snap.md).
 	IPAddress  string
@@ -75,7 +76,7 @@ func Attach(iface Interface, securityBackendBin string) error {
 	}
 	return runPlugin(securityBackendBin, "attach", pluginRequest{
 		TapName: iface.TapName, IfaceID: iface.IfaceID, VMID: iface.VMID, TenantID: iface.TenantID,
-		SubnetID: iface.SubnetID, SubnetCIDR: iface.SubnetCIDR, GatewayIP: iface.GatewayIP,
+		SubnetID: iface.SubnetID, SubnetLabels: iface.SubnetLabels, SubnetCIDR: iface.SubnetCIDR, GatewayIP: iface.GatewayIP,
 		IPAddress: iface.IPAddress, MACAddress: iface.MACAddress,
 		IngressRules: toPluginRules(iface.IngressRules), EgressRules: toPluginRules(iface.EgressRules),
 	})
@@ -107,15 +108,16 @@ func toNftaclRules(rules []FirewallRule) []nftacl.FirewallRule {
 // drops the rest), same reasoning as netsetup's own pluginRequest: removing
 // a port never needs to know what it used to be configured with.
 type pluginRequest struct {
-	TapName    string `json:"tap_name"`
-	IfaceID    string `json:"iface_id"`
-	VMID       string `json:"vm_id"`
-	TenantID   string `json:"tenant_id"`
-	SubnetID   string `json:"subnet_id,omitempty"`
-	SubnetCIDR string `json:"subnet_cidr,omitempty"`
-	GatewayIP  string `json:"gateway_ip,omitempty"`
-	IPAddress  string `json:"ip_address,omitempty"`
-	MACAddress string `json:"mac_address,omitempty"`
+	TapName      string            `json:"tap_name"`
+	IfaceID      string            `json:"iface_id"`
+	VMID         string            `json:"vm_id"`
+	TenantID     string            `json:"tenant_id"`
+	SubnetID     string            `json:"subnet_id,omitempty"`
+	SubnetLabels map[string]string `json:"subnet_labels,omitempty"`
+	SubnetCIDR   string            `json:"subnet_cidr,omitempty"`
+	GatewayIP    string            `json:"gateway_ip,omitempty"`
+	IPAddress    string            `json:"ip_address,omitempty"`
+	MACAddress   string            `json:"mac_address,omitempty"`
 
 	IngressRules []pluginFirewallRule `json:"ingress_rules,omitempty"`
 	EgressRules  []pluginFirewallRule `json:"egress_rules,omitempty"`

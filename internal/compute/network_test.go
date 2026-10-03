@@ -21,7 +21,7 @@ func shrinkNetifAllocationPoll(t *testing.T) {
 
 func TestCreateNetworkInterfacesResolvesFullWiringInfo(t *testing.T) {
 	ctx := t.Context()
-	subnetClient := &FakeSubnetClient{}
+	subnetClient := &FakeSubnetClient{Labels: map[string]string{"vpc.example.com/id": "vpc-1"}}
 	netifClient := &FakeNetworkInterfaceClient{}
 
 	infos, err := createNetworkInterfaces(ctx, subnetClient, netifClient, "tenant-a", "vm-1", []NetworkAttachment{
@@ -43,8 +43,8 @@ func TestCreateNetworkInterfacesResolvesFullWiringInfo(t *testing.T) {
 	if info.CIDR != "10.0.0.0/24" || info.GatewayIP != "10.0.0.1" || info.VLANID != 1 {
 		t.Fatalf("CIDR/GatewayIP/VLANID not resolved from the Subnet: %+v", info)
 	}
-	if info.SubnetID != "subnet-1" || info.Zone != "zone-a" {
-		t.Fatalf("SubnetID/Zone not resolved: %+v", info)
+	if info.SubnetID != "subnet-1" || info.Zone != "zone-a" || info.SubnetLabels["vpc.example.com/id"] != "vpc-1" {
+		t.Fatalf("SubnetID/Zone/SubnetLabels not resolved: %+v", info)
 	}
 	if !info.Primary {
 		t.Fatal("Primary did not carry through from the NetworkAttachment")

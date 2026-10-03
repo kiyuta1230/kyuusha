@@ -54,6 +54,9 @@ message CreateNetworkInterfaceRequest {
   string name = 2; // idempotency key: a repeated Create with the same (tenant_id, name) returns the existing NetworkInterface
   NetworkInterfaceSpec spec = 3;
   bool dry_run = 4;
+  // Become meta.labels/meta.annotations -- see kyuusha.resource.v1.ObjectMeta.
+  map<string, string> labels = 5;
+  map<string, string> annotations = 6;
 }
 
 message GetNetworkInterfaceRequest {

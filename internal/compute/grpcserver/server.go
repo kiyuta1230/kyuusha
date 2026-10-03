@@ -55,7 +55,8 @@ func (s *Server) Create(ctx context.Context, req *computev1.CreateVirtualMachine
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	vm, err := s.svc.Create(ctx, req.GetTenantId(), req.GetName(), fromSpec(req.GetSpec()))
+	vm, err := s.svc.CreateWithMetadata(ctx, req.GetTenantId(), req.GetName(), fromSpec(req.GetSpec()),
+		resource.Metadata{Labels: req.GetLabels(), Annotations: req.GetAnnotations()})
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -370,6 +371,8 @@ func toVM(vm compute.VirtualMachine) *computev1.VirtualMachine {
 		ResourceVersion: vm.Meta.ResourceVersion,
 		CreatedAt:       timestamppb.New(vm.Meta.CreatedAt),
 		Finalizers:      toFinalizersProto(vm.Meta.Finalizers),
+		Labels:          vm.Meta.Labels,
+		Annotations:     vm.Meta.Annotations,
 	}
 	if vm.Meta.DeletedAt != nil {
 		meta.DeletedAt = timestamppb.New(*vm.Meta.DeletedAt)
@@ -391,6 +394,8 @@ func fromVM(vm *computev1.VirtualMachine) compute.VirtualMachine {
 			ResourceVersion: meta.GetResourceVersion(),
 			CreatedAt:       meta.GetCreatedAt().AsTime(),
 			Finalizers:      fromFinalizersProto(meta.GetFinalizers()),
+			Labels:          meta.GetLabels(),
+			Annotations:     meta.GetAnnotations(),
 		},
 		Spec:   fromSpec(vm.GetSpec()),
 		Status: fromStatusProto(vm.GetStatus()),

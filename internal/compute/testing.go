@@ -138,8 +138,9 @@ func (f *FakeImageClient) SetVisibility(context.Context, *imagev1.SetImageVisibi
 // the id is empty; every other method panics since compute.Service never
 // calls them.
 type FakeSubnetClient struct {
-	Zone  string // default: "zone-a"
-	Phase string // default: "Ready"
+	Zone   string            // default: "zone-a"
+	Phase  string            // default: "Ready"
+	Labels map[string]string // returned as the Subnet's meta.labels
 }
 
 func (f *FakeSubnetClient) zone() string {
@@ -161,7 +162,7 @@ func (f *FakeSubnetClient) Get(ctx context.Context, req *networkv1.GetSubnetRequ
 		return nil, status.Error(codes.NotFound, "subnet: not found")
 	}
 	return &networkv1.Subnet{
-		Meta: &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId()},
+		Meta: &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId(), Labels: f.Labels},
 		Spec: &networkv1.SubnetSpec{
 			Zone:      f.zone(),
 			Cidr:      "10.0.0.0/24",

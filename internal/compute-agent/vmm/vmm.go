@@ -293,15 +293,16 @@ func WarnIfSizeMismatch(v VolumeAttachInfo, observedBytes int64) {
 // a NetIface at all) when the NetworkInterface's own IP allocation hadn't
 // succeeded yet at Scheduled time -- see docs/specs/network.md.
 type NetIface struct {
-	IfaceID    string
-	SubnetID   string
-	Zone       string
-	MACAddress string
-	IPAddress  string
-	PrefixLen  int
-	GatewayIP  string
-	VLANID     int32
-	Primary    bool
+	IfaceID      string
+	SubnetID     string
+	Zone         string
+	SubnetLabels map[string]string
+	MACAddress   string
+	IPAddress    string
+	PrefixLen    int
+	GatewayIP    string
+	VLANID       int32
+	Primary      bool
 	// SubnetCIDR is this interface's Subnet's own CIDR (compute.
 	// NetworkInterfaceInfo.CIDR verbatim) -- used by snap's default
 	// nftacl implementation to build the "allow within own Subnet"
@@ -319,6 +320,7 @@ type NetIface struct {
 type ACLUpdate struct {
 	IfaceID      string
 	SubnetID     string
+	SubnetLabels map[string]string
 	SubnetCIDR   string
 	GatewayIP    string
 	IPAddress    string

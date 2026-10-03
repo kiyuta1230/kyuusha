@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/kiyuta1230/kyuusha/internal/network"
+	"github.com/kiyuta1230/kyuusha/internal/resource"
 
 	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
 )
@@ -25,7 +26,8 @@ func (s *NetworkInterfaceServer) Create(ctx context.Context, req *networkv1.Crea
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	n, err := s.svc.CreateNetworkInterface(ctx, req.GetTenantId(), req.GetName(), fromNetworkInterfaceSpec(req.GetSpec()))
+	n, err := s.svc.CreateNetworkInterfaceWithMetadata(ctx, req.GetTenantId(), req.GetName(), fromNetworkInterfaceSpec(req.GetSpec()),
+		resource.Metadata{Labels: req.GetLabels(), Annotations: req.GetAnnotations()})
 	if err != nil {
 		return nil, toStatus(err)
 	}

@@ -7,6 +7,16 @@
 
 ## 2026-10-03
 
+- **Subnet/NetworkInterface/VirtualMachineに汎用のラベル・アノテーション
+  （`meta.labels`/`meta.annotations`）を追加した**（kyuusha-vpcからの変更依頼A1）。
+  外部ソフトウェアが自分の情報（どのVPCに属するか等）をkyuushaのリソースに記録するための、
+  kyuushaが解釈しないkey/value。Createリクエストの`labels`/`annotations`、Updateでの
+  置き換え、Kubernetes準拠のキー/値の検証、CLIの`-labels`/`-annotations`と表示。
+  SubnetのラベルはVNAP/SNAPのattach payloadへ`subnet_labels`として伝搬する。
+  playgroundで、ラベル付きSubnetにVMを立てたときの実際のVNAP/SNAP payload（ログを取る
+  だけのテスト用プラグインで記録）に`subnet_labels`・`subnet_id`・`zone`・
+  `ip_address`・`mac_address`が載ること、`UpdateFirewallRules`後の再適用でも載ることを
+  確認。List/Watchのラベルセレクタ（依頼では「あると嬉しい」扱い）は未実装
 - **VLAN IDの払い出し範囲をzoneごとに設定できるようにした**（kyuusha-vpcからの変更依頼B2）。
   network-reconcilerの`-vlan-ranges`フラグ（例: `zone-a=100-2000;*=100-1000`、複数レンジ可）。
   それまでは1〜4094に固定で、デプロイガイドの「AZごとに申告されたVLAN範囲を設定する」を

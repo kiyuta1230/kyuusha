@@ -397,6 +397,16 @@ func (s *Service) allocateMAC() string {
 }
 
 func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec SubnetSpec) (*Subnet, error) {
+	return s.CreateSubnetWithMetadata(ctx, tenantID, name, spec, resource.Metadata{})
+}
+
+// CreateSubnetWithMetadata is CreateSubnet that also sets meta.labels/
+// annotations (see resource.Metadata). Like the spec, md is ignored when
+// name matches an existing Subnet (the idempotent-retry path).
+func (s *Service) CreateSubnetWithMetadata(ctx context.Context, tenantID, name string, spec SubnetSpec, md resource.Metadata) (*Subnet, error) {
+	if err := resource.ValidateMetadata(md); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 	if tenantID == "" {
 		return nil, fmt.Errorf("%w: tenant_id is required", ErrValidation)
 	}
@@ -450,6 +460,7 @@ func (s *Service) CreateSubnet(ctx context.Context, tenantID, name string, spec 
 	// replica of this binary (each replica's own pool would drift from the
 	// others' the moment either one allocates).
 	out, err := s.subnets.Create(ctx, tenantID, name, Subnet{
+		Meta:   resource.ObjectMeta{Labels: md.Labels, Annotations: md.Annotations},
 		Spec:   spec,
 		Status: SubnetStatus{Phase: SubnetPhasePending},
 	})
@@ -507,6 +518,9 @@ func (s *Service) ListSubnets(ctx context.Context, tenantID string) ([]Subnet, e
 }
 
 func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, error) {
+	if err := resource.ValidateMetadata(resource.Metadata{Labels: subnet.Meta.Labels, Annotations: subnet.Meta.Annotations}); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 	if subnet.Spec.UniqueCidr {
 		if err := s.validateUniqueCIDR(ctx, subnet.Meta.ID, subnet.Spec.CIDR); err != nil {
 			return nil, err
@@ -552,6 +566,15 @@ func (s *Service) WatchSubnets(ctx context.Context, tenantID string, sinceRV int
 // "never create a resource that references something that can't back it"
 // rule as compute's Image validation (see internal/compute/image.go).
 func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name string, spec NetworkInterfaceSpec) (*NetworkInterface, error) {
+	return s.CreateNetworkInterfaceWithMetadata(ctx, tenantID, name, spec, resource.Metadata{})
+}
+
+// CreateNetworkInterfaceWithMetadata is CreateNetworkInterface that also
+// sets meta.labels/annotations -- see CreateSubnetWithMetadata.
+func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenantID, name string, spec NetworkInterfaceSpec, md resource.Metadata) (*NetworkInterface, error) {
+	if err := resource.ValidateMetadata(md); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 	if tenantID == "" {
 		return nil, fmt.Errorf("%w: tenant_id is required", ErrValidation)
 	}
@@ -611,6 +634,7 @@ func (s *Service) CreateNetworkInterface(ctx context.Context, tenantID, name str
 	// so MAC assignment moves to cmd/network-reconciler too, folded into
 	// tryAllocateIP (see its doc comment) rather than done here.
 	out, err := s.interfaces.Create(ctx, tenantID, name, NetworkInterface{
+		Meta:   resource.ObjectMeta{Labels: md.Labels, Annotations: md.Annotations},
 		Spec:   spec,
 		Status: NetworkInterfaceStatus{Phase: NetworkInterfacePhasePending},
 	})
@@ -684,6 +708,9 @@ func (s *Service) ListNetworkInterfaces(ctx context.Context, tenantID string) ([
 // change through here and silently desync the enforced host state from
 // etcd.
 func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInterface) (*NetworkInterface, error) {
+	if err := resource.ValidateMetadata(resource.Metadata{Labels: iface.Meta.Labels, Annotations: iface.Meta.Annotations}); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 	current, err := s.interfaces.Get(ctx, iface.Meta.TenantID, iface.Meta.ID)
 	if err != nil {
 		return nil, err
@@ -762,9 +789,11 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
 	}
 
 	var subnetCIDR, gatewayIP string
+	var subnetLabels map[string]string
 	if subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID); err == nil {
 		subnetCIDR = subnet.Spec.CIDR
 		gatewayIP = subnet.Spec.GatewayIP
+		subnetLabels = subnet.Meta.Labels
 	}
 
 	ingress, egress, err := s.EffectiveFirewallRules(ctx, &n)
@@ -778,6 +807,7 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
 		VMID:            n.Spec.VMID,
 		TenantID:        n.Meta.TenantID,
 		SubnetID:        n.Spec.SubnetID,
+		SubnetLabels:    subnetLabels,
 		SubnetCIDR:      subnetCIDR,
 		IPAddress:       n.Status.IPAddress,
 		MACAddress:      n.Status.MACAddress,

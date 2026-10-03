@@ -162,6 +162,16 @@ func (s *Service) rebuildUsage(ctx context.Context) error {
 // per "Quota設計": a doomed VirtualMachine is never created just to be
 // marked Error afterwards.
 func (s *Service) Create(ctx context.Context, tenantID, name string, spec VirtualMachineSpec) (*VirtualMachine, error) {
+	return s.CreateWithMetadata(ctx, tenantID, name, spec, resource.Metadata{})
+}
+
+// CreateWithMetadata is Create that also sets meta.labels/annotations (see
+// resource.Metadata). Like the spec, md is ignored when name matches an
+// existing VirtualMachine (the idempotent-retry path).
+func (s *Service) CreateWithMetadata(ctx context.Context, tenantID, name string, spec VirtualMachineSpec, md resource.Metadata) (*VirtualMachine, error) {
+	if err := resource.ValidateMetadata(md); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 	if tenantID == "" {
 		return nil, fmt.Errorf("%w: tenant_id is required", ErrValidation)
 	}
@@ -222,6 +232,7 @@ func (s *Service) Create(ctx context.Context, tenantID, name string, spec Virtua
 	}
 
 	out, err := s.store.Create(ctx, tenantID, name, VirtualMachine{
+		Meta:   resource.ObjectMeta{Labels: md.Labels, Annotations: md.Annotations},
 		Spec:   spec,
 		Status: VirtualMachineStatus{Phase: PhasePending, AllocatedNumaNode: UnpinnedNumaNode},
 	})
@@ -298,6 +309,9 @@ func (s *Service) List(ctx context.Context, tenantID string) ([]VirtualMachine, 
 // (Stopped-only, with its own quota/Hypervisor-capacity accounting) -- so
 // this doesn't touch tenant_usage.
 func (s *Service) Update(ctx context.Context, machine *VirtualMachine) (*VirtualMachine, error) {
+	if err := resource.ValidateMetadata(resource.Metadata{Labels: machine.Meta.Labels, Annotations: machine.Meta.Annotations}); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 	current, err := s.store.Get(ctx, machine.Meta.TenantID, machine.Meta.ID)
 	if err != nil {
 		return nil, err

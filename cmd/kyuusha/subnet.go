@@ -50,6 +50,8 @@ func subnetCreate(args []string) {
 	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
 	tenant := fs.String("tenant", "", "tenant ID (required)")
 	name := fs.String("name", "", "subnet name (idempotency key)")
+	labels := fs.String("labels", "", "comma-separated key=value meta.labels (see docs/specs/external-integration.md)")
+	annotations := fs.String("annotations", "", "comma-separated key=value meta.annotations (values can't contain commas here; use the API for that)")
 	zone := fs.String("zone", "", "availability zone (required)")
 	cidr := fs.String("cidr", "", "e.g. 10.0.1.0/24 (required)")
 	gatewayIP := fs.String("gateway-ip", "", "gateway IP")
@@ -92,9 +94,11 @@ func subnetCreate(args []string) {
 	}
 
 	sn, err := client.Create(ctx, &networkv1.CreateSubnetRequest{
-		TenantId: *tenant,
-		Name:     *name,
-		Spec:     spec,
+		TenantId:    *tenant,
+		Name:        *name,
+		Spec:        spec,
+		Labels:      parseKeyValues("-labels", *labels),
+		Annotations: parseKeyValues("-annotations", *annotations),
 	})
 	if err != nil {
 		fatal("create: %v", err)
@@ -220,8 +224,8 @@ func subnetDelete(args []string) {
 }
 
 func printSubnet(sn *networkv1.Subnet) {
-	fmt.Printf("id=%s name=%s tenant=%s zone=%s cidr=%s mesh_group=%s unique_cidr=%t visibility=%s shared_with=%s phase=%s vlan_id=%d rv=%d\n",
-		sn.GetMeta().GetId(), sn.GetMeta().GetName(), sn.GetMeta().GetTenantId(),
+	fmt.Printf("id=%s name=%s tenant=%s labels=%s zone=%s cidr=%s mesh_group=%s unique_cidr=%t visibility=%s shared_with=%s phase=%s vlan_id=%d rv=%d\n",
+		sn.GetMeta().GetId(), sn.GetMeta().GetName(), sn.GetMeta().GetTenantId(), formatKeyValues(sn.GetMeta().GetLabels()),
 		sn.GetSpec().GetZone(), sn.GetSpec().GetCidr(), sn.GetSpec().GetMeshGroup(),
 		sn.GetSpec().GetUniqueCidr(), sn.GetSpec().GetVisibility(),
 		strings.Join(sn.GetSpec().GetSharedWithTenantIds(), ","),

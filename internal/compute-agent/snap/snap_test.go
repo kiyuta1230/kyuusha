@@ -27,7 +27,8 @@ func TestAttachSendsAddressAndSubnetToPlugin(t *testing.T) {
 
 	err := Attach(Interface{
 		IfaceID: "netif-1", VMID: "vm-1", TenantID: "tenant-1", TapName: "tap0",
-		SubnetID: "subnet-1", SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
+		SubnetID: "subnet-1", SubnetLabels: map[string]string{"vpc.example.com/id": "vpc-1"},
+		SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
 		IPAddress: "10.9.9.5", MACAddress: "02:00:00:00:00:05",
 		EgressRules: []FirewallRule{{Protocol: "tcp", PortRange: "443", SourceCIDR: "0.0.0.0/0", Action: "allow"}},
 	}, plugin)
@@ -45,7 +46,8 @@ func TestAttachSendsAddressAndSubnetToPlugin(t *testing.T) {
 	}
 	want := pluginRequest{
 		TapName: "tap0", IfaceID: "netif-1", VMID: "vm-1", TenantID: "tenant-1",
-		SubnetID: "subnet-1", SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
+		SubnetID: "subnet-1", SubnetLabels: map[string]string{"vpc.example.com/id": "vpc-1"},
+		SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
 		IPAddress: "10.9.9.5", MACAddress: "02:00:00:00:00:05",
 		EgressRules: []pluginFirewallRule{{Protocol: "tcp", PortRange: "443", SourceCIDR: "0.0.0.0/0", Action: "allow"}},
 	}

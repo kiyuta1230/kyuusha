@@ -66,12 +66,13 @@ func toFirewallRuleInfos(rules []FirewallRule) []FirewallRuleInfo {
 // one -- see ResourceVersion below) converges to a valid state, never a
 // partial one.
 type UpdateACLCommand struct {
-	IfaceID    string `json:"iface_id"`
-	VMID       string `json:"vm_id"`
-	TenantID   string `json:"tenant_id"`
-	SubnetID   string `json:"subnet_id,omitempty"`
-	SubnetCIDR string `json:"subnet_cidr"`
-	GatewayIP  string `json:"gateway_ip,omitempty"`
+	IfaceID      string            `json:"iface_id"`
+	VMID         string            `json:"vm_id"`
+	TenantID     string            `json:"tenant_id"`
+	SubnetID     string            `json:"subnet_id,omitempty"`
+	SubnetLabels map[string]string `json:"subnet_labels,omitempty"`
+	SubnetCIDR   string            `json:"subnet_cidr"`
+	GatewayIP    string            `json:"gateway_ip,omitempty"`
 	// IPAddress/MACAddress are the interface's own allocated address,
 	// carried so a re-apply can rebuild the anti-spoofing checks Boot
 	// installed (see docs/specs/snap.md) without compute-agent persisting

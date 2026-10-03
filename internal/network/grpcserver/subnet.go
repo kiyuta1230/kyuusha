@@ -33,7 +33,8 @@ func (s *SubnetServer) Create(ctx context.Context, req *networkv1.CreateSubnetRe
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	sn, err := s.svc.CreateSubnet(ctx, req.GetTenantId(), req.GetName(), fromSubnetSpec(req.GetSpec()))
+	sn, err := s.svc.CreateSubnetWithMetadata(ctx, req.GetTenantId(), req.GetName(), fromSubnetSpec(req.GetSpec()),
+		resource.Metadata{Labels: req.GetLabels(), Annotations: req.GetAnnotations()})
 	if err != nil {
 		return nil, toStatus(err)
 	}
@@ -257,6 +258,8 @@ func toMetaProto(m resource.ObjectMeta) *resourcev1.ObjectMeta {
 		ResourceVersion: m.ResourceVersion,
 		CreatedAt:       timestamppb.New(m.CreatedAt),
 		Finalizers:      toFinalizersProto(m.Finalizers),
+		Labels:          m.Labels,
+		Annotations:     m.Annotations,
 	}
 	if m.DeletedAt != nil {
 		out.DeletedAt = timestamppb.New(*m.DeletedAt)
@@ -272,6 +275,8 @@ func fromMetaProto(m *resourcev1.ObjectMeta) resource.ObjectMeta {
 		ResourceVersion: m.GetResourceVersion(),
 		CreatedAt:       m.GetCreatedAt().AsTime(),
 		Finalizers:      fromFinalizersProto(m.GetFinalizers()),
+		Labels:          m.GetLabels(),
+		Annotations:     m.GetAnnotations(),
 	}
 	if m.GetDeletedAt() != nil {
 		t := m.GetDeletedAt().AsTime()
