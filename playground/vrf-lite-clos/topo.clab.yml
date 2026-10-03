@@ -1,4 +1,4 @@
-name: type5-clos-test
+name: vrf-lite-clos
 topology:
   nodes:
     host1:
@@ -11,13 +11,8 @@ topology:
         - apk add --no-cache jq iputils
         - ip link add vrf01c9a2a0762a type vrf table 1000
         - ip link set vrf01c9a2a0762a up
-        - ip addr add 10.255.0.1/32 dev lo
-        - ip link add br104000 type bridge vlan_filtering 0
-        - ip link set br104000 master vrf01c9a2a0762a
-        - ip link set br104000 up
-        - ip link add vxlan104000 type vxlan id 104000 dstport 4789 local 10.255.0.1 nolearning
-        - ip link set vxlan104000 master br104000
-        - ip link set vxlan104000 up
+        - ip link set eth1 master vrf01c9a2a0762a
+        - ip link set eth1 up
     host2:
       kind: linux
       image: quay.io/frrouting/frr:10.5.1
@@ -28,13 +23,8 @@ topology:
         - apk add --no-cache jq iputils
         - ip link add vrf01c9a2a0762a type vrf table 1000
         - ip link set vrf01c9a2a0762a up
-        - ip addr add 10.255.0.2/32 dev lo
-        - ip link add br104000 type bridge vlan_filtering 0
-        - ip link set br104000 master vrf01c9a2a0762a
-        - ip link set br104000 up
-        - ip link add vxlan104000 type vxlan id 104000 dstport 4789 local 10.255.0.2 nolearning
-        - ip link set vxlan104000 master br104000
-        - ip link set vxlan104000 up
+        - ip link set eth1 master vrf01c9a2a0762a
+        - ip link set eth1 up
     leaf1:
       kind: linux
       image: quay.io/frrouting/frr:10.5.1
@@ -44,6 +34,10 @@ topology:
       exec:
         - ip link add vrf01c9a2a0762a type vrf table 1000
         - ip link set vrf01c9a2a0762a up
+        - ip link set eth1 master vrf01c9a2a0762a
+        - ip link set eth1 up
+        - ip link set eth2 master vrf01c9a2a0762a
+        - ip link set eth2 up
     leaf2:
       kind: linux
       image: quay.io/frrouting/frr:10.5.1
@@ -53,6 +47,10 @@ topology:
       exec:
         - ip link add vrf01c9a2a0762a type vrf table 1000
         - ip link set vrf01c9a2a0762a up
+        - ip link set eth1 master vrf01c9a2a0762a
+        - ip link set eth1 up
+        - ip link set eth2 master vrf01c9a2a0762a
+        - ip link set eth2 up
     spine:
       kind: linux
       image: quay.io/frrouting/frr:10.5.1
@@ -62,6 +60,10 @@ topology:
       exec:
         - ip link add vrf01c9a2a0762a type vrf table 1000
         - ip link set vrf01c9a2a0762a up
+        - ip link set eth1 master vrf01c9a2a0762a
+        - ip link set eth1 up
+        - ip link set eth2 master vrf01c9a2a0762a
+        - ip link set eth2 up
   links:
     - endpoints: ["host1:eth1", "leaf1:eth1"]
     - endpoints: ["leaf1:eth2", "spine:eth1"]

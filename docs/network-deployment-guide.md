@@ -97,16 +97,17 @@ EVPN-VXLANでLeafがVTEPとしてL2をストレッチするため、あるVLAN(=
 一部のLeafだけをそのVNIのメンバーにする狭い設計も、ネットワークチーム側で自由に選べる。
 本ガイドの「1. VLANプール設計」以降は、この(c)を、しかも**AZ全体でストレッチする**という
 最も広い設計を前提に書かれている——(a)や(b)を採用する場合はその前提が変わる点に注意
-（(b)を採用したい場合は「3.5. Type-5」節も参照: そもそもVLANのL2ストレッチに頼らない
-別の実現方式がある）
+（(b)を採用したい場合は「3.5. Pure L3デプロイの場合」節も参照: そもそもVLANの
+L2ストレッチに頼らない別の実現方式がある）
 
 ## 1. VLANプール設計
 
 - VLAN IDプールは**AZごとに独立**して用意する（同じVLAN番号を別AZで再利用してよい）
 - 目安のレンジ例: `100-2000`（1AZあたり最大4094まで使用可能。テナント数がこの上限を大きく
-  超える見込みがあるAZでは、そのAZ自体をType-5(EVPN pure L3)デプロイへ切り替えること
-  （「3.5. Type-5」節参照）——Type-5は「1 VLAN = 1 VRF」のマッピングに依存しないため、
-  この上限自体が問題にならない。kyuusha側にVXLANへの自動エスケープパスのような機能は無い）
+  超える見込みがあるAZでは、そのAZ自体をPure L3デプロイへ切り替えること
+  （「3.5. Pure L3デプロイの場合」節参照）——Pure L3は「1 VLAN = 1 VRF」の
+  マッピングに依存しないため、この上限自体が問題にならない。kyuusha側にVXLANへの
+  自動エスケープパスのような機能は無い）
 - kyuusha側（networkサービス）はこのプールから、Subnet(テナントのネットワーク単位)作成のたびに
   未使用のVLAN IDを排他的に払い出す。**VLAN IDの配布そのものはkyuusha側の責務**であり、
   ネットワークチームは「使用可能なVLAN ID範囲をAZごとに確保・申告する」ことが役割
@@ -123,8 +124,8 @@ EVPN-VXLANでLeafがVTEPとしてL2をストレッチするため、あるVLAN(=
   （`-network-attach-bin`未指定）はホスト内のLinuxブリッジ配線のみでこのタグ付けを
   一切行わないが、`examples/vnap-plugins/vlan-trunk.sh`という参考VNAPプラグインが
   アップリンクNICへのVLANサブインターフェース作成を代わりに担う——ゼロから自作する
-  必要はない（[VNAP仕様](specs/vnap.md)「参考実装」参照）。Type-5（EVPN pure L3）
-  デプロイでは事情が異なる——「3.5. Type-5（EVPN pure L3）デプロイの場合」参照
+  必要はない（[VNAP仕様](specs/vnap.md)「参考実装」参照）。Pure L3デプロイでは
+  事情が異なる——「3.5. Pure L3デプロイの場合」参照
 
 ## 2. VRF設計とルートリークポリシー（最重要）
 
@@ -196,57 +197,96 @@ AZ間到達性が無いとそもそもクラスタとして機能しない**。B
 これらはkyuushaの制御プレーン自体の可用性に直結するため、テナントネットワークの障害
 （設定ミス、輻輳等）から独立させておくことが望ましい。
 
-## 3.5. Type-5（EVPN pure L3）デプロイの場合
+## 3.5. Pure L3デプロイの場合（VLANストレッチなし）
 
 ここまでの節（1〜3）は、host-ToR間をVLANトランクで繋ぎ、AZ内のL2ストレッチを
 EVPN Type-2（MAC/IPルート）で実現する**既定の参照デプロイ**を前提にしていた
 （「全体像」の直後で触れた(c): CLOS + VXLAN、AZ全体でストレッチ）。
 host内のL2ドメインをVLANトランクで物理ファブリックまで延伸せず、
-代わりに各VMのIPをEVPN Type-5（IP-prefixルート）で個別に広報する構成を取りたい
-場合、以下の点が既定のデプロイと異なる。Type-5はL2ストレッチ自体に頼らないため、
-「全体像」直後で挙げた(b)（CLOS、オーバーレイ無し、Leaf単位でL2が独立する構成）を
-そのまま使いたい場合の解にもなる——host-ToR間にVLANトランクもVXLANオーバーレイも
-要らず、ルーテッドポートで足りる。
+代わりに各VMのIPを個別にBGPで広報する構成を取りたい場合、以下の点が既定のデプロイと
+異なる。この構成はL2ストレッチ自体に頼らないため、「全体像」直後で挙げた(b)
+（CLOS、オーバーレイ無し、Leaf単位でL2が独立する構成）をそのまま使いたい場合の解にも
+なる——host-ToR間にVLANトランクもVXLANオーバーレイも要らず、ルーテッドポートで足りる。
 
-- **host向けToRポートはVLANトランクである必要がない**: Type-5はVMごとの`/32`
-  ホストルートをBGPで広報するだけなので、host-ToR間のワイヤに`vlan_id`をタグ付けする
-  必要が無い（unnumberedなルーテッドポート、または単一の管理用VLANで足りる）。
-  「1. VLANプール設計」で説明した通り、kyuushaが払い出す`vlan_id`はこの場合も
-  Subnetごとに排他的な番号のまま変わらないが、それは厩舎自身のローカルな帳簿番号
-  （Hypervisor上のブリッジ/ルーティング分離キー）としてのみ使われ、ワイヤには一切
-  現れない
-- **「1 VLAN = 1 VRF」という既定のマッピングは適用されない**: Type-5では通常、
-  VRFの粒度はSubnet単位ではなくテナント単位（IP-VRF）に置く。厩舎側の`vlan_id`は
-  引き続きSubnet単位で払い出されるが、それをどうVRFへマッピングするかは
-  VNAPプラグイン（下記参照）とネットワークチームのFRR設定の取り決め次第——
-  `docs/architecture.md`「VMのネットワーク接続をCNIのようにプラガブルにすべきか」
-  で確定した通り、host内のローカルなtap-スイッチ接続ステップだけがVNAPで差し替え
-  可能になっている
-- **VNAPプラグインでの実現例**: `examples/vnap-plugins/frr-type5.sh`
-  （リポジトリ同梱の参考実装）は、VMごとに共有ブリッジを使わず、tapへ直接
-  `gateway_ip`を`/32`で付与しproxy ARPを有効化した上で、VM自身のIPを`/32`の
-  ホストルートとしてカーネルとFRR（`vtysh`経由）の両方へ注入する。**FRR側で
-  そのVRFのstaticルートをBGP EVPN Type-5へredistributeする設定は、この
-  プラグインの範囲外**——プラグインはFRRのRIBへルートを出し入れするだけで、
-  BGP/EVPN設定自体（RT/RD含む、host-ToR間のBGPピアリング自体も）は本ガイドの
-  既定デプロイと同じくネットワークチームの責務のまま。プラグイン自身はASN・
-  eBGP/iBGPのどちらであるかを一切前提にしない・関与しない
-- **推奨する参照構成（本ガイドの既定の想定であり、必須ではない）**: host-Leaf間は
-  **unnumbered eBGP**（FRRの`neighbor <iface> interface remote-as external`相当、
-  IPv6 link-localアドレスでネイバーディスカバリするため、リンクごとにnumberedな
-  ポイントツーポイントアドレスを用意しなくてよい）、**ASNはハイパーバイザ1台ごとに
-  個別に払い出す**（Leaf側は複数Leafで共通のASNでもよい——host側だけ個体ごとに
-  違えばeBGPのループ防止条件は満たせる）。プライベートASN幅は想定ハイパーバイザ
-  台数で選ぶこと: 2-byte ASN（`64512-65534`、実質1023個）で足りない規模なら
-  4-byte ASN（`4200000000-4294967294`）を使う前提にしておく（VLAN IDプールの
-  レンジ選びと同じ「想定規模に応じて範囲を選ぶ」注意——「1. VLANプール設計」参照）。
-  ただしこれはあくまで参照構成の推奨であり、上記の通りプラグイン自体は
-  BGPセッションの設定に一切関与しないため、ネットワークチームがiBGP+route
-  reflector等の別構成を選んでもkyuusha側の動作に影響しない
-- ゲスト側の`network-config`（`addresses`/`gateway4`)は既定デプロイと**一切変わらない**
-  ——`internal/compute-agent/vmm/seed.go`の`buildNetworkConfig`は普通のSubnet
-  CIDR＋gateway4のままで良く、Type-5固有の変更は全てVNAPプラグイン側（host内の
-  ローカル配線）に閉じる
+Pure L3デプロイはさらに、**テナント間でIPアドレス空間の重複を許すかどうか**で
+2通りに分かれ、VNAP参考実装（`examples/vnap-plugins/`）もそれぞれ別のスクリプトに
+なる。host側のVNAPロジック（tapへのgateway_ip付与・proxy ARP・VM自身の`/32`の
+FRRへの注入）は共通の設計だが、**VRFを使うかどうか**が唯一かつ決定的な分岐点になる:
+
+- **テナントのIPアドレス空間がfabric全体で一意と保証できる場合**: VRFは一切不要——
+  全VMの`/32`をFRRの1つの共有ルーティングテーブルへ直接広報する、プレーンなBGP
+  `address-family ipv4 unicast`だけで足りる。テナント分離はkyuusha自身のIPAM
+  （アドレス一意性の強制）と、host側のNetworkInterface ACL（nftables、「2.
+  VRF設計とルートリークポリシー」の「防御層（参考）」と同じ仕組み）に委ねる。
+  VRFによる構造的な遮断が無いため、どちらかが崩れるとテナント間リークに直結する
+  点は踏まえておくこと。**VNAPプラグインでの実現例**: `examples/vnap-plugins/
+  frr-ipv4-unicast.sh`（`playground/ipv4-unicast-clos/`で実機確認済み）
+- **テナントのIPアドレス空間が重複しうる場合**（kyuushaの通常の運用はこちら——
+  各テナントが自分でCIDRを選ぶため）: 「2. VRF設計とルートリークポリシー」と同様、
+  VRFによるルーティングテーブル分離が必要。ただし粒度が異なる——Type-2の既定デプロイ
+  が「1 VLAN(=Subnet) = 1 VRF」なのに対し、Pure L3では通常VRFの粒度をSubnet単位
+  ではなくテナント単位（IP-VRF）に置く。厩舎側の`vlan_id`は引き続きSubnet単位で
+  払い出されるが、それをどうVRFへマッピングするかはVNAPプラグイン（下記参照）と
+  ネットワークチームのFRR設定の取り決め次第——`docs/architecture.md`
+  「VMのネットワーク接続をCNIのようにプラガブルにすべきか」で確定した通り、host内の
+  ローカルなtap-スイッチ接続ステップだけがVNAPで差し替え可能になっている。
+  **VNAPプラグインでの実現例**: `examples/vnap-plugins/frr-vrf-host-route.sh`
+  （VRFへ`/32`のstatic routeを注入するところまでが共通のVNAPロジック）。
+  その先、VRF間の経路をどう運ぶかは網側だけの選択で、プラグイン側の挙動は
+  一切変わらない:
+  - **BGP EVPN Type-5 + VXLAN**（IP-prefixルート、カプセル化あり）:
+    `playground/evpn-vxlan-clos/`で実機確認済み。この検証で実際に
+    `frr-vrf-host-route.sh`のバグ（tapをVRFへ`master`で所属させていなかったため、
+    注入したstatic routeが常にno-opになっていた）を発見・修正した
+    （詳細はスクリプト自身のコメントとdocs/release-notes.md参照）
+  - **VRFスコープの素の`ipv4 unicast`eBGP**（EVPN/VXLAN無し、カプセル化無し）:
+    `playground/vrf-lite-clos/`で実機確認済み。FRR 10.5.1では**unnumbered eBGPが
+    非デフォルトVRFインスタンス内で確立しない**既知の制約があり、このラボは
+    numbered（ポイントツーポイントアドレス方式）eBGPを使う
+
+**VNAPプラグインの責務の境界**（両構成に共通）: どちらのプラグインも、FRRの
+RIBへ（VRFの有無だけ違う）static routeを出し入れするだけで、BGP/EVPN設定自体
+（ASN/RT/RD含む、host-ToR間のBGPピアリング自体も、VRFスコープかどうかも）は
+本ガイドの既定デプロイと同じくネットワークチームの責務のまま。プラグイン自身は
+ASN・eBGP/iBGPのどちらであるか・numbered/unnumberedのどちらであるかを一切
+前提にしない・関与しない——「FRRのRIBへの出し入れ」と「その先どう運ぶか」が
+きれいに分離できることが、この3スクリプト・4ラボという非対称な構成自体の
+存在理由になっている。
+
+**推奨する参照構成**（本ガイドの既定の想定であり、必須ではない。IP一意・
+ipv4 unicast構成向け——VRF-lite構成は上記のFRR制約によりnumberedを使う）:
+host-Leaf間は**unnumbered eBGP**（FRRの`neighbor <iface> interface remote-as
+external`相当、IPv6 link-localアドレスでネイバーディスカバリするため、
+リンクごとにnumberedなポイントツーポイントアドレスを用意しなくてよい）、
+**ASNはハイパーバイザ1台ごとに個別に払い出す**（Leaf側は複数Leafで共通のASNでも
+よい——host側だけ個体ごとに違えばeBGPのループ防止条件は満たせる）。プライベート
+ASN幅は想定ハイパーバイザ台数で選ぶこと: 2-byte ASN（`64512-65534`、実質1023個）
+で足りない規模なら4-byte ASN（`4200000000-4294967294`）を使う前提にしておく
+（VLAN IDプールのレンジ選びと同じ「想定規模に応じて範囲を選ぶ」注意——
+「1. VLANプール設計」参照）。ただしこれはあくまで参照構成の推奨であり、上記の
+通りプラグイン自体はBGPセッションの設定に一切関与しないため、ネットワークチームが
+iBGP+route reflector等の別構成を選んでもkyuusha側の動作に影響しない。
+
+IP一意・ipv4 unicast構成ではさらに、ハイパーバイザ自身がSubnet外への経路を
+一切持たない（VRFもVLANストレッチも無いため）——Leaf側で**host向けポートに
+デフォルトルートをoriginateする**（`neighbor <host-facing iface>
+default-originate`）ことが必須になる。共有NATゲートウェイ・共有DNSリゾルバ等、
+local Subnet外へのあらゆるトラフィックがこの経路に頼る（`playground/
+ipv4-unicast-clos/`で、実際にハイパーバイザがこの経路を受け取り機能することまで
+確認済み）。
+
+host向けToRポートは、どちらのPure L3構成でもVLANトランクである必要がない:
+VMごとの`/32`ホストルートをBGPで広報するだけなので、host-ToR間のワイヤに
+`vlan_id`をタグ付けする必要が無い（unnumbered/numberedいずれかのルーテッド
+ポート、または単一の管理用VLANで足りる）。「1. VLANプール設計」で説明した通り、
+kyuushaが払い出す`vlan_id`はこの場合もSubnetごとに排他的な番号のまま変わらないが、
+それは厩舎自身のローカルな帳簿番号（Hypervisor上のブリッジ/ルーティング分離キー）
+としてのみ使われ、ワイヤには一切現れない。
+
+ゲスト側の`network-config`（`addresses`/`gateway4`)は既定デプロイと**一切変わらない**
+——`internal/compute-agent/vmm/seed.go`の`buildNetworkConfig`は普通のSubnet
+CIDR＋gateway4のままで良く、Pure L3固有の変更は全てVNAPプラグイン側（host内の
+ローカル配線）に閉じる。
 
 ## 4. 明示的な非ゴール
 

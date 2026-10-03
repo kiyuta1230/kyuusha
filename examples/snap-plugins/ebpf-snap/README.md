@@ -20,8 +20,8 @@ favors correctness/parity with `nftacl`'s behavior.
 access to `ct state`). TC-BPF attaches directly to the tap device itself,
 so it works regardless of what (if anything) the tap is plugged into
 downstream -- including non-bridge VNAP wiring like
-`examples/vnap-plugins/frr-type5.sh`'s EVPN Type-5 setup, where there is no
-shared bridge at all.
+`examples/vnap-plugins/frr-vrf-host-route.sh`'s pure-L3 setup, where there
+is no shared bridge at all.
 
 ## Design notes
 

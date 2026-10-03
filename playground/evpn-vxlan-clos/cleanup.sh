@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# playground/frr-type5-clos/cleanup.sh -- tears down the lab run-test.sh
+# playground/evpn-vxlan-clos/cleanup.sh -- tears down the lab run-test.sh
 # deploys (see its own header comment).
 set -euo pipefail
 cd "$(dirname "$0")"

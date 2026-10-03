@@ -38,23 +38,39 @@
   加えることで、組み込み実装には無い**実際のホスト跨ぎL2疎通**を実現する。他の
   参考実装と違い、どのNICがアップリンクかというホストレベルの設定を、VNAP payloadでは
   なく環境変数`VNAP_UPLINK_IFACE`（compute-agentプロセスから継承）で受け取る——
-  これはFRR設定のようなプロトコルレベルの環境依存が無く、`frr-type5.sh`より
-  「そのまま使える」度合いが高い参考実装（[network-deployment-guide.md](../network-deployment-guide.md)
+  これはFRR設定のようなプロトコルレベルの環境依存が無く、`frr-ipv4-unicast.sh`/
+  `frr-vrf-host-route.sh`より「そのまま使える」度合いが高い参考実装
+  （[network-deployment-guide.md](../network-deployment-guide.md)
   「1. VLANプール設計」参照）。containerlab製のleaf-spine-leaf CLOS疑似ファブリック
   （本物のVLAN-aware Linuxブリッジをスイッチ役に見立てた4ホップ構成）でこのスクリプト
   自体をそのまま実行し、実機確認済み（詳細はdocs/release-notes.md参照）
-- `examples/vnap-plugins/frr-type5.sh`——EVPN Type-5（pure L3）
-  デプロイ向けのサンプル（[network-deployment-guide.md](../network-deployment-guide.md)
-  「3.5. Type-5（EVPN pure L3）デプロイの場合」参照）。共有ブリッジを使わず、
+- `examples/vnap-plugins/frr-ipv4-unicast.sh`——pure L3・IP一意
+  （[network-deployment-guide.md](../network-deployment-guide.md)
+  「3.5. Pure L3デプロイの場合」参照）デプロイ向けのサンプル。VRFを一切使わず、
+  VMごとのtapへ`gateway_ip`をSubnetの実prefix長（`/32`ではない）で直接付与して
+  ハイパーバイザ自身を本物のL3ゲートウェイにし、proxy ARPを有効化した上で、
+  VM自身のIPを`/32`のstatic routeとしてFRRのデフォルトルーティングインスタンスへ
+  注入する。ハイパーバイザ自身もLeafとL3で接続しデフォルトルートを受け取る構成を
+  前提にする（テナント間のIPアドレス空間がfabric全体で重複しないことが大前提——
+  重複しうる場合は`frr-vrf-host-route.sh`を使うこと）。`playground/ipv4-unicast-clos/`
+  （containerlab製、本物のFRRがleaf-spine-leafのスイッチ役、unnumbered eBGP、
+  VRF/EVPN/VXLANは一切無し）でホスト跨ぎの実機確認を行った
+- `examples/vnap-plugins/frr-vrf-host-route.sh`——pure L3・IP重複許容
+  （[network-deployment-guide.md](../network-deployment-guide.md)
+  「3.5. Pure L3デプロイの場合」参照）デプロイ向けのサンプル。共有ブリッジを使わず、
   VMごとのtapへ`gateway_ip`を`/32`で直接付与しproxy ARPを有効化した上で、VM自身の
-  IPを`/32`のホストルートとしてカーネルとFRR（`vtysh`経由）の両方へ注入する。単一
-  Hypervisorローカルの確認（Firecrackerゲストがブリッジ無しで実際に起動しゲスト自身が
-  gatewayへのpingに成功、VM削除時にFRR側のルートも正しく引き上げられることを確認）に
-  加え、`playground/frr-type5-clos/`（containerlab製、本物のFRRがleaf-spine-leafの
-  スイッチ役を担う、BGP EVPN Type-5・VXLANカプセル化あり）でホスト跨ぎの実機確認も
-  行った——この検証で**tapをVRFへ`master`として所属させる処理が漏れていたバグ**
-  （注入したstatic routeが常にno-opになり、Type-5が実質機能しない状態だった）を
+  IPを`/32`のホストルートとしてテナントのVRF内のFRR static route（`vtysh`経由）へ
+  注入する。単一Hypervisorローカルの確認（Firecrackerゲストがブリッジ無しで実際に
+  起動しゲスト自身がgatewayへのpingに成功、VM削除時にFRR側のルートも正しく
+  引き上げられることを確認）に加え、ホスト跨ぎの実機確認を2通りの網側実現方式——
+  `playground/evpn-vxlan-clos/`（本物のBGP EVPN Type-5・VXLANカプセル化あり）と
+  `playground/vrf-lite-clos/`（EVPN/VXLAN無し、VRFスコープの素の`ipv4 unicast`
+  eBGPのみ）——の両方で行った。**このスクリプト自身のattach/detachロジックは
+  網側がどちらであっても完全に同一**——FRRのRIBへVRFスコープのstatic routeを
+  出し入れするだけで、その先をEVPNが運ぶかプレーンなBGPが運ぶかは関知しない設計の
+  帰結。`playground/evpn-vxlan-clos/`での検証で**tapをVRFへ`master`として所属
+  させる処理が漏れていたバグ**（注入したstatic routeが常にno-opになっていた）を
   発見・修正した（詳細はスクリプト自身のコメントとdocs/release-notes.md参照）。
-  BGP/EVPNの設定自体はASN方式・numbered/unnumbered等が環境ごとに大きく異なる
+  BGP/EVPN/VRFの設定自体はASN方式・numbered/unnumbered等が環境ごとに大きく異なる
   プロトコルレベルの事情を抱えるため、`vlan-trunk.sh`と違い「そのまま使える」
   参考実装にはなり得ず、読んで自分の環境に合わせて作り込む前提のまま

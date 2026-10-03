@@ -1619,11 +1619,12 @@ VLANはAZごとに4094個までという上限と、物理スイッチ側のト�
 この上限に収まらないAZが出てきた場合、**kyuusha自身がVXLAN(またはVLAN+VXLANハイブリッド)の
 エスケープパスを実装する必要は無い**と判断した——理由は、VNAP（tap配線プラグイン契約、
 「networkサービスのリソース」節参照）が既にホストを跨ぐ実現方式を完全にプラガブル化して
-おり、Type-5（EVPN pure L3、`examples/vnap-plugins/frr-type5.sh`に参考実装あり）は
-そもそも「1 VLAN = 1 VRF」というマッピング自体を使わない（[network運用ガイド](network-deployment-guide.md)
-「3.5. Type-5」参照）ため、VLANプールが枯渇する問題自体が発生しない。VLANの4094上限に
-収まらないAZは、kyuusha側に新しい機能を足すのではなく、**そのAZをType-5デプロイへ切り替える**
-という既存の選択肢で解決する——VXLANハイブリッドを新規に実装するのは、Type-5が既に解決している
+おり、Pure L3（`examples/vnap-plugins/frr-ipv4-unicast.sh`/`frr-vrf-host-route.sh`に
+参考実装あり）はそもそも「1 VLAN = 1 VRF」というマッピング自体を使わない
+（[network運用ガイド](network-deployment-guide.md)「3.5. Pure L3デプロイの場合」参照）
+ため、VLANプールが枯渇する問題自体が発生しない。VLANの4094上限に収まらないAZは、
+kyuusha側に新しい機能を足すのではなく、**そのAZをPure L3デプロイへ切り替える**という
+既存の選択肢で解決する——VXLANハイブリッドを新規に実装するのは、Pure L3が既に解決している
 問題を別の技術で再発明することになり、割に合わない。
 
 > このセクションで述べた前提条件（EVPN-VXLAN、VRF分離、ルートリークポリシー）を、

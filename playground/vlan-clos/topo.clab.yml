@@ -1,4 +1,4 @@
-name: clos-vlan-test
+name: vlan-clos
 topology:
   nodes:
     host1:

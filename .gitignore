@@ -17,8 +17,10 @@
 /playground/volume-data/
 
 # containerlab's own lab-state directory (SSH configs, node startup
-# configs, etc.), named after playground/containerlab-clos/topo.clab.yml's
-# `name:`. run-test.sh/cleanup.sh manage its lifecycle; nothing here should
-# be committed.
-/playground/containerlab-clos/clab-clos-vlan-test/
-/playground/frr-type5-clos/clab-type5-clos-test/
+# configs, etc.), named after each lab's own topo.clab.yml's `name:`.
+# run-test.sh/cleanup.sh manage its lifecycle; nothing here should be
+# committed.
+/playground/vlan-clos/clab-vlan-clos/
+/playground/ipv4-unicast-clos/clab-ipv4-unicast-clos/
+/playground/evpn-vxlan-clos/clab-evpn-vxlan-clos/
+/playground/vrf-lite-clos/clab-vrf-lite-clos/

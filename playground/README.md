@@ -41,19 +41,34 @@ CLIを直接使う場合は
 - `./playground/churn.sh [max_vms] [interval_seconds]`: Grafanaダッシュボードを
   眺めながら数字が動き続けるよう、VM+Volumeの作成・削除を延々と繰り返す
 - `./playground/demo.sh [-y]`: 日本語で読み上げるナレーション付きのプロダクトデモ
-- `./playground/containerlab-clos/run-test.sh`（+`cleanup.sh`）: kyuushaの通常の
-  サービス群とは無関係に、[containerlab](https://containerlab.dev)でleaf-spine-leaf
-  のCLOS疑似ファブリック（本物のVLAN-aware Linuxブリッジがスイッチ役）を組み立て、
-  `examples/vnap-plugins/`のVNAP参考実装（現状`vlan-trunk.sh`）を実際のホスト跨ぎL2
-  疎通の検証に使う。containerlabとroot権限（sudo）が要る。単発のDockerネットワーク
-  では再現しない環境依存の問題を切り分ける目的もある（詳細は
-  [VNAP仕様](../docs/specs/vnap.md)「参考実装」参照）
-- `./playground/frr-type5-clos/run-test.sh`（+`cleanup.sh`）: 上記と同じ理由・同じ
+いずれもcontainerlabとroot権限（sudo）が要る。単発のDockerネットワークでは
+再現しない環境依存の問題を切り分ける目的もある（詳細は
+[VNAP仕様](../docs/specs/vnap.md)「参考実装」参照）。4ラボは
+[ネットワーク接続パターンの4分類](../docs/network-deployment-guide.md)
+「3.5. Pure L3デプロイの場合」に対応する:
+
+- `./playground/vlan-clos/run-test.sh`（+`cleanup.sh`）: kyuushaの通常のサービス群
+  とは無関係に、[containerlab](https://containerlab.dev)でleaf-spine-leafのCLOS
+  疑似ファブリック（本物のVLAN-aware Linuxブリッジがスイッチ役）を組み立て、
+  `examples/vnap-plugins/vlan-trunk.sh`を実際のホスト跨ぎL2疎通の検証に使う
+  （L2 VLANトランク、Type-2）
+- `./playground/ipv4-unicast-clos/run-test.sh`（+`cleanup.sh`）: 上記と同じ理由・同じ
+  containerlab依存だが、スイッチ役が本物のFRR（VRF/EVPN/VXLANは一切無し、unnumbered
+  eBGP・プレーンな`ipv4 unicast`のみ）で、`examples/vnap-plugins/frr-ipv4-unicast.sh`
+  の実機検証に使う（pure L3・IP一意）。ハイパーバイザ自身がLeafから実際にデフォルト
+  ルートを学習し、それが機能することも確認する
+- `./playground/evpn-vxlan-clos/run-test.sh`（+`cleanup.sh`）: 上記と同じ理由・同じ
   containerlab依存だが、スイッチ役が本物のFRR（BGP EVPN Type-5、VXLANカプセル化あり）
-  で、`examples/vnap-plugins/frr-type5.sh`の実機検証に使う。この検証で実際に
-  `frr-type5.sh`のバグ（tapをVRFへ`master`で所属させていなかったため、注入した
-  static routeが常にno-opになっていた）を発見・修正した実績があるため、
-  `frr-type5.sh`を変更した際は必ず再実行すること
+  で、`examples/vnap-plugins/frr-vrf-host-route.sh`の実機検証に使う（pure L3・IP重複
+  許容）。この検証で実際に`frr-vrf-host-route.sh`のバグ（tapをVRFへ`master`で
+  所属させていなかったため、注入したstatic routeが常にno-opになっていた）を発見・
+  修正した実績があるため、このスクリプトを変更した際は必ず再実行すること
+- `./playground/vrf-lite-clos/run-test.sh`（+`cleanup.sh`）: 上記と同じ理由・同じ
+  containerlab依存だが、スイッチ役が本物のFRR（VRFはあるがEVPN/VXLANは無し、VRF
+  スコープの素の`ipv4 unicast`のみ）で、同じく`examples/vnap-plugins/
+  frr-vrf-host-route.sh`の実機検証に使う（pure L3・IP重複許容、EVPN+VXLANの代替
+  実現方式）。このスクリプト自身の挙動は`evpn-vxlan-clos`と完全に同一——網側の
+  実現方式が違うだけ
 
 ## 構成
 

@@ -31,7 +31,8 @@ ACL強制プラグイン契約——SNAP（Security Network Attach Protocol）�
 netdevフックはconntrackが確立されるより前段のフックで、環境依存の問題ではなくnetdev
 ファミリ自体の制約）。この設計上の代償として、**このデフォルト実装はtapがLinuxブリッジ
 のポートであることを前提とする**——VNAPで非ブリッジ配線（`examples/vnap-plugins/
-frr-type5.sh`のようなEVPN Type-5 pure L3構成）を使う場合、`-security-backend-bin`で
+frr-vrf-host-route.sh`/`frr-ipv4-unicast.sh`のようなpure L3構成）を使う場合、
+`-security-backend-bin`で
 別の（ブリッジを前提としない）SNAP実装を組み合わせる必要がある。
 
 - 1つの共有base chain（`bridge kyuusha_acl base`、`hook forward`、`policy accept`——
@@ -62,7 +63,8 @@ frr-type5.sh`のようなEVPN Type-5 pure L3構成）を使う場合、`-securit
 ## 非ブリッジ配線向けの参考実装: `examples/snap-plugins/ebpf-snap`
 
 `nftacl`はtapがLinuxブリッジのポートであることを前提とするため、VNAPで非ブリッジ
-配線（`examples/vnap-plugins/frr-type5.sh`のようなEVPN Type-5構成）を使う場合は
+配線（`examples/vnap-plugins/frr-vrf-host-route.sh`/`frr-ipv4-unicast.sh`のような
+pure L3構成）を使う場合は
 `-security-backend-bin`で別のSNAP実装を組み合わせる必要がある、と上で述べた。その
 具体例として、TC-BPF（tapデバイスのclsact ingress/egress両フックに`cilium/ebpf`で
 直接アタッチ、ブリッジのポートである必要が無い）によるステートフルな参考実装を

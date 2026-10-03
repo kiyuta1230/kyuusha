@@ -19,4 +19,4 @@ specific assumptions, dependencies, and trade-offs.
 
 | Plugin | Approach | Notes |
 |---|---|---|
-| `ebpf-snap/` | TC-BPF (`cilium/ebpf`), stateful | Works with non-bridge tap wiring (e.g. `examples/vnap-plugins/frr-type5.sh`'s EVPN Type-5), unlike nftacl. Tracks its own flow state (see its README) since TC hooks have no netfilter conntrack; a separate, stateless/performance-focused plugin is expected later, not this one |
+| `ebpf-snap/` | TC-BPF (`cilium/ebpf`), stateful | Works with non-bridge tap wiring (e.g. `examples/vnap-plugins/frr-vrf-host-route.sh`'s pure-L3 setup), unlike nftacl. Tracks its own flow state (see its README) since TC hooks have no netfilter conntrack; a separate, stateless/performance-focused plugin is expected later, not this one |

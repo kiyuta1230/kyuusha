@@ -24,7 +24,7 @@
 #      cross-host L2 extension the built-in path is missing
 #   3. attaches this VM's own tap to the same bridge
 #
-# Unlike frr-type5.sh, nothing here is FRR/BGP-specific or otherwise
+# Unlike frr-vrf-host-route.sh/frr-ipv4-unicast.sh, nothing here is FRR/BGP-specific or otherwise
 # protocol-configuration-heavy -- the switch side needs an ordinary trunk
 # port allowing this AZ's VLAN range (docs/network-deployment-guide.md
 # already assumes this for the default topology) and, for L2-to-L2/gateway

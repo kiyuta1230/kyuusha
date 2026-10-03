@@ -1,16 +1,28 @@
 #!/bin/sh
-# frr-type5.sh -- a reference VNAP (VM Network Attach Protocol; see
+# frr-vrf-host-route.sh -- a reference VNAP (VM Network Attach Protocol; see
 # docs/architecture.md「VMのネットワーク接続をCNIのようにプラガブルにすべきか」
-# and docs/specs/vnap.md) plugin
-# for a pure EVPN Type-5 deployment (see docs/network-deployment-guide.md
-# 「3.5. Type-5（EVPN pure L3）デプロイの場合」).
+# and docs/specs/vnap.md) plugin for a pure-L3, per-tenant-VRF deployment
+# where each VM's /32 is injected directly into FRR's RIB (see
+# docs/network-deployment-guide.md「3.5. Pure L3デプロイの場合」).
+#
+# This script's job stops at the VRF boundary: it only ever talks to FRR's
+# RIB (a static route in one VRF) -- how that route actually reaches other
+# hosts is entirely the network team's choice, and this same script works
+# unchanged under either one:
+#   - playground/evpn-vxlan-clos/: BGP EVPN Type-5 + a real VXLAN VTEP
+#   - playground/vrf-lite-clos/: plain VRF-scoped `address-family ipv4
+#     unicast` eBGP relay, no EVPN/VXLAN at all
+# (see each lab's own README/run-test.sh for the respective leaf/spine
+# config). If your Subnet's tenants never need overlapping address space at
+# all, you don't need a VRF in the first place -- see
+# examples/vnap-plugins/frr-ipv4-unicast.sh instead.
 #
 # Unlike the built-in Linux-bridge implementation (one shared bridge per
 # Subnet, holding that Subnet's gateway_ip -- a real local L2 domain every
 # VM on that Subnet, on this host, sits on), this gives each VM's tap its
 # own point-to-point-shaped presence: no bridge, no shared L2 domain at
-# all, matching Type-5's "no L2 stretch needed, route by exact /32 host
-# route" model. Per VM, "attach":
+# all, matching this model's "no L2 stretch needed, route by exact /32 host
+# route" shape. Per VM, "attach":
 #
 #   1. assigns the Subnet's gateway_ip as a /32 address directly on the
 #      tap, so the kernel natively answers the guest's ARP for its own
@@ -37,14 +49,22 @@
 #      the FRR-side `vrf vrfNNNNNNNNNNNN` stanza below -- this script
 #      never creates it (a per-tenant VRF is provisioned once by the
 #      network team, shared by every VM of that tenant, not per-VM)
-#   4. installs a kernel host route for the VM's own IP (/32, via this
-#      tap) and injects the same /32 into FRR (via vtysh, into the same
-#      per-tenant VRF) as a static route
+#   4. injects the VM's own IP (/32, via this tap) into FRR (via vtysh,
+#      into the same per-tenant VRF) as a static route. This is the ONLY
+#      place that route is installed: do not also add it directly into
+#      the kernel's own VRF routing table (e.g. a bare `ip route replace
+#      ${ip}/32 dev $tap`) alongside this -- zebra treats a kernel-sourced
+#      route for the same prefix as a lower-distance "K" route that wins
+#      over FRR's own "S" static route in the RIB, so the static route
+#      stops being the selected/best path and `redistribute static` never
+#      fires for it. FRR installs its own selected static route into the
+#      kernel FIB itself once vtysh below succeeds, so there is nothing
+#      left for this script to add by hand
 #
 # This script only ever talks to FRR's RIB (a static route in one VRF) --
 # it is NOT responsible for BGP/EVPN configuration itself (VRF/RD/RT
 # definitions, or the "redistribute static" policy that actually turns
-# these static routes into EVPN Type-5 advertisements). That remains the
+# these static routes into actual route advertisements). That remains the
 # network team's job, same as the rest of docs/network-deployment-guide.md
 # -- see the REQUIRED companion FRR config sketch at the bottom of this
 # file.
@@ -82,17 +102,16 @@ attach)
 	ip_addr="$(json ip_address)"
 	gateway_ip="$(json gateway_ip)"
 	if [ -z "$ip_addr" ] || [ -z "$gateway_ip" ]; then
-		echo "frr-type5: attach requires ip_address and gateway_ip" >&2
+		echo "frr-vrf-host-route: attach requires ip_address and gateway_ip" >&2
 		exit 1
 	fi
 
 	cleanup() {
-		ip route del "${ip_addr}/32" dev "$tap" 2>/dev/null || true
 		ip addr del "${gateway_ip}/32" dev "$tap" 2>/dev/null || true
 	}
 
 	if ! ip link set "$tap" up; then
-		echo "frr-type5: ip link set $tap up failed" >&2
+		echo "frr-vrf-host-route: ip link set $tap up failed" >&2
 		exit 1
 	fi
 	# Enslave into the tenant VRF before any addr/route step below, so
@@ -101,34 +120,29 @@ attach)
 	# membership later. See this package's own doc comment for why this
 	# step, once missing, made every route below a silent no-op.
 	if ! ip link set "$tap" master "$vrf"; then
-		echo "frr-type5: enslave $tap into vrf $vrf failed (does the vrf device exist yet?)" >&2
+		echo "frr-vrf-host-route: enslave $tap into vrf $vrf failed (does the vrf device exist yet?)" >&2
 		exit 1
 	fi
 	# "replace", not "add": attach must be idempotent (see this script's
 	# doc comment and docs/specs/vnap.md「冪等性」) -- a resent
 	# CreateCommand re-invokes Wire for a tap already wired.
 	if ! ip addr replace "${gateway_ip}/32" dev "$tap"; then
-		echo "frr-type5: assign gateway_ip to $tap failed" >&2
+		echo "frr-vrf-host-route: assign gateway_ip to $tap failed" >&2
 		exit 1
 	fi
 	if ! sysctl -qw "net.ipv4.ip_forward=1"; then
-		echo "frr-type5: enable ip_forward failed" >&2
+		echo "frr-vrf-host-route: enable ip_forward failed" >&2
 		cleanup
 		exit 1
 	fi
 	if ! sysctl -qw "net.ipv4.conf.${tap}.proxy_arp=1"; then
-		echo "frr-type5: enable proxy_arp on $tap failed" >&2
-		cleanup
-		exit 1
-	fi
-	if ! ip route replace "${ip_addr}/32" dev "$tap"; then
-		echo "frr-type5: install host route for $ip_addr failed" >&2
+		echo "frr-vrf-host-route: enable proxy_arp on $tap failed" >&2
 		cleanup
 		exit 1
 	fi
 	if ! vtysh -c "configure terminal" -c "vrf ${vrf}" \
 		-c "ip route ${ip_addr}/32 ${tap}" -c "end"; then
-		echo "frr-type5: FRR route injection for $ip_addr failed" >&2
+		echo "frr-vrf-host-route: FRR route injection for $ip_addr failed" >&2
 		cleanup
 		exit 1
 	fi
@@ -156,19 +170,25 @@ detach)
 	;;
 
 *)
-	echo "frr-type5: unknown verb '$verb' (want attach|detach)" >&2
+	echo "frr-vrf-host-route: unknown verb '$verb' (want attach|detach)" >&2
 	exit 1
 	;;
 esac
 
 # --- Required companion FRR config (sketch, not exhaustive) ---
 #
-# Verified end-to-end against a real containerlab BGP EVPN lab (leaf-spine-
-# leaf, unnumbered eBGP, one ASN per hypervisor -- see
-# playground/frr-type5-clos/ and docs/release-notes.md). A few pieces below
-# are easy to miss and silently leave routes unadvertised rather than
-# erroring, so they're spelled out here even though this is "the network
-# team's job, not this script's":
+# This sketch is the EVPN Type-5 + VXLAN realization specifically (verified
+# end-to-end against playground/evpn-vxlan-clos/, a real containerlab BGP
+# EVPN lab -- leaf-spine-leaf, unnumbered eBGP, one ASN per hypervisor; see
+# docs/release-notes.md). A few pieces below are easy to miss and silently
+# leave routes unadvertised rather than erroring, so they're spelled out
+# here even though this is "the network team's job, not this script's".
+#
+# playground/vrf-lite-clos/ verifies a much shorter alternative: no EVPN,
+# no VXLAN, no SVI/VNI at all -- every hop (not just the two edge hosts)
+# carries this same VRF and relays the route via a plain
+# `address-family ipv4 unicast` eBGP session scoped to that VRF. This
+# script's own attach/detach logic above is identical either way.
 #
 # ip link add vrfNNNNNNNNNNNN type vrf table <per-tenant table id>
 # ip link set vrfNNNNNNNNNNNN up

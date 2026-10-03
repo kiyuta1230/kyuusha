@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# playground/containerlab-clos/run-test.sh -- deploys a leaf-spine-leaf CLOS
+# playground/vlan-clos/run-test.sh -- deploys a leaf-spine-leaf CLOS
 # lab (containerlab, topo.clab.yml) with real VLAN-aware (802.1Q
 # trunk-capable) Linux-bridge switches, then runs kyuusha's actual
 # examples/vnap-plugins/vlan-trunk.sh (the real file, not a
@@ -19,14 +19,14 @@
 # (or interactive) sudo -- containerlab itself needs root to wire veth links
 # between container network namespaces.
 #
-# Usage: playground/containerlab-clos/run-test.sh
+# Usage: playground/vlan-clos/run-test.sh
 # Leaves the lab running afterward for manual poking (docker exec
-# clab-clos-vlan-test-<node> sh); run cleanup.sh when done.
+# clab-vlan-clos-<node> sh); run cleanup.sh when done.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 REPO_ROOT="$(cd ../.. && pwd)"
-LAB=clos-vlan-test
+LAB=vlan-clos
 VLAN_ID=4
 SCRIPT="$REPO_ROOT/examples/vnap-plugins/vlan-trunk.sh"
 

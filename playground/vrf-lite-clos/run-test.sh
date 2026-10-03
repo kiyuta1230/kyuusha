@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# playground/vrf-lite-clos/run-test.sh -- deploys a leaf-spine-leaf CLOS lab
+# (containerlab, topo.clab.yml) running real FRR on every node, with a
+# per-tenant VRF end-to-end but NO EVPN and NO VXLAN anywhere: one ASN per
+# hypervisor (host1/host2), numbered eBGP per hop (unnumbered eBGP does not
+# establish inside a non-default VRF instance on FRR 10.5.1 -- a real
+# limitation hit while building this lab), plain VRF-scoped
+# `address-family ipv4 unicast` the whole way. Then runs kyuusha's actual
+# examples/vnap-plugins/frr-vrf-host-route.sh (the real file, not a
+# reimplementation, unmodified from playground/evpn-vxlan-clos/'s copy) on
+# both "host1" and "host2" against a fake VM (a veth pair + netns standing in
+# for a Firecracker tap+guest), and pings across the fabric.
+#
+# This lab formalizes a design already verified working in an earlier
+# scratchpad test: frr-vrf-host-route.sh's host-side behavior (gateway_ip as
+# a /32, proxy_arp, vtysh static-route injection inside the tenant VRF) is
+# IDENTICAL whether the network side carries that route via EVPN+VXLAN (see
+# playground/evpn-vxlan-clos/) or via plain VRF-scoped BGP (here) -- the
+# script only ever talks to FRR's RIB via vtysh, and which network-side
+# technology relays that route onward is the network team's own choice, not
+# this script's concern.
+#
+# The per-tenant VRF (vrf01c9a2a0762a) baked into the frr.conf files and
+# topo.clab.yml's exec blocks is this lab's own fixed test fixture --
+# vrf01c9a2a0762a is frr-vrf-host-route.sh's own sha256-derived name for
+# tenant_id "tenant-test0000000000000" (see the attach payloads below).
+#
+# Requires: containerlab (https://containerlab.dev), Docker, and passwordless
+# (or interactive) sudo.
+#
+# Usage: playground/vrf-lite-clos/run-test.sh
+# Leaves the lab running afterward for manual poking (docker exec
+# clab-vrf-lite-clos-<node> vtysh); run cleanup.sh when done.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+REPO_ROOT="$(cd ../.. && pwd)"
+LAB=vrf-lite-clos
+TENANT_ID="tenant-test0000000000000"
+VRF="vrf01c9a2a0762a" # must match: printf '%s' "$TENANT_ID" | sha256sum | cut -c1-12, prefixed "vrf"
+SCRIPT="$REPO_ROOT/examples/vnap-plugins/frr-vrf-host-route.sh"
+
+dexec() { docker exec "clab-${LAB}-$1" sh -c "$2"; }
+
+echo "== deploying containerlab topology (FRR boot + BGP convergence takes a bit) =="
+sudo containerlab deploy -t topo.clab.yml --reconfigure
+
+echo "== waiting for the underlay eBGP session (host1<->leaf1, inside vrf ${VRF}) to establish =="
+for _ in $(seq 1 30); do
+	dexec host1 "vtysh -c 'show bgp vrf ${VRF} summary' 2>/dev/null" | grep -q "Establ" && break
+	sleep 2
+done
+
+echo "== copying frr-vrf-host-route.sh into host1/host2 =="
+docker cp "$SCRIPT" "clab-${LAB}-host1:/frr-vrf-host-route.sh"
+docker cp "$SCRIPT" "clab-${LAB}-host2:/frr-vrf-host-route.sh"
+
+wire_fake_vm() {
+	host="$1" tap="$2" guest_if="$3" ns="$4" ip_addr="$5"
+	dexec "$host" "
+		ip link add ${tap} type veth peer name ${guest_if}
+		ip netns add ${ns}
+		ip link set ${guest_if} netns ${ns}
+		ip netns exec ${ns} ip link set lo up
+		ip netns exec ${ns} ip addr add ${ip_addr}/24 dev ${guest_if}
+		ip netns exec ${ns} ip link set ${guest_if} up
+		echo '{\"tap_name\":\"'${tap}'\",\"tenant_id\":\"'${TENANT_ID}'\",\"ip_address\":\"'${ip_addr}'\",\"gateway_ip\":\"10.88.0.254\"}' | sh /frr-vrf-host-route.sh attach
+	" > /dev/null 2>&1 || true # vtysh prints a harmless missing-vtysh.conf warning to stderr on every call
+}
+
+echo "== wiring fake VM on host1 (10.88.0.1) =="
+wire_fake_vm host1 tapvm1 guest1 ns1 10.88.0.1
+echo "== wiring fake VM on host2 (10.88.0.2) =="
+wire_fake_vm host2 tapvm2 guest2 ns2 10.88.0.2
+
+echo "== confirming the route actually reached host2's VRF table (route propagation across 4 hops takes a few seconds) =="
+route_seen=""
+for _ in $(seq 1 15); do
+	if dexec host2 "ip route show table 1000 | grep -q 10.88.0.1"; then
+		route_seen=1
+		break
+	fi
+	sleep 2
+done
+[ -n "$route_seen" ] || {
+	echo "FAIL: 10.88.0.1 never made it into host2's vrf table -- check 'docker exec clab-${LAB}-host1 vtysh -c \"show bgp vrf ${VRF}\"'"
+	exit 1
+}
+
+echo "== pinging host1's fake VM from host2's fake VM, across the CLOS fabric (no encapsulation at all) =="
+if dexec host2 "ip netns exec ns2 ping -c 5 -W 2 10.88.0.1"; then
+	echo "PASS: cross-host L3 (VRF-lite, no EVPN/VXLAN) reachable through the simulated CLOS fabric"
+else
+	echo "FAIL: no reply"
+	exit 1
+fi

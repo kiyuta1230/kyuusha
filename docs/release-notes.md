@@ -5,6 +5,53 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-10-03
+
+- **ネットワーク接続パターンを4分類に整理し、VNAP参考実装/containerlabラボの命名・
+  ディレクトリを全面的に付け替えた**（元の「Type-2/Type-5」というEVPN route type
+  由来の語彙から、「L2 VLAN」「L3 Pure L3（IP一意/IP重複許容）」という接続特性
+  ベースの語彙へ）:
+  - `examples/vnap-plugins/frr-type5.sh` → `frr-vrf-host-route.sh`（`git mv`で
+    履歴保持、中身は無変更）
+  - `playground/containerlab-clos/` → `playground/vlan-clos/`、
+    `playground/frr-type5-clos/` → `playground/evpn-vxlan-clos/`
+    （いずれも`git mv`、中身は無変更）
+- **新規VNAP参考実装`examples/vnap-plugins/frr-ipv4-unicast.sh`を追加**
+  （pure L3・IP一意デプロイ向け）。`frr-vrf-host-route.sh`と異なりVRFを一切使わず、
+  ハイパーバイザが`gateway_ip`をSubnetの実prefix長で持つ本物のL3ゲートウェイになる
+  （proxy ARP併用）。ハイパーバイザ自身もLeafとL3接続しデフォルトルートを
+  `default-originate`で受け取る構成を前提にする。新規ラボ
+  `playground/ipv4-unicast-clos/`（containerlab、unnumbered eBGP、
+  VRF/EVPN/VXLAN無し）でホスト跨ぎの実機確認を行い、ハイパーバイザが実際に
+  Leaf発のデフォルトルートを学習しそれが機能することまで確認した
+- **新規ラボ`playground/vrf-lite-clos/`を追加**（`frr-vrf-host-route.sh`を無改造の
+  まま使い回す）。`playground/evpn-vxlan-clos/`（BGP EVPN Type-5 + VXLAN）との
+  違いは網側の実現方式のみ——VRFスコープの素の`address-family ipv4 unicast`
+  eBGPで経路を運び、EVPN/VXLANは一切使わない。host-side VNAPロジックが
+  EVPN+VXLANとVRF-liteの両方の網側実現方式から無改造で使い回せることを実機で
+  確認した（**host-leaf間のBGP技術選択とホスト側VNAPの責務は直交する**、という
+  設計原則をディレクトリ構成自体が体現する形にした）。このラボの構築中に
+  **FRR 10.5.1の既知の制約**（unnumbered eBGPが非デフォルトVRFインスタンス内では
+  確立しない）を確認し、numbered（ポイントツーポイントアドレス方式）eBGPに
+  切り替えた
+- **`frr-ipv4-unicast.sh`/`frr-vrf-host-route.sh`の実バグを発見・修正した**:
+  両スクリプトとも、VM自身の`/32`をFRRへvtysh経由のstatic routeとして注入する
+  のに加えて、カーネルへも直接`ip route replace`で同じ`/32`を入れていたが、
+  これがzebraの経路選択で**FRRの"S"（static）routeより優先される"K"（kernel）
+  routeとして扱われ**、static routeが選択経路(best path)にならず
+  `redistribute static`が発火しない（=経路が他ホストへ一切広報されない）という
+  実機でしか分からない不具合だった。`playground/ipv4-unicast-clos/`の構築時に
+  発見し、両スクリプトから該当のカーネル直接操作を削除——FRR自身が選択した
+  static routeをカーネルFIBへ自動的にインストールするため、この手動操作は
+  そもそも不要だった
+- 上記に伴い、`examples/vnap-plugins/README.md`・`docs/specs/vnap.md`
+  「参考実装」節・`docs/network-deployment-guide.md`「3.5. Pure L3デプロイの
+  場合」（旧「3.5. Type-5（EVPN pure L3）デプロイの場合」）・
+  `playground/README.md`「手動検証ツール」・`.gitignore`のcontainerlab
+  lab-stateディレクトリ除外エントリを、新しい3スクリプト・4ラボ構成に合わせて
+  更新した。4ラボ全て、リネーム後・新規追加後に`containerlab deploy`から
+  実機で再検証済み
+
 ## 2026-09-28
 
 - **Public IP Attach（floating IP相当）を`Subnet`の機能として実装**（新しいリソース
