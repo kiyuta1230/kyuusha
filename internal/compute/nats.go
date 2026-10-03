@@ -201,7 +201,12 @@ type VolumeAttachInfo struct {
 // was exhausted -- see docs/specs/network.md's IPAM section); compute-agent
 // skips wiring that one NIC rather than blocking the whole VM's boot on it.
 type NetworkInterfaceInfo struct {
-	IfaceID    string `json:"iface_id"`
+	IfaceID string `json:"iface_id"`
+	// SubnetID/Zone identify the Subnet this interface belongs to, so a
+	// VNAP/SNAP plugin never has to reverse-resolve it from (zone, vlan_id)
+	// -- see docs/specs/vnap.md / snap.md.
+	SubnetID   string `json:"subnet_id,omitempty"`
+	Zone       string `json:"zone,omitempty"`
 	IPAddress  string `json:"ip_address,omitempty"`
 	MACAddress string `json:"mac_address,omitempty"`
 	CIDR       string `json:"cidr,omitempty"`

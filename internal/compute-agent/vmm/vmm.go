@@ -75,19 +75,18 @@ type VMM interface {
 	// already been deleted).
 	RootDiskPath(vmID string) (string, error)
 	// ApplyACL re-applies ingress/egress firewall rules for an already-
-	// wired NetworkInterface (vmID, ifaceID), via snap.Attach -- the
+	// wired NetworkInterface (vmID, u.IfaceID), via snap.Attach -- the
 	// post-boot counterpart to Boot's own initial snap.Attach call (see
-	// docs/specs/snap.md). subnetCIDR/
-	// gatewayIP are passed in fresh (from the triggering
-	// network.UpdateACLCommand) rather than looked up from this driver's
-	// own boot-time state, so nothing here needs to survive a
+	// docs/specs/snap.md). Everything in u is passed in fresh (from the
+	// triggering network.UpdateACLCommand) rather than looked up from this
+	// driver's own boot-time state, so nothing here needs to survive a
 	// compute-agent restart for this to keep working. applied=false (not
 	// an error) means this driver has no currently-wired tap for that
 	// (vmID, ifaceID) pair -- e.g. the VM hasn't finished booting yet, or
 	// runs under the other driver -- letting agent.go's handleUpdateACL
 	// distinguish "not ready yet, let JetStream redeliver" from "genuinely
 	// failed".
-	ApplyACL(vmID, ifaceID, subnetCIDR, gatewayIP string, ingress, egress []FirewallRule) (applied bool, err error)
+	ApplyACL(vmID string, u ACLUpdate) (applied bool, err error)
 }
 
 // Hotplugger is implemented by a VMM driver whose control surface supports
@@ -295,6 +294,8 @@ func WarnIfSizeMismatch(v VolumeAttachInfo, observedBytes int64) {
 // succeeded yet at Scheduled time -- see docs/specs/network.md.
 type NetIface struct {
 	IfaceID    string
+	SubnetID   string
+	Zone       string
 	MACAddress string
 	IPAddress  string
 	PrefixLen  int
@@ -309,6 +310,19 @@ type NetIface struct {
 	SubnetCIDR string
 	// IngressRules/EgressRules are this interface's spec fields as of Boot
 	// time -- see compute.NetworkInterfaceInfo's identically-named fields.
+	IngressRules []FirewallRule
+	EgressRules  []FirewallRule
+}
+
+// ACLUpdate is ApplyACL's input: one NetworkInterface's complete current
+// SNAP inputs, mirroring network.UpdateACLCommand.
+type ACLUpdate struct {
+	IfaceID      string
+	SubnetID     string
+	SubnetCIDR   string
+	GatewayIP    string
+	IPAddress    string
+	MACAddress   string
 	IngressRules []FirewallRule
 	EgressRules  []FirewallRule
 }

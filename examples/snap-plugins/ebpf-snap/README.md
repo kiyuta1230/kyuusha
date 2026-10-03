@@ -60,10 +60,20 @@ is no shared bridge at all.
   the same tap): only rewrites the rule maps' contents. The already-
   attached programs keep running throughout, so there's no enforcement gap
   during an update.
-- **IPv4 only**, matching `nftacl`'s own scope. Non-IPv4 traffic is passed
-  through unfiltered (`TC_ACT_OK`) rather than blocked, same reasoning as
-  `nftacl` never touching anything outside `ip`/`ip6` families it doesn't
-  understand.
+- **Anti-spoofing** (same rules as `nftacl`'s, see `docs/specs/snap.md`
+  「アンチスプーフィング」): before any ACL check, `enforce_vm_egress`
+  drops a frame from the VM unless its Ethernet source is the VM's own
+  `mac_address` and it is either IPv4 from its own `ip_address`, or ARP
+  whose sender MAC/IP are its own (sender IP `0.0.0.0` also allowed, for
+  RFC 5227 probes). Every other EtherType the VM sends (IPv6, 802.1Q
+  tagged frames) is dropped. The expected address lives in the per-tap
+  `spoof` map; an `attach` with `ip_address` or `mac_address` empty leaves
+  it as it is (a re-apply must never switch the check off).
+- **ACL rules are IPv4 only**, matching `nftacl`'s own scope. Apart from
+  the anti-spoofing check above, non-IPv4 traffic (ARP) is passed through
+  the rule matching unfiltered (`TC_ACT_OK`).
+- **Upgrading**: a tap attached by an older build has no pinned `spoof`
+  map, so a re-apply for it fails with a hint to detach and re-attach.
 
 ## Requirements
 
@@ -103,3 +113,15 @@ only by an `egress_rules` entry gets its *reply* traffic through with an
 was confirmed to remove the TC attachment and this tap's pinned maps
 (`bpftool net show dev <tap>` shows nothing left) while leaving the shared
 `conntrack` map alone, and is safe to call twice.
+
+Anti-spoofing has an automated version of the same kind of check,
+`antispoof_test.go` (root only, skipped otherwise):
+
+```sh
+go test -c -o /tmp/ebpf-snap.test . && sudo /tmp/ebpf-snap.test -test.v
+```
+
+It confirms legitimate traffic passes, and that frames with a spoofed
+source IP, a spoofed source MAC, or a spoofed ARP sender IP never get past
+TC ingress (counted with nftables input-hook counters, which run after
+TCX) -- including after a re-attach that carries no address.

@@ -7,6 +7,29 @@
 
 ## 2026-10-03
 
+- **既定のSNAP実装（nftacl）とebpf-snap参考実装にアンチスプーフィングを追加した**
+  （kyuusha-vpcからの変更依頼B1）。VMが送信するフレームについて、送信元MAC＝払い出された
+  MAC、IPv4の送信元IP＝払い出されたIP、ARPの送信者MAC/IP＝自身のもの（`0.0.0.0`のprobeは
+  可）を強制し、それ以外のEtherType（IPv6・802.1Qタグ付き）はdropする。nftaclでは
+  bridge preroutingフックの専用チェーン、ebpf-snapではTCX ingressでACL判定の前に検査する
+  （[SNAP仕様](specs/snap.md)「アンチスプーフィング」）。修正前のコードに対して
+  network namespace＋vethの実トラフィックテストを流し、**同一Subnetの他VMのIPを名乗った
+  パケットも、偽のMACで送ったフレームも、実際に相手VMへ届くこと**を確認したうえで修正した
+- **nftaclが同一Subnet内のVM間通信を常に落としていた実バグを発見・修正した**:
+  `<tap>-in`/`<tap>-out`チェーンにARPを通すルールが無く、ARPがチェーン末尾の`drop`に
+  落ちていたため、同じブリッジ上のVM同士が互いのMACを解決できなかった（VM→ゲートウェイは
+  forwardフックを通らないので影響が無く、ゲストのゲートウェイpingによる自己診断では
+  気づけなかった。これまでのnftaclの確認は`nft list ruleset`のテキスト確認だけで、
+  VM間の実トラフィックは試していなかった）。上記と同じ実トラフィックテストで発見。
+  ARPを常に通し、正当性はアンチスプーフィング側で検査する形にした
+- **VNAP/SNAPのattachペイロードを拡張した**（変更依頼A2、追加のみで後方互換）:
+  VNAPに`subnet_id`/`zone`/`subnet_cidr`、SNAPに`subnet_id`/`ip_address`/`mac_address`。
+  プラグインが(zone, vlan_id)からSubnetを逆引きする必要が無くなった。
+  `UpdateFirewallRules`後の`update_acl`コマンドにも`subnet_id`/`ip_address`/
+  `mac_address`を載せ、再適用でもアンチスプーフィングを作り直せるようにした。
+  playgroundで実VMを起動し、ゲストのゲートウェイ疎通がアンチスプーフィングのチェーンを
+  経由して通ること、`UpdateFirewallRules`でチェーンが正しいIP/MACで再構築されることを確認
+
 - **ネットワーク接続パターンを4分類に整理し、VNAP参考実装/containerlabラボの命名・
   ディレクトリを全面的に付け替えた**（元の「Type-2/Type-5」というEVPN route type
   由来の語彙から、「L2 VLAN」「L3 Pure L3（IP一意/IP重複許容）」という接続特性

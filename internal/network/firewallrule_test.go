@@ -197,8 +197,11 @@ func TestService_UpdateFirewallRulesPublishesUpdateACLWhenScheduled(t *testing.T
 	if cmd.IfaceID != n.Meta.ID || cmd.VMID != "vm-1" || cmd.TenantID != tenant {
 		t.Fatalf("UpdateACLCommand = %+v, want iface_id=%s vm_id=vm-1 tenant_id=%s", cmd, n.Meta.ID, tenant)
 	}
-	if cmd.SubnetCIDR != "10.0.1.0/24" || cmd.GatewayIP != "10.0.1.1" {
-		t.Fatalf("UpdateACLCommand subnet info = %+v, want cidr=10.0.1.0/24 gateway=10.0.1.1", cmd)
+	if cmd.SubnetCIDR != "10.0.1.0/24" || cmd.GatewayIP != "10.0.1.1" || cmd.SubnetID != subnet.Meta.ID {
+		t.Fatalf("UpdateACLCommand subnet info = %+v, want subnet_id=%s cidr=10.0.1.0/24 gateway=10.0.1.1", cmd, subnet.Meta.ID)
+	}
+	if cmd.IPAddress == "" || cmd.IPAddress != n.Status.IPAddress || cmd.MACAddress == "" || cmd.MACAddress != n.Status.MACAddress {
+		t.Fatalf("UpdateACLCommand address = ip %q mac %q, want the interface's own ip %q mac %q", cmd.IPAddress, cmd.MACAddress, n.Status.IPAddress, n.Status.MACAddress)
 	}
 	if len(cmd.IngressRules) != 1 || cmd.IngressRules[0].PortRange != "22" {
 		t.Fatalf("UpdateACLCommand.IngressRules = %+v, want one rule with port_range=22", cmd.IngressRules)

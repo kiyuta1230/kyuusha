@@ -110,6 +110,7 @@ func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetS
 		}
 		info := NetworkInterfaceInfo{
 			IfaceID:    n.GetMeta().GetId(),
+			SubnetID:   a.SubnetID,
 			IPAddress:  n.GetStatus().GetIpAddress(),
 			MACAddress: n.GetStatus().GetMacAddress(),
 			Primary:    a.Primary,
@@ -126,6 +127,7 @@ func createNetworkInterfaces(ctx context.Context, subnetClient networkv1.SubnetS
 			if err != nil {
 				return infos, err
 			}
+			info.Zone = sn.GetSpec().GetZone()
 			info.CIDR = sn.GetSpec().GetCidr()
 			info.GatewayIP = sn.GetSpec().GetGatewayIp()
 			info.VLANID = sn.GetStatus().GetVlanId()

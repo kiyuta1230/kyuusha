@@ -48,6 +48,16 @@
 // `accept` itself -- the base chain's own `policy accept` is what finally
 // allows a packet once every relevant tap's chain has returned instead of
 // dropping.
+//
+// # Anti-spoofing
+//
+// A second base chain (bridge/prerouting, also policy accept) holds one
+// more guard rule per tap, `iifname "<tap>" jump <tap>-spoof`, enforcing
+// that the VM only ever sends from its own allocated MAC/IPv4 (see
+// writeAntiSpoof). It lives on prerouting, not forward, because frames a
+// VM sends to the bridge itself (its gateway_ip) are delivered locally and
+// never reach the forward hook -- a source check only on forward would
+// leave the routed path wide open.
 package nftacl
 
 import (
@@ -71,6 +81,11 @@ type Interface struct {
 	TapName    string
 	SubnetCIDR string
 	GatewayIP  string
+	// IPAddress/MACAddress are the VM's own allocated address on this
+	// interface -- the only source IPv4/MAC (including ARP sender fields)
+	// the anti-spoofing chain lets the VM send from (see writeAntiSpoof).
+	IPAddress  string
+	MACAddress string
 
 	IngressRules []FirewallRule
 	EgressRules  []FirewallRule
@@ -79,10 +94,16 @@ type Interface struct {
 const (
 	table     = "kyuusha_acl"
 	baseChain = "base"
+	// spoofBaseChain hooks bridge prerouting rather than forward: it must
+	// see every frame the VM sends into the bridge, including frames
+	// addressed to the bridge itself (the Subnet's gateway_ip, and so
+	// anything the host routes onward), which never traverse forward.
+	spoofBaseChain = "antispoof"
 )
 
-func inChain(tap string) string  { return tap + "-in" }  // iifname == tap -- enforces EgressRules
-func outChain(tap string) string { return tap + "-out" } // oifname == tap -- enforces IngressRules
+func inChain(tap string) string    { return tap + "-in" }    // iifname == tap -- enforces EgressRules
+func outChain(tap string) string   { return tap + "-out" }   // oifname == tap -- enforces IngressRules
+func spoofChain(tap string) string { return tap + "-spoof" } // iifname == tap, prerouting -- see writeAntiSpoof
 
 // Apply (re-)installs iface's complete ACL state: idempotent, and safe to
 // call again with a fresh rule set (flushes each of the tap's two chains
@@ -95,6 +116,7 @@ func Apply(iface Interface) error {
 	fmt.Fprintf(&setup, "add chain bridge %s %s { type filter hook forward priority 0; policy accept; }\n", table, baseChain)
 	fmt.Fprintf(&setup, "add chain bridge %s %s\n", table, inChain(iface.TapName))
 	fmt.Fprintf(&setup, "add chain bridge %s %s\n", table, outChain(iface.TapName))
+	fmt.Fprintf(&setup, "add chain bridge %s %s { type filter hook prerouting priority -200; policy accept; }\n", table, spoofBaseChain)
 	if err := run(setup.String()); err != nil {
 		return err
 	}
@@ -112,11 +134,47 @@ func Apply(iface Interface) error {
 	}
 	fmt.Fprintf(&rules, "add rule bridge %s %s drop\n", table, inChain(iface.TapName))
 	fmt.Fprintf(&rules, "add rule bridge %s %s drop\n", table, outChain(iface.TapName))
+	// Unknown address (either one empty) leaves any previously installed
+	// anti-spoofing chain untouched rather than flushing it: re-Apply's
+	// only post-boot caller (UpdateFirewallRules) changes rules, never the
+	// interface's address, so "don't know" must never mean "stop checking".
+	antiSpoof := iface.IPAddress != "" && iface.MACAddress != ""
+	if antiSpoof {
+		fmt.Fprintf(&rules, "add chain bridge %s %s\n", table, spoofChain(iface.TapName))
+		fmt.Fprintf(&rules, "flush chain bridge %s %s\n", table, spoofChain(iface.TapName))
+		writeAntiSpoof(&rules, spoofChain(iface.TapName), iface.IPAddress, iface.MACAddress)
+	}
 	if err := run(rules.String()); err != nil {
 		return err
 	}
 
-	return ensureJumpRules(iface.TapName)
+	if err := ensureJumpRules(baseChain, map[string]string{
+		inChain(iface.TapName):  fmt.Sprintf("iifname %q", iface.TapName),
+		outChain(iface.TapName): fmt.Sprintf("oifname %q", iface.TapName),
+	}); err != nil {
+		return err
+	}
+	if !antiSpoof {
+		return nil
+	}
+	return ensureJumpRules(spoofBaseChain, map[string]string{
+		spoofChain(iface.TapName): fmt.Sprintf("iifname %q", iface.TapName),
+	})
+}
+
+// writeAntiSpoof fills a tap's prerouting chain: everything the VM sends
+// must carry its own allocated MAC as the Ethernet source, and be either
+// IPv4 from its own allocated IP, or ARP whose sender fields are its own
+// MAC and IP (0.0.0.0 is also allowed as the sender IP: RFC 5227 ARP
+// probes). Any other EtherType -- IPv6 (kyuusha allocates no IPv6
+// addresses), 802.1Q-tagged frames (a VM must never reach another VLAN by
+// tagging its own frames) -- is dropped. Unlike the -in/-out chains this
+// is not tenant-configurable: no egress_rules entry can widen it.
+func writeAntiSpoof(b *strings.Builder, chain, ip, mac string) {
+	fmt.Fprintf(b, "add rule bridge %s %s ether saddr != %s drop\n", table, chain, mac)
+	fmt.Fprintf(b, "add rule bridge %s %s ether type ip ip saddr %s return\n", table, chain, ip)
+	fmt.Fprintf(b, "add rule bridge %s %s ether type arp arp saddr ether %s arp saddr ip { %s, 0.0.0.0 } return\n", table, chain, mac, ip)
+	fmt.Fprintf(b, "add rule bridge %s %s drop\n", table, chain)
 }
 
 // writeBaseline adds the always-allow rules every tap chain gets
@@ -126,8 +184,15 @@ func Apply(iface Interface) error {
 // baseline docs/architecture.md's「防御層としてのNetworkInterface ACL」
 // describes, now actually enforced. `return`, not `accept` -- see the
 // package doc comment for why.
+//
+// ARP is always let through here too: without it, two VMs on the same
+// bridge can never resolve each other's MAC in the first place (ARP is
+// not IPv4, so no ip saddr/daddr baseline rule matches it, and conntrack
+// doesn't track it). Whether an ARP frame is legitimate is the
+// anti-spoofing chain's job (see writeAntiSpoof), not this one's.
 func writeBaseline(b *strings.Builder, chain, subnetCIDR, gatewayIP, addrKeyword string) {
 	fmt.Fprintf(b, "add rule bridge %s %s ct state established,related return\n", table, chain)
+	fmt.Fprintf(b, "add rule bridge %s %s ether type arp return\n", table, chain)
 	if subnetCIDR != "" {
 		fmt.Fprintf(b, "add rule bridge %s %s ip %s %s return\n", table, chain, addrKeyword, subnetCIDR)
 	}
@@ -169,23 +234,22 @@ func writeRule(b *strings.Builder, chain string, r FirewallRule, addrKeyword str
 	}
 }
 
-// ensureJumpRules adds the base chain's two guard rules for tapName
-// (iifname/oifname jump into its two chains) unless they're already
-// there -- checked via `nft -j list chain`, since a plain `add rule` isn't
-// idempotent the way `add table`/`add chain` are (it would append a
-// duplicate jump pair on every call, e.g. every UpdateFirewallRules over a
-// VM's lifetime).
-func ensureJumpRules(tapName string) error {
-	existing, err := jumpTargets(baseChain)
+// ensureJumpRules adds one "<match> jump <target>" rule to base for each
+// entry of jumps (target chain -> match expression) unless base already
+// jumps to that target -- checked via `nft -j list chain`, since a plain
+// `add rule` isn't idempotent the way `add table`/`add chain` are (it would
+// append a duplicate jump on every call, e.g. every UpdateFirewallRules
+// over a VM's lifetime).
+func ensureJumpRules(base string, jumps map[string]string) error {
+	existing, err := jumpTargets(base)
 	if err != nil {
 		return err
 	}
 	var add strings.Builder
-	if !existing[inChain(tapName)] {
-		fmt.Fprintf(&add, "add rule bridge %s %s iifname %q jump %s\n", table, baseChain, tapName, inChain(tapName))
-	}
-	if !existing[outChain(tapName)] {
-		fmt.Fprintf(&add, "add rule bridge %s %s oifname %q jump %s\n", table, baseChain, tapName, outChain(tapName))
+	for target, match := range jumps {
+		if !existing[target] {
+			fmt.Fprintf(&add, "add rule bridge %s %s %s jump %s\n", table, base, match, target)
+		}
 	}
 	if add.Len() == 0 {
 		return nil
@@ -250,20 +314,24 @@ func jumpHandles(chain string) (map[string]int, error) {
 	return handles, nil
 }
 
-// Remove deletes tapName's two base-chain jump rules (looked up by handle,
-// see jumpHandles) and its two now-unreferenced chains. No-op for whatever
-// part is already absent, so safe to call more than once.
+// Remove deletes tapName's base-chain jump rules (looked up by handle, see
+// jumpHandles) and its now-unreferenced chains. No-op for whatever part is
+// already absent, so safe to call more than once.
 func Remove(tapName string) error {
-	handles, err := jumpHandles(baseChain)
-	if err != nil {
-		return err
-	}
 	var del strings.Builder
-	if h, ok := handles[inChain(tapName)]; ok {
-		fmt.Fprintf(&del, "delete rule bridge %s %s handle %d\n", table, baseChain, h)
-	}
-	if h, ok := handles[outChain(tapName)]; ok {
-		fmt.Fprintf(&del, "delete rule bridge %s %s handle %d\n", table, baseChain, h)
+	for base, targets := range map[string][]string{
+		baseChain:      {inChain(tapName), outChain(tapName)},
+		spoofBaseChain: {spoofChain(tapName)},
+	} {
+		handles, err := jumpHandles(base)
+		if err != nil {
+			return err
+		}
+		for _, target := range targets {
+			if h, ok := handles[target]; ok {
+				fmt.Fprintf(&del, "delete rule bridge %s %s handle %d\n", table, base, h)
+			}
+		}
 	}
 	if del.Len() > 0 {
 		if err := run(del.String()); err != nil {
@@ -272,7 +340,7 @@ func Remove(tapName string) error {
 	}
 
 	var errs []error
-	for _, chain := range []string{inChain(tapName), outChain(tapName)} {
+	for _, chain := range []string{inChain(tapName), outChain(tapName), spoofChain(tapName)} {
 		script := fmt.Sprintf("delete chain bridge %s %s\n", table, chain)
 		if err := run(script); err != nil && !strings.Contains(err.Error(), "No such file or directory") {
 			errs = append(errs, err)

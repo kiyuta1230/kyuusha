@@ -74,7 +74,8 @@ func TestWireInvokesExternalPluginWithFullAttachPayload(t *testing.T) {
 
 	wired, err := Wire(Interface{
 		IfaceID: "test-iface-plugin", VMID: "vm-1", TenantID: "tenant-1",
-		MACAddress: "02:00:00:00:00:02", IPAddress: "10.9.9.5", GatewayIP: "10.9.9.1",
+		SubnetID: "subnet-1", Zone: "zone-a",
+		MACAddress: "02:00:00:00:00:02", IPAddress: "10.9.9.5", SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
 		PrefixLen: 24, VLANID: 42, Primary: true,
 	}, plugin)
 	if err != nil {
@@ -100,7 +101,8 @@ func TestWireInvokesExternalPluginWithFullAttachPayload(t *testing.T) {
 	}
 	want := pluginRequest{
 		TapName: wired.TapName, IfaceID: "test-iface-plugin", VMID: "vm-1", TenantID: "tenant-1",
-		MACAddress: "02:00:00:00:00:02", IPAddress: "10.9.9.5", GatewayIP: "10.9.9.1",
+		SubnetID: "subnet-1", Zone: "zone-a",
+		MACAddress: "02:00:00:00:00:02", IPAddress: "10.9.9.5", SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
 		PrefixLen: 24, VLANID: 42, Primary: true,
 	}
 	if got != want {

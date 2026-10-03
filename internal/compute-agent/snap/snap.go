@@ -42,8 +42,13 @@ type Interface struct {
 	VMID       string
 	TenantID   string
 	TapName    string
+	SubnetID   string
 	SubnetCIDR string
 	GatewayIP  string
+	// IPAddress/MACAddress are the VM's own allocated address on this
+	// interface: the anti-spoofing input (see docs/specs/snap.md).
+	IPAddress  string
+	MACAddress string
 
 	IngressRules []FirewallRule
 	EgressRules  []FirewallRule
@@ -62,13 +67,16 @@ func Attach(iface Interface, securityBackendBin string) error {
 			TapName:      iface.TapName,
 			SubnetCIDR:   iface.SubnetCIDR,
 			GatewayIP:    iface.GatewayIP,
+			IPAddress:    iface.IPAddress,
+			MACAddress:   iface.MACAddress,
 			IngressRules: toNftaclRules(iface.IngressRules),
 			EgressRules:  toNftaclRules(iface.EgressRules),
 		})
 	}
 	return runPlugin(securityBackendBin, "attach", pluginRequest{
 		TapName: iface.TapName, IfaceID: iface.IfaceID, VMID: iface.VMID, TenantID: iface.TenantID,
-		SubnetCIDR: iface.SubnetCIDR, GatewayIP: iface.GatewayIP,
+		SubnetID: iface.SubnetID, SubnetCIDR: iface.SubnetCIDR, GatewayIP: iface.GatewayIP,
+		IPAddress: iface.IPAddress, MACAddress: iface.MACAddress,
 		IngressRules: toPluginRules(iface.IngressRules), EgressRules: toPluginRules(iface.EgressRules),
 	})
 }
@@ -103,8 +111,11 @@ type pluginRequest struct {
 	IfaceID    string `json:"iface_id"`
 	VMID       string `json:"vm_id"`
 	TenantID   string `json:"tenant_id"`
+	SubnetID   string `json:"subnet_id,omitempty"`
 	SubnetCIDR string `json:"subnet_cidr,omitempty"`
 	GatewayIP  string `json:"gateway_ip,omitempty"`
+	IPAddress  string `json:"ip_address,omitempty"`
+	MACAddress string `json:"mac_address,omitempty"`
 
 	IngressRules []pluginFirewallRule `json:"ingress_rules,omitempty"`
 	EgressRules  []pluginFirewallRule `json:"egress_rules,omitempty"`

@@ -507,10 +507,14 @@ func (a *Agent) handleUpdateACL(msg jetstream.Msg) {
 		return
 	}
 
-	ingress := toVMMFirewallRulesFromNetwork(cmd.IngressRules)
-	egress := toVMMFirewallRulesFromNetwork(cmd.EgressRules)
+	update := vmm.ACLUpdate{
+		IfaceID: cmd.IfaceID, SubnetID: cmd.SubnetID, SubnetCIDR: cmd.SubnetCIDR, GatewayIP: cmd.GatewayIP,
+		IPAddress: cmd.IPAddress, MACAddress: cmd.MACAddress,
+		IngressRules: toVMMFirewallRulesFromNetwork(cmd.IngressRules),
+		EgressRules:  toVMMFirewallRulesFromNetwork(cmd.EgressRules),
+	}
 	for _, driver := range a.Drivers {
-		applied, err := driver.ApplyACL(cmd.VMID, cmd.IfaceID, cmd.SubnetCIDR, cmd.GatewayIP, ingress, egress)
+		applied, err := driver.ApplyACL(cmd.VMID, update)
 		if !applied {
 			continue
 		}
@@ -609,6 +613,8 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.Net
 		prefixLen, _ := ipnet.Mask.Size()
 		out = append(out, vmm.NetIface{
 			IfaceID:      ni.IfaceID,
+			SubnetID:     ni.SubnetID,
+			Zone:         ni.Zone,
 			MACAddress:   ni.MACAddress,
 			IPAddress:    ni.IPAddress,
 			PrefixLen:    prefixLen,

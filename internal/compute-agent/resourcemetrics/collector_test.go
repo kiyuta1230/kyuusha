@@ -27,7 +27,7 @@ func (f fakeVMM) Destroy(string)                                                
 func (f fakeVMM) ConsoleLogPath(string) string                                     { return "" }
 func (f fakeVMM) Running() []vmm.RunningVM                                         { return f.running }
 func (f fakeVMM) RootDiskPath(string) (string, error)                              { return "", nil }
-func (f fakeVMM) ApplyACL(string, string, string, string, []vmm.FirewallRule, []vmm.FirewallRule) (bool, error) {
+func (f fakeVMM) ApplyACL(string, vmm.ACLUpdate) (bool, error) {
 	return false, nil
 }
 

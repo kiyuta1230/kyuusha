@@ -69,8 +69,15 @@ type UpdateACLCommand struct {
 	IfaceID    string `json:"iface_id"`
 	VMID       string `json:"vm_id"`
 	TenantID   string `json:"tenant_id"`
+	SubnetID   string `json:"subnet_id,omitempty"`
 	SubnetCIDR string `json:"subnet_cidr"`
 	GatewayIP  string `json:"gateway_ip,omitempty"`
+	// IPAddress/MACAddress are the interface's own allocated address,
+	// carried so a re-apply can rebuild the anti-spoofing checks Boot
+	// installed (see docs/specs/snap.md) without compute-agent persisting
+	// them itself.
+	IPAddress  string `json:"ip_address,omitempty"`
+	MACAddress string `json:"mac_address,omitempty"`
 
 	IngressRules []FirewallRuleInfo `json:"ingress_rules,omitempty"`
 	EgressRules  []FirewallRuleInfo `json:"egress_rules,omitempty"`

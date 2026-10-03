@@ -35,6 +35,14 @@ type bpfRule struct {
 	Pad      uint8
 }
 
+type bpfSpoofCfg struct {
+	_      structs.HostLayout
+	Ip     uint32
+	Mac    [6]uint8
+	Active uint8
+	Pad    uint8
+}
+
 // Names of all BPF objects in the ELF.
 //
 // Used for safe lookups in a Collection or CollectionSpec.
@@ -42,6 +50,7 @@ const (
 	bpfMapConntrack         = "conntrack"
 	bpfMapRulesEgress       = "rules_egress"
 	bpfMapRulesIngress      = "rules_ingress"
+	bpfMapSpoof             = "spoof"
 	bpfProgEnforceVmEgress  = "enforce_vm_egress"
 	bpfProgEnforceVmIngress = "enforce_vm_ingress"
 )
@@ -99,6 +108,7 @@ type bpfMapSpecs struct {
 	Conntrack    *ebpf.MapSpec `ebpf:"conntrack"`
 	RulesEgress  *ebpf.MapSpec `ebpf:"rules_egress"`
 	RulesIngress *ebpf.MapSpec `ebpf:"rules_ingress"`
+	Spoof        *ebpf.MapSpec `ebpf:"spoof"`
 }
 
 // bpfVariableSpecs contains global variables before they are loaded into the kernel.
@@ -130,6 +140,7 @@ type bpfMaps struct {
 	Conntrack    *ebpf.Map `ebpf:"conntrack"`
 	RulesEgress  *ebpf.Map `ebpf:"rules_egress"`
 	RulesIngress *ebpf.Map `ebpf:"rules_ingress"`
+	Spoof        *ebpf.Map `ebpf:"spoof"`
 }
 
 func (m *bpfMaps) Close() error {
@@ -137,6 +148,7 @@ func (m *bpfMaps) Close() error {
 		m.Conntrack,
 		m.RulesEgress,
 		m.RulesIngress,
+		m.Spoof,
 	)
 }
 

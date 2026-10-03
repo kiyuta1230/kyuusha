@@ -5,7 +5,7 @@
 // directly to a VM's tap device -- unlike the default nftacl implementation
 // (bridge-family nftables), this does NOT require the tap to be a Linux
 // bridge port, so it also works with non-bridge VNAP tap wiring (e.g. the
-// EVPN Type-5 example, examples/vnap-plugins/frr-type5.sh).
+// pure-L3 example, examples/vnap-plugins/frr-vrf-host-route.sh).
 //
 // # Direction naming (same inversion nftacl documents)
 //
@@ -30,6 +30,18 @@
 // an existing, unexpired conntrack entry is accepted immediately, without
 // re-checking the rule list. This is symmetric: it doesn't matter whether
 // the VM or the remote peer sent the first packet of a flow.
+//
+// # Anti-spoofing
+//
+// Before any ACL check, enforce_vm_egress (the VM's own outbound traffic)
+// requires every frame to carry the VM's own allocated MAC as its Ethernet
+// source, and to be either IPv4 from its own allocated IP or ARP whose
+// sender fields are its own MAC/IP (sender IP 0.0.0.0 is also allowed:
+// RFC 5227 ARP probes). Every other EtherType (IPv6, 802.1Q-tagged frames)
+// is dropped. This mirrors nftacl's writeAntiSpoof and is not tenant-
+// configurable. The expected IP/MAC live in the per-tap spoof map;
+// when it's inactive (the plugin was never told the VM's address) the
+// check is skipped.
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
@@ -38,7 +50,8 @@
 // struct ethhdr/iphdr/tcphdr/udphdr already cover what's needed, and mixing
 // it with the real uapi headers cause redefinition errors. Same reasoning
 // for hand-writing these instead of pulling in a conflicting uapi header.
-#define ETH_P_IP_BE 0x0008 // ETH_P_IP (0x0800) already in network byte order
+#define ETH_P_IP_BE 0x0008  // ETH_P_IP (0x0800) already in network byte order
+#define ETH_P_ARP_BE 0x0608 // ETH_P_ARP (0x0806) already in network byte order
 #define IPPROTO_ICMP_ 1
 #define IPPROTO_TCP_ 6
 #define IPPROTO_UDP_ 17
@@ -72,6 +85,24 @@ struct rule {
 	__u8 _pad;
 };
 
+// spoof_cfg is the anti-spoofing input: the VM's own allocated address on
+// this tap (see this file's header comment).
+struct spoof_cfg {
+	__u32 ip;     // network byte order
+	__u8 mac[6];
+	__u8 active;  // 0 = unknown address, skip the check
+	__u8 _pad;
+};
+
+// arp_eth_ipv4 is an Ethernet/IPv4 ARP payload's fixed layout after the
+// generic struct arphdr -- vmlinux.h only has the generic header.
+struct arp_eth_ipv4 {
+	__u8 sha[6];
+	__u8 sip[4];
+	__u8 tha[6];
+	__u8 tip[4];
+};
+
 struct conntrack_key {
 	__u32 ip_lo;
 	__u32 ip_hi;
@@ -99,6 +130,13 @@ struct {
 	__type(value, struct rule);
 } rules_egress SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct spoof_cfg);
+} spoof SEC(".maps");
+
 // conntrack is shared across every tap's attached programs on this host
 // (main.go loads/pins it once and reuses it for every subsequent tap via
 // ebpf.CollectionOptions.MapReplacements) -- flows aren't tap-scoped, so
@@ -121,11 +159,13 @@ struct flow5 {
 	__u8 protocol;
 };
 
-static __always_inline int parse_flow(struct __sk_buff *skb, struct flow5 *f)
+// parse_flow/source_ok take data/data_end rather than the skb itself: each
+// program reads skb->data/data_end exactly once and passes them down, since
+// letting both helpers read them independently lets clang reuse an offset
+// ctx pointer, which the verifier rejects ("dereference of modified ctx
+// ptr").
+static __always_inline int parse_flow(void *data, void *data_end, struct flow5 *f)
 {
-	void *data = (void *)(long)skb->data;
-	void *data_end = (void *)(long)skb->data_end;
-
 	struct ethhdr *eth = data;
 	if ((void *)(eth + 1) > data_end)
 		return 0;
@@ -237,14 +277,61 @@ static __always_inline int match_egress_rules(struct flow5 *f, __u32 peer_addr)
 	return verdict;
 }
 
+static __always_inline int mac_eq(const __u8 *a, const __u8 *b)
+{
+	return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] &&
+	       a[3] == b[3] && a[4] == b[4] && a[5] == b[5];
+}
+
+// source_ok reports whether a frame the VM sent passes anti-spoofing (see
+// this file's header comment). 1 = pass (or no address configured), 0 =
+// drop.
+static __always_inline int source_ok(void *data, void *data_end)
+{
+	__u32 zero = 0;
+	struct spoof_cfg *cfg = bpf_map_lookup_elem(&spoof, &zero);
+	if (!cfg || !cfg->active)
+		return 1;
+
+	struct ethhdr *eth = data;
+	if ((void *)(eth + 1) > data_end)
+		return 0;
+	if (!mac_eq(eth->h_source, cfg->mac))
+		return 0;
+
+	if (eth->h_proto == ETH_P_IP_BE) {
+		struct iphdr *ip = (void *)(eth + 1);
+		if ((void *)(ip + 1) > data_end)
+			return 0;
+		return ip->saddr == cfg->ip;
+	}
+	if (eth->h_proto == ETH_P_ARP_BE) {
+		struct arphdr *arp = (void *)(eth + 1);
+		struct arp_eth_ipv4 *body = (void *)(arp + 1);
+		if ((void *)(body + 1) > data_end)
+			return 0;
+		if (!mac_eq(body->sha, cfg->mac))
+			return 0;
+		__u32 sip;
+		__builtin_memcpy(&sip, body->sip, sizeof(sip));
+		return sip == cfg->ip || sip == 0;
+	}
+	return 0;
+}
+
 // enforce_vm_egress is attached to the tap's TC ingress hook -- see this
 // file's header comment for why that means "the VM's own outbound
 // traffic," enforced against EgressRules (rules_egress).
 SEC("tc")
 int enforce_vm_egress(struct __sk_buff *skb)
 {
+	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(long)skb->data_end;
+	if (!source_ok(data, data_end))
+		return TC_ACT_SHOT;
+
 	struct flow5 f;
-	if (!parse_flow(skb, &f))
+	if (!parse_flow(data, data_end, &f))
 		return TC_ACT_OK; // non-IPv4/unparseable: out of scope, same as nftacl (IPv4-only)
 
 	struct conntrack_key k;
@@ -269,8 +356,10 @@ int enforce_vm_egress(struct __sk_buff *skb)
 SEC("tc")
 int enforce_vm_ingress(struct __sk_buff *skb)
 {
+	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(long)skb->data_end;
 	struct flow5 f;
-	if (!parse_flow(skb, &f))
+	if (!parse_flow(data, data_end, &f))
 		return TC_ACT_OK;
 
 	struct conntrack_key k;

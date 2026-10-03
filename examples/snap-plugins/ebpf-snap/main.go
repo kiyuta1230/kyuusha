@@ -4,7 +4,7 @@
 // (TC-BPF, attached directly to the VM's tap device) instead of nftacl's
 // default bridge-family nftables. Unlike nftacl, this does not require the
 // tap to be a Linux bridge port, so it also works with non-bridge VNAP tap
-// wiring (e.g. examples/vnap-plugins/frr-type5.sh's EVPN Type-5 setup).
+// wiring (e.g. examples/vnap-plugins/frr-vrf-host-route.sh's pure-L3 setup).
 //
 // This is the stateful version: it tracks established flows itself (see
 // bpf/snap.c's conntrack map), since TC-BPF hooks have no access to
@@ -54,8 +54,11 @@ type pluginRequest struct {
 	IfaceID    string `json:"iface_id"`
 	VMID       string `json:"vm_id"`
 	TenantID   string `json:"tenant_id"`
+	SubnetID   string `json:"subnet_id,omitempty"`
 	SubnetCIDR string `json:"subnet_cidr,omitempty"`
 	GatewayIP  string `json:"gateway_ip,omitempty"`
+	IPAddress  string `json:"ip_address,omitempty"`
+	MACAddress string `json:"mac_address,omitempty"`
 
 	IngressRules []firewallRule `json:"ingress_rules,omitempty"`
 	EgressRules  []firewallRule `json:"egress_rules,omitempty"`
@@ -106,6 +109,7 @@ func attach(req pluginRequest) error {
 	dir := tapPinDir(req.TapName)
 	rulesIngressPin := filepath.Join(dir, "rules_ingress")
 	rulesEgressPin := filepath.Join(dir, "rules_egress")
+	spoofPin := filepath.Join(dir, "spoof")
 
 	if _, err := os.Stat(rulesIngressPin); err == nil {
 		// Already attached for this tap -- just rewrite the rule maps.
@@ -124,6 +128,14 @@ func attach(req pluginRequest) error {
 		}
 		if err := populateRules(rulesEgress, req.SubnetCIDR, req.GatewayIP, req.EgressRules); err != nil {
 			return fmt.Errorf("update rules_egress: %w", err)
+		}
+		spoof, err := ebpf.LoadPinnedMap(spoofPin, nil)
+		if err != nil {
+			return fmt.Errorf("load pinned spoof (tap attached by an older ebpf-snap? detach and re-attach it): %w", err)
+		}
+		defer spoof.Close()
+		if err := populateSpoof(spoof, req.IPAddress, req.MACAddress); err != nil {
+			return fmt.Errorf("update spoof: %w", err)
 		}
 		return nil
 	}
@@ -152,6 +164,13 @@ func attach(req pluginRequest) error {
 	}
 	defer objs.EnforceVmEgress.Close()
 	defer objs.EnforceVmIngress.Close()
+	defer objs.Spoof.Close() // the pin below keeps it alive past this process
+
+	if err := populateSpoof(objs.Spoof, req.IPAddress, req.MACAddress); err != nil {
+		objs.RulesIngress.Close()
+		objs.RulesEgress.Close()
+		return fmt.Errorf("populate spoof: %w", err)
+	}
 
 	if err := populateRules(objs.RulesIngress, req.SubnetCIDR, req.GatewayIP, req.IngressRules); err != nil {
 		objs.RulesIngress.Close()
@@ -196,6 +215,9 @@ func attach(req pluginRequest) error {
 	}
 	if err := objs.RulesEgress.Pin(rulesEgressPin); err != nil {
 		return fmt.Errorf("pin rules_egress: %w", err)
+	}
+	if err := objs.Spoof.Pin(spoofPin); err != nil {
+		return fmt.Errorf("pin spoof: %w", err)
 	}
 	if err := egressLink.Pin(filepath.Join(dir, "link_vm_egress")); err != nil {
 		return fmt.Errorf("pin enforce_vm_egress link: %w", err)
@@ -270,6 +292,28 @@ func populateRules(m *ebpf.Map, subnetCIDR, gatewayIP string, rules []firewallRu
 		}
 	}
 	return nil
+}
+
+// populateSpoof writes the VM's own allocated address into the spoof map
+// (bpf/snap.c's source_ok). Either value empty means "unknown": the map is
+// left as it is, same as nftacl leaving a previously installed
+// anti-spoofing chain alone -- a re-apply changes rules, never the
+// interface's address, so it must never switch the check off.
+func populateSpoof(m *ebpf.Map, ipAddress, macAddress string) error {
+	if ipAddress == "" || macAddress == "" {
+		return nil
+	}
+	ip4 := net.ParseIP(ipAddress).To4()
+	if ip4 == nil {
+		return fmt.Errorf("ip_address %q is not IPv4", ipAddress)
+	}
+	mac, err := net.ParseMAC(macAddress)
+	if err != nil || len(mac) != 6 {
+		return fmt.Errorf("mac_address %q: not a 6-byte MAC", macAddress)
+	}
+	v := bpfSpoofCfg{Ip: binary.NativeEndian.Uint32(ip4), Active: 1} // NativeEndian: see cidrRule
+	copy(v.Mac[:], mac)
+	return m.Put(uint32(0), v)
 }
 
 // maxRules must match bpf/snap.c's MAX_RULES.

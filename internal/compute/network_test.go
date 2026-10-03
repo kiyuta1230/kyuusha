@@ -43,6 +43,9 @@ func TestCreateNetworkInterfacesResolvesFullWiringInfo(t *testing.T) {
 	if info.CIDR != "10.0.0.0/24" || info.GatewayIP != "10.0.0.1" || info.VLANID != 1 {
 		t.Fatalf("CIDR/GatewayIP/VLANID not resolved from the Subnet: %+v", info)
 	}
+	if info.SubnetID != "subnet-1" || info.Zone != "zone-a" {
+		t.Fatalf("SubnetID/Zone not resolved: %+v", info)
+	}
 	if !info.Primary {
 		t.Fatal("Primary did not carry through from the NetworkAttachment")
 	}

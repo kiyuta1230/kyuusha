@@ -43,8 +43,11 @@ type Interface struct {
 	IfaceID    string // the NetworkInterface's id; used to derive a deterministic tap name
 	VMID       string
 	TenantID   string
+	SubnetID   string
+	Zone       string
 	MACAddress string
 	IPAddress  string
+	SubnetCIDR string
 	GatewayIP  string // the Subnet's gateway_ip; assigned to the VLAN bridge, not the tap
 	PrefixLen  int    // the Subnet CIDR's prefix length, for the bridge's gateway_ip/PrefixLen address
 	VLANID     int32
@@ -195,8 +198,11 @@ type pluginRequest struct {
 	IfaceID    string `json:"iface_id"`
 	VMID       string `json:"vm_id"`
 	TenantID   string `json:"tenant_id"`
+	SubnetID   string `json:"subnet_id,omitempty"`
+	Zone       string `json:"zone,omitempty"`
 	MACAddress string `json:"mac_address,omitempty"`
 	IPAddress  string `json:"ip_address,omitempty"`
+	SubnetCIDR string `json:"subnet_cidr,omitempty"`
 	PrefixLen  int    `json:"prefix_len,omitempty"`
 	GatewayIP  string `json:"gateway_ip,omitempty"`
 	VLANID     int32  `json:"vlan_id,omitempty"`
@@ -206,7 +212,8 @@ type pluginRequest struct {
 func attachRequest(iface Interface, tap string) pluginRequest {
 	return pluginRequest{
 		TapName: tap, IfaceID: iface.IfaceID, VMID: iface.VMID, TenantID: iface.TenantID,
-		MACAddress: iface.MACAddress, IPAddress: iface.IPAddress, PrefixLen: iface.PrefixLen,
+		SubnetID: iface.SubnetID, Zone: iface.Zone,
+		MACAddress: iface.MACAddress, IPAddress: iface.IPAddress, SubnetCIDR: iface.SubnetCIDR, PrefixLen: iface.PrefixLen,
 		GatewayIP: iface.GatewayIP, VLANID: iface.VLANID, Primary: iface.Primary,
 	}
 }

@@ -13,8 +13,12 @@ ACL強制プラグイン契約——SNAP（Security Network Attach Protocol）�
 - **契約はVNAPと同型**（`<bin> attach`/`<bin> detach`をexec、標準入力にJSON、成否は
   exit codeのみ、タイムアウト10秒、プラグイン側が冪等性の責務を負う）——ただし
   ペイロードの中身もフラグも別（`-network-attach-bin`とは無関係）
-- **attachのpayload**: `tap_name`/`iface_id`/`vm_id`/`tenant_id`/`subnet_cidr`/
-  `gateway_ip`/`ingress_rules`/`egress_rules`
+- **attachのpayload**: `tap_name`/`iface_id`/`vm_id`/`tenant_id`/`subnet_id`/
+  `subnet_cidr`/`gateway_ip`/`ip_address`/`mac_address`/`ingress_rules`/`egress_rules`
+  ——`ip_address`/`mac_address`はそのVMに払い出された自身のアドレスで、アンチ
+  スプーフィング（後述）の入力。`UpdateFirewallRules`後の再適用でも毎回同じ値が
+  届く（networkサービスが`update_acl`コマンドに載せる）。プラグインは知らない
+  フィールドを無視すること
 - **呼び出しタイミング**: VM Boot時（`netsetup.Wire`成功直後）と、`UpdateFirewallRules`
   呼び出し後の再適用時（後述、NATS経由）の両方
 - **detachのpayload**: `tap_name`/`iface_id`/`vm_id`/`tenant_id`のみ（VNAPのdetachと
@@ -47,6 +51,33 @@ frr-vrf-host-route.sh`/`frr-ipv4-unicast.sh`のようなpure L3構成）を使�
   もう一方のチェーンが評価されなくなってしまう）。`drop`で明示的な拒否、チェーン末尾にも
   `drop`（該当ルール無しはデフォルト拒否）。両チェーンをreturnで通過した後、実際に許可
   するのはbase chain自身の`policy accept`
+- `<tap>-in`/`<tap>-out`はどちらもARP（`ether type arp`）を常に通す——ARPはIPv4では
+  ないので`ip saddr`/`ip daddr`のベースラインに一致せず、conntrackも追跡しないため、
+  通さないと同じブリッジ上のVM同士がそもそも互いのMACを解決できない。ARPの正当性の
+  検査は下記のアンチスプーフィングが担う
+
+### アンチスプーフィング
+
+`ingress_rules`/`egress_rules`とは独立に、VMが送信する全フレームについて次を強制する
+（テナントが設定で緩めることはできない）:
+
+- Ethernetの送信元MAC = 払い出された`mac_address`
+- IPv4なら送信元IP = 払い出された`ip_address`
+- ARPなら送信者MAC = `mac_address`、送信者IP = `ip_address`または`0.0.0.0`
+  （RFC 5227のARP probe）
+- それ以外のEtherType（IPv6、802.1Qタグ付きフレーム等）はdrop——kyuushaはIPv6
+  アドレスを払い出さず、VMが自分でタグを付けて別VLANへ到達することも許さないため
+
+nftaclでは、2本目のbase chain（`bridge kyuusha_acl antispoof`、`hook prerouting`、
+`policy accept`）がtapごとに`iifname "<tap>" jump <tap>-spoof`を持つ。forwardではなく
+preroutingに置くのは、VMからブリッジ自身（`gateway_ip`、つまりホストがルーティングする
+先すべて）宛てのフレームはローカル配送されてforwardフックを通らないため——forwardだけで
+検査すると、ルーティングされる経路の詐称が素通りになる。
+
+`ip_address`/`mac_address`のどちらかが空のattachは「アドレス不明」として扱い、既に
+入っているアンチスプーフィングのチェーンには触らない（空にしない）——再適用はルールを
+変えるだけでアドレスは変えないので、「不明」が「検査をやめる」になってはならないため。
+
 - 実装済み・playground実機確認済み（VM起動直後のデフォルト拒否ベースライン、
   `UpdateFirewallRules`後のルール反映を確認——詳細はdocs/release-notes.md参照）。
   「compute-agentプロセスの再起動を跨いでnftablesルールが残る」という主張自体は
@@ -78,6 +109,17 @@ conntrack相当（BPFの`LRU_HASH`マップ、全tap共有）を実装してお�
 ペア+network namespaceでの実トラフィック）で確認済み。詳細・設計判断・実機確認結果は
 `examples/snap-plugins/ebpf-snap/README.md`参照。性能重視のステートレス版は
 別途後日の課題。
+
+上記のアンチスプーフィングも同じ規則で実装している（tapのTCX ingressで、ACL判定より
+前に検査する。期待するIP/MACはtapごとの`spoof`マップに入る）。
+
+### 実トラフィックによる検証
+
+nftacl・ebpf-snapとも、network namespace＋vethで2台のVMを模した実トラフィックの
+特権テストを持つ（`internal/compute-agent/nftacl/nftacl_traffic_test.go`、
+`examples/snap-plugins/ebpf-snap/antispoof_test.go`。rootでないとskip）。正規の
+VM間・VM→ゲートウェイ通信が通ること、送信元IP・送信元MAC・ARP送信者IPの詐称が
+相手側に届かないことを、相手側network namespaceのnftablesカウンタで確認する。
 
 ## `UpdateFirewallRules`とホストへの反映
 

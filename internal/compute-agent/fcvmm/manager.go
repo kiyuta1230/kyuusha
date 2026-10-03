@@ -267,14 +267,14 @@ func (m *Manager) RootDiskPath(vmID string) (string, error) {
 // ApplyACL looks up ifaceID's tap among vmID's already-wired interfaces (if
 // any) and, only if found, re-applies its ACL state via snap.Attach --
 // see vmm.VMM's own doc comment for the applied=false/no-tap-yet contract.
-func (m *Manager) ApplyACL(vmID, ifaceID, subnetCIDR, gatewayIP string, ingress, egress []vmm.FirewallRule) (bool, error) {
+func (m *Manager) ApplyACL(vmID string, u vmm.ACLUpdate) (bool, error) {
 	m.mu.Lock()
 	rv, ok := m.running[vmID]
 	var tap, tenantID string
 	if ok {
 		tenantID = rv.tenantID
 		for i, id := range rv.ifaceIDs {
-			if id == ifaceID {
+			if id == u.IfaceID {
 				tap = rv.taps[i]
 				break
 			}
@@ -285,9 +285,10 @@ func (m *Manager) ApplyACL(vmID, ifaceID, subnetCIDR, gatewayIP string, ingress,
 		return false, nil
 	}
 	err := snap.Attach(snap.Interface{
-		IfaceID: ifaceID, VMID: vmID, TenantID: tenantID, TapName: tap,
-		SubnetCIDR: subnetCIDR, GatewayIP: gatewayIP,
-		IngressRules: toSnapRules(ingress), EgressRules: toSnapRules(egress),
+		IfaceID: u.IfaceID, VMID: vmID, TenantID: tenantID, TapName: tap,
+		SubnetID: u.SubnetID, SubnetCIDR: u.SubnetCIDR, GatewayIP: u.GatewayIP,
+		IPAddress: u.IPAddress, MACAddress: u.MACAddress,
+		IngressRules: toSnapRules(u.IngressRules), EgressRules: toSnapRules(u.EgressRules),
 	}, m.SecurityBackendBin)
 	return true, err
 }
@@ -559,8 +560,11 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 			IfaceID:    ni.IfaceID,
 			VMID:       spec.VMID,
 			TenantID:   spec.TenantID,
+			SubnetID:   ni.SubnetID,
+			Zone:       ni.Zone,
 			MACAddress: ni.MACAddress,
 			IPAddress:  ni.IPAddress,
+			SubnetCIDR: ni.SubnetCIDR,
 			GatewayIP:  ni.GatewayIP,
 			PrefixLen:  ni.PrefixLen,
 			VLANID:     ni.VLANID,
@@ -574,7 +578,8 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		ifaceIDs = append(ifaceIDs, ni.IfaceID)
 		if err := snap.Attach(snap.Interface{
 			IfaceID: ni.IfaceID, VMID: spec.VMID, TenantID: spec.TenantID, TapName: wired.TapName,
-			SubnetCIDR: ni.SubnetCIDR, GatewayIP: ni.GatewayIP,
+			SubnetID: ni.SubnetID, SubnetCIDR: ni.SubnetCIDR, GatewayIP: ni.GatewayIP,
+			IPAddress: ni.IPAddress, MACAddress: wired.MACAddress,
 			IngressRules: toSnapRules(ni.IngressRules), EgressRules: toSnapRules(ni.EgressRules),
 		}, m.SecurityBackendBin); err != nil {
 			cleanup()
