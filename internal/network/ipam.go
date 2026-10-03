@@ -16,20 +16,113 @@ const (
 	maxVLANID = 4094
 )
 
+// VLANRange is an inclusive range of VLAN IDs.
+type VLANRange struct{ Lo, Hi int32 }
+
+// VLANRanges says which VLAN IDs each zone may hand out: ByZone[zone] if
+// present, else Default. A zero value (both empty) means 1-4094 everywhere.
+// Built by ParseVLANRanges from network-reconciler's -vlan-ranges flag --
+// see docs/specs/network.md「VLAN ID」.
+type VLANRanges struct {
+	ByZone  map[string][]VLANRange
+	Default []VLANRange
+}
+
+func (r VLANRanges) forZone(zone string) []VLANRange {
+	if rs, ok := r.ByZone[zone]; ok {
+		return rs
+	}
+	if len(r.Default) > 0 {
+		return r.Default
+	}
+	return []VLANRange{{minVLANID, maxVLANID}}
+}
+
+// ParseVLANRanges parses "<zone>=<lo>-<hi>[,<lo>-<hi>...][;<zone>=...]",
+// where zone "*" sets the default for every zone not listed and a single
+// "<n>" means "<n>-<n>". The empty string means 1-4094 everywhere.
+func ParseVLANRanges(s string) (VLANRanges, error) {
+	var out VLANRanges
+	if strings.TrimSpace(s) == "" {
+		return out, nil
+	}
+	for _, entry := range strings.Split(s, ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		zone, spec, ok := strings.Cut(entry, "=")
+		zone = strings.TrimSpace(zone)
+		if !ok || zone == "" || strings.TrimSpace(spec) == "" {
+			return VLANRanges{}, fmt.Errorf("vlan ranges: %q: want <zone>=<lo>-<hi>[,...]", entry)
+		}
+		var ranges []VLANRange
+		for _, r := range strings.Split(spec, ",") {
+			lo, hi, err := parseVLANRange(strings.TrimSpace(r))
+			if err != nil {
+				return VLANRanges{}, fmt.Errorf("vlan ranges: zone %q: %w", zone, err)
+			}
+			ranges = append(ranges, VLANRange{lo, hi})
+		}
+		if zone == "*" {
+			if out.Default != nil {
+				return VLANRanges{}, fmt.Errorf("vlan ranges: default (*) given twice")
+			}
+			out.Default = ranges
+			continue
+		}
+		if out.ByZone == nil {
+			out.ByZone = make(map[string][]VLANRange)
+		}
+		if _, dup := out.ByZone[zone]; dup {
+			return VLANRanges{}, fmt.Errorf("vlan ranges: zone %q given twice", zone)
+		}
+		out.ByZone[zone] = ranges
+	}
+	return out, nil
+}
+
+func parseVLANRange(s string) (int32, int32, error) {
+	loS, hiS, isRange := strings.Cut(s, "-")
+	if !isRange {
+		hiS = loS
+	}
+	var lo, hi int32
+	if _, err := fmt.Sscanf(strings.TrimSpace(loS), "%d", &lo); err != nil {
+		return 0, 0, fmt.Errorf("%q: not a VLAN ID range", s)
+	}
+	if _, err := fmt.Sscanf(strings.TrimSpace(hiS), "%d", &hi); err != nil {
+		return 0, 0, fmt.Errorf("%q: not a VLAN ID range", s)
+	}
+	if lo < minVLANID || hi > maxVLANID || lo > hi {
+		return 0, 0, fmt.Errorf("%q: must be within %d-%d with lo <= hi", s, minVLANID, maxVLANID)
+	}
+	return lo, hi, nil
+}
+
 // vlanPool hands out exclusive VLAN IDs per zone. Allocation/release are
 // synchronous, in-memory, no agent involvement -- see
 // docs/architecture.md's "VLAN IDの払い出し".
 type vlanPool struct {
-	mu   sync.Mutex
-	used map[string]map[int32]bool // zone -> allocated ids
+	mu     sync.Mutex
+	used   map[string]map[int32]bool // zone -> allocated ids
+	ranges VLANRanges
 }
 
 func newVLANPool() *vlanPool {
 	return &vlanPool{used: make(map[string]map[int32]bool)}
 }
 
-// allocate returns the lowest free VLAN ID in zone, or ok=false if the
-// zone's pool is exhausted (all of 1-4094 in use).
+func (p *vlanPool) setRanges(r VLANRanges) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ranges = r
+}
+
+// allocate returns the lowest free VLAN ID within zone's configured ranges
+// (see VLANRanges), or ok=false if those are all in use. An id already in
+// use outside the ranges (e.g. allocated before the ranges were narrowed)
+// stays in use; it's just never handed out again.
 func (p *vlanPool) allocate(zone string) (id int32, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -39,10 +132,12 @@ func (p *vlanPool) allocate(zone string) (id int32, ok bool) {
 		zoneUsed = make(map[int32]bool)
 		p.used[zone] = zoneUsed
 	}
-	for id := int32(minVLANID); id <= maxVLANID; id++ {
-		if !zoneUsed[id] {
-			zoneUsed[id] = true
-			return id, true
+	for _, r := range p.ranges.forZone(zone) {
+		for id := r.Lo; id <= r.Hi; id++ {
+			if !zoneUsed[id] {
+				zoneUsed[id] = true
+				return id, true
+			}
 		}
 	}
 	return 0, false

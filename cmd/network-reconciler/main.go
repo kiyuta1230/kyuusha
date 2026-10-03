@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -49,7 +50,13 @@ func main() {
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
 	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
+	vlanRangesFlag := flag.String("vlan-ranges", "", `VLAN IDs each zone may hand out to new Subnets, "<zone>=<lo>-<hi>[,<lo>-<hi>...][;<zone>=...]" ("*" = every zone not listed); empty = 1-4094 everywhere (see docs/specs/network.md)`)
 	flag.Parse()
+	vlanRanges, err := network.ParseVLANRanges(*vlanRangesFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -130,9 +137,10 @@ func main() {
 		slog.Error("new network service", "err", err)
 		os.Exit(1)
 	}
+	svc.SetVLANRanges(vlanRanges)
 	prometheus.MustRegister(network.NewMetricsCollector(svc))
 
-	slog.Info("network-reconciler: starting")
+	slog.Info("network-reconciler: starting", "vlan_ranges", *vlanRangesFlag)
 	if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("reconciler stopped", "err", err)
 		os.Exit(1)

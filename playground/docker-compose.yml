@@ -286,6 +286,9 @@ services:
       - "-identity-addr=identity:8082"
       - "-metrics-addr=:9099"
       - "-otlp-endpoint=jaeger:4317"
+      # Empty (the default) = 1-4094 in every zone; e.g.
+      # KYUUSHA_VLAN_RANGES='zone-a=100-2000' -- see docs/specs/network.md.
+      - "-vlan-ranges=${KYUUSHA_VLAN_RANGES:-}"
     depends_on:
       etcd:
         condition: service_healthy

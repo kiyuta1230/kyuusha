@@ -7,6 +7,12 @@
 
 ## 2026-10-03
 
+- **VLAN IDの払い出し範囲をzoneごとに設定できるようにした**（kyuusha-vpcからの変更依頼B2）。
+  network-reconcilerの`-vlan-ranges`フラグ（例: `zone-a=100-2000;*=100-1000`、複数レンジ可）。
+  それまでは1〜4094に固定で、デプロイガイドの「AZごとに申告されたVLAN範囲を設定する」を
+  実現する手段が無かった。playgroundのcomposeは環境変数`KYUUSHA_VLAN_RANGES`で渡せる
+  （既定は空＝従来どおり）。playgroundで`zone-a=3001-3002`を設定してSubnetを3つ作り、
+  3001・3002が払い出されて3つ目が枯渇で`Pending`になることを確認
 - **空の`tenant_id`による全テナント横断のList/Watchを正式な契約として明文化した**
   （kyuusha-vpcからの変更依頼A3のうち、権限付与を伴わない部分）。コードの挙動自体は以前から
   そうだったが、storeのdocコメントでは「内部reconciler専用」とされていた。仕様は

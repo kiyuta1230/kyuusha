@@ -110,7 +110,10 @@ L2ストレッチに頼らない別の実現方式がある）
   自動エスケープパスのような機能は無い）
 - kyuusha側（networkサービス）はこのプールから、Subnet(テナントのネットワーク単位)作成のたびに
   未使用のVLAN IDを排他的に払い出す。**VLAN IDの配布そのものはkyuusha側の責務**であり、
-  ネットワークチームは「使用可能なVLAN ID範囲をAZごとに確保・申告する」ことが役割
+  ネットワークチームは「使用可能なVLAN ID範囲をAZごとに確保・申告する」ことが役割。
+  申告された範囲はnetwork-reconcilerの`-vlan-ranges`フラグに設定する（例:
+  `-vlan-ranges='zone-a=100-2000;zone-b=100-2000'`、書式は[network仕様](specs/network.md)
+  「VLAN ID」参照）
 - host（compute hypervisor）向けのToRポートは、そのAZで使用されうる全VLAN IDを許可する**トランクポート**
   として設定する
 - **このVLAN番号はkyuusha自身のローカルな帳簿番号であり、ワイヤ上の本物の802.1Qタグである

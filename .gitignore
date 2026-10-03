@@ -4,10 +4,21 @@
 
 # `go build ./...` from the repo root writes each main package's binary
 # here by its package name (cmd/kyuusha -> ./kyuusha, playground/ocitool ->
-# ./ocitool) unless -o is given -- easy to do by accident, so ignore the
+# ./ocitool), and `go build ./cmd/<name>` does the same for any one of them,
+# unless -o is given -- easy to do by accident, so ignore the
 # known binary names instead of relying on remembering -o every time.
 /kyuusha
 /ocitool
+/api-gateway
+/block-storage
+/block-storage-reconciler
+/compute
+/compute-agent
+/compute-reconciler
+/identity
+/image
+/network
+/network-reconciler
 
 # The playground's "playground-nfs" storage connection fixture -- a plain
 # host directory standing in for a real NFS export, bind-mounted into every

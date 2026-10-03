@@ -182,6 +182,13 @@ func (s *Service) rebuildUsage(ctx context.Context) error {
 	return nil
 }
 
+// SetVLANRanges restricts which VLAN IDs each zone hands out (see
+// VLANRanges). Only cmd/network-reconciler allocates VLAN IDs, so only it
+// needs to call this; call it before starting the allocation watch.
+func (s *Service) SetVLANRanges(r VLANRanges) {
+	s.vlans.setRanges(r)
+}
+
 // rebuildPools restores vlans/ips/nextMACOct's in-memory allocation state
 // from every existing Subnet/NetworkInterface in etcd. Without this,
 // vlanPool/ipPool/nextMACOct -- all purely in-memory, populated only by

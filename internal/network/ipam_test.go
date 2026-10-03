@@ -42,6 +42,53 @@ func TestVLANPool_ExhaustsAtMax(t *testing.T) {
 	}
 }
 
+func TestVLANPool_AllocatesOnlyWithinConfiguredRanges(t *testing.T) {
+	ranges, err := ParseVLANRanges("zone-a=100-101,200; *=3000-3000")
+	if err != nil {
+		t.Fatalf("ParseVLANRanges: %v", err)
+	}
+	p := newVLANPool()
+	p.setRanges(ranges)
+	p.markUsed("zone-a", 5) // allocated before the ranges existed: stays used, never re-issued
+
+	var got []int32
+	for {
+		id, ok := p.allocate("zone-a")
+		if !ok {
+			break
+		}
+		got = append(got, id)
+	}
+	if want := []int32{100, 101, 200}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("zone-a allocations = %v, want %v", got, want)
+	}
+	if id, ok := p.allocate("zone-z"); !ok || id != 3000 {
+		t.Fatalf("unlisted zone allocation = %d (ok=%v), want the * default 3000", id, ok)
+	}
+	if _, ok := p.allocate("zone-z"); ok {
+		t.Fatal("expected the * default range to be exhausted after one allocation")
+	}
+}
+
+func TestParseVLANRanges(t *testing.T) {
+	r, err := ParseVLANRanges("")
+	if err != nil || len(r.forZone("any")) != 1 || r.forZone("any")[0] != (VLANRange{minVLANID, maxVLANID}) {
+		t.Fatalf("empty spec = %+v, %v; want 1-4094 for every zone", r, err)
+	}
+	r, err = ParseVLANRanges("zone-a=100-2000")
+	if err != nil {
+		t.Fatalf("ParseVLANRanges: %v", err)
+	}
+	if got := r.forZone("zone-b"); len(got) != 1 || got[0] != (VLANRange{minVLANID, maxVLANID}) {
+		t.Fatalf("unlisted zone without * = %+v, want 1-4094", got)
+	}
+	for _, bad := range []string{"zone-a", "=1-2", "zone-a=0-10", "zone-a=10-4095", "zone-a=20-10", "zone-a=x", "zone-a=1;zone-a=2", "*=1;*=2"} {
+		if _, err := ParseVLANRanges(bad); err == nil {
+			t.Errorf("ParseVLANRanges(%q) succeeded, want an error", bad)
+		}
+	}
+}
+
 func TestIPPool_AllocateExcludesNetworkBroadcastAndGateway(t *testing.T) {
 	p := newIPPool()
 

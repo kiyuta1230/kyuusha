@@ -20,8 +20,14 @@ proto（`proto/kyuusha/network/v1/subnet.proto`・`networkinterface.proto`）参
 ハイパーバイザーagentは一切関与しない、network自身の中で完結する同期的なプール払い出し
 （`docs/architecture.md`「VLAN IDの払い出し」参照）。
 
-- **VLAN ID**: zoneごとに独立したプール（1〜4094。0と4095は予約のため対象外）。
-  `Subnet.spec.zone`単位で排他的に払い出す。同じ番号を別zoneで再利用できる
+- **VLAN ID**: zoneごとに独立したプール（既定は1〜4094。0と4095は予約のため対象外）。
+  `Subnet.spec.zone`単位で排他的に払い出す。同じ番号を別zoneで再利用できる。
+  払い出すのはnetwork-reconcilerだけなので、範囲はその起動フラグ`-vlan-ranges`で
+  zoneごとに絞れる: `"<zone>=<lo>-<hi>[,<lo>-<hi>...][;<zone>=...]"`（`*`は列挙して
+  いない全zoneの既定、単独の`<n>`は`<n>-<n>`）。例: `zone-a=100-2000;zone-b=100-1000,3000-3500`。
+  未指定なら全zoneで1〜4094。範囲を後から狭めても、範囲外で既に払い出し済みの
+  VLAN IDはそのSubnetが使い続ける（新しく払い出されないだけ）。範囲を使い切ると、
+  他の枯渇と同じく新しいSubnetは`Pending`のまま待つ
 - **IPアドレス**: `Subnet`ごとに、その`spec.cidr`の中から排他的に払い出す。ネットワーク
   アドレス・ブロードキャストアドレス・（設定されていれば）`spec.gateway_ip`は対象外。
   `/31`・`/32`（利用可能なホストアドレスが無い）や IPv6 CIDR は現状非対応で、常に
