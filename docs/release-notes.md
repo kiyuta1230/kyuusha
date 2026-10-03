@@ -7,6 +7,17 @@
 
 ## 2026-10-03
 
+- **Update RPC経由でサーバー管理のフィールドを書き換えられたセキュリティ上の穴を修正した**
+  （上記の変更依頼の作業中に発見）。Subnet/NetworkInterface/VirtualMachineのUpdateが、
+  リクエストに入った`status`（と、VM/NetworkInterfaceでは`spec`）をそのまま保存していた。
+  playgroundで、通常のテナントトークンから自分のSubnetの`vlan_id`を任意の値（999）に、
+  VMの`spec.vcpu`を64・`status.hypervisor`を任意の文字列に書き換えられることを再現した
+  ——`vlan_id`の偽装は**そのテナントのVMを別テナントのVLAN（`kbr<vlan_id>`）へ配線させる
+  テナント分離の破綻**、NetworkInterfaceの`ip_address`偽装はアンチスプーフィングの無効化、
+  VMの`spec`変更はResize/Quotaの迂回になる。Subnetの`status`、NetworkInterfaceの
+  `spec`/`status`（`vm_id`/`subnet_id`の変更はエラー）、VMの`spec`/`status`（API経由のみ）
+  は常に保存済みの値を残すようにし、修正後のplaygroundで同じ書き換えが反映されないこと、
+  `vm add-finalizer`等のmeta変更は引き続き効くことを確認
 - **`NetworkInterface.status.hypervisor`を実装した**（kyuusha-vpcからの変更依頼A6）。
   network-reconcilerが全テナントのVMをWatchし、VMがRunningの間はそのHypervisorを、
   それ以外は空を書き込む（orphan GCスイープでも同期し直す）。CLIの`netif`表示に

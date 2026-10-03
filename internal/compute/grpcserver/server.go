@@ -91,6 +91,16 @@ func (s *Server) Update(ctx context.Context, req *computev1.UpdateVirtualMachine
 		return nil, status.Error(codes.InvalidArgument, "tenant_id must be set and match vm.meta.tenant_id")
 	}
 	vm := fromVM(req.GetVm())
+	// Through the API only meta (labels/annotations/finalizers) changes:
+	// spec has its own validated, quota-accounted RPCs (Resize,
+	// AttachVolume, ...) and status is server-owned. compute.Service.Update
+	// itself stays unrestricted -- the Reconciler writes status through it.
+	current, err := s.svc.Get(ctx, req.GetTenantId(), vm.Meta.ID)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	vm.Spec = current.Spec
+	vm.Status = current.Status
 	updated, err := s.svc.Update(ctx, &vm)
 	if err != nil {
 		return nil, toStatus(err)

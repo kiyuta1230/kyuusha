@@ -155,6 +155,17 @@ Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
 [Quota仕様](quota.md)「networkのQuota判定」参照）。カウントは常に**呼び出し元テナント**
 （=実際にattachするテナント）に課金される——Subnetの所有テナントではない。
 
+## Update RPCで変えられるもの
+
+- **Subnet**: `meta`（labels/annotations/finalizers）と`spec`。`status`（`vlan_id`等）は
+  常に保存済みの値が残る——呼び出し側が指定した`vlan_id`を受け入れると、そのテナントの
+  VMを別テナントのVLANへ配線できてしまうため
+- **NetworkInterface**: `meta`のみ。`spec.ingress_rules`/`egress_rules`は
+  `UpdateFirewallRules`経由でしか変えられず（差分があるとエラー）、`spec.vm_id`/
+  `subnet_id`の変更はエラー、`status`（`ip_address`/`mac_address`/`hypervisor`等）は
+  常に保存済みの値が残る——SNAPのアンチスプーフィングはこの`ip_address`/`mac_address`を
+  信用するため
+
 ## `NetworkInterface.status.hypervisor`
 
 そのNetworkInterface（IP）が今どのHypervisorにいるか。network-reconcilerが全テナントの

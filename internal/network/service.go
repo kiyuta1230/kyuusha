@@ -592,6 +592,10 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 	subnet.Meta.Finalizers = finalizers
+	// status is server-owned (vlan_id above all: a caller-chosen vlan_id
+	// would wire this tenant's VMs into another tenant's VLAN). This method
+	// only serves the Update RPC; internal writers go through s.subnets.
+	subnet.Status = current.Status
 	if err := s.admit(ctx, admissionwebhook.Request{
 		Operation: "UPDATE", Resource: "Subnet", TenantID: current.Meta.TenantID, Name: current.Meta.Name, ID: current.Meta.ID,
 		Labels: subnet.Meta.Labels, Annotations: subnet.Meta.Annotations, Spec: admissionSubnetSpecJSON(subnet.Spec),
@@ -825,6 +829,16 @@ func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInte
 		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 	iface.Meta.Finalizers = finalizers
+	// Only meta is caller-settable here: spec.vm_id/subnet_id are fixed at
+	// Create (the rules were already checked unchanged above) and status
+	// is server-owned (a caller-chosen ip_address/mac_address would
+	// defeat SNAP's anti-spoofing, which trusts them). This method only
+	// serves the Update RPC; internal writers go through s.interfaces.
+	if iface.Spec.VMID != current.Spec.VMID || iface.Spec.SubnetID != current.Spec.SubnetID {
+		return nil, fmt.Errorf("%w: spec.vm_id/subnet_id cannot be changed", ErrValidation)
+	}
+	iface.Spec = current.Spec
+	iface.Status = current.Status
 	if err := s.admit(ctx, admissionwebhook.Request{
 		Operation: "UPDATE", Resource: "NetworkInterface", TenantID: current.Meta.TenantID, Name: current.Meta.Name, ID: current.Meta.ID,
 		Labels: iface.Meta.Labels, Annotations: iface.Meta.Annotations, Spec: admissionNetworkInterfaceSpecJSON(iface.Spec),

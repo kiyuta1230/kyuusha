@@ -497,6 +497,13 @@ VMに特定のPCIデバイスをパススルー要求できる。カタログ的
   `volattach-<vm_id>-<volume_id>`（VolumeIDベース）——ライブ経路もこの同じ
   ヘルパーを再利用する（Volume仕様参照）
 
+## `Update`で変えられるもの
+
+`VirtualMachineService.Update`で反映されるのは`meta`（labels/annotations/finalizers）だけ。
+`spec`は専用の、検証とQuota計上を伴うRPC（`Resize`/`AttachVolume`等）でしか変えられず、
+`status`はサーバーが持つ——どちらもリクエストに何が入っていても保存済みの値が残る
+（reconcilerがstatusを書く内部経路は`compute.Service.Update`を直接使うので対象外）。
+
 ## 削除
 
 VMが削除されると、Reconcilerは（Hypervisor容量の解放と同時に）`DeleteCommand`を
