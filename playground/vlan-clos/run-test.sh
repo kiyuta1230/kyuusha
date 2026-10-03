@@ -1,19 +1,8 @@
 #!/usr/bin/env bash
-# playground/vlan-clos/run-test.sh -- deploys a leaf-spine-leaf CLOS
-# lab (containerlab, topo.clab.yml) with real VLAN-aware (802.1Q
-# trunk-capable) Linux-bridge switches, then runs kyuusha's actual
-# examples/vnap-plugins/vlan-trunk.sh (the real file, not a
-# reimplementation) on both "host1" and "host2" nodes against a fake VM (a
-# veth pair + a network namespace standing in for a Firecracker tap+guest --
-# the script only cares about tap_name as a string to enslave into a
-# bridge, so it can't tell the difference), and pings across the fabric.
-#
-# This is NOT playground/scenario.sh's kind of test (no real kyuusha
-# services, no real Firecracker VM) -- it exists purely to validate a VNAP
-# reference plugin's actual cross-host L2 wiring against a topology shaped
-# like a real switched fabric, independent of whatever quirks any one
-# Docker network happens to have. Reuse it (with a different plugin script
-# and payload) for validating a future VNAP reference implementation too.
+# playground/vlan-clos/run-test.sh -- see README.md in this directory for
+# the topology diagram and full design rationale. Deploys the containerlab
+# lab, runs examples/vnap-plugins/vlan-trunk.sh against a fake VM on both
+# "host1" and "host2", and pings across the fabric.
 #
 # Requires: containerlab (https://containerlab.dev), Docker, and passwordless
 # (or interactive) sudo -- containerlab itself needs root to wire veth links

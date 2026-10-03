@@ -1,33 +1,10 @@
 #!/usr/bin/env bash
-# playground/evpn-vxlan-clos/run-test.sh -- deploys a leaf-spine-leaf CLOS lab
-# (containerlab, topo.clab.yml) running real FRR on every node, with a
-# genuine BGP EVPN Type-5 (IP-VRF-to-IP-VRF, VXLAN-encapsulated) control and
-# data plane: one ASN per hypervisor (host1/host2), unnumbered eBGP per hop,
-# matching docs/network-deployment-guide.md「3.5. Pure L3デプロイの場合」's recommended
-# reference config. Then runs kyuusha's actual
-# examples/vnap-plugins/frr-vrf-host-route.sh (the real file, not a
-# reimplementation) on both "host1" and "host2" against a fake VM (a veth
-# pair + netns standing in for a Firecracker tap+guest), and pings across
-# the fabric.
-#
-# This lab is what caught a real bug in frr-vrf-host-route.sh, back when it
-# was still named frr-type5.sh (see its own header comment and
-# docs/release-notes.md): the script never enslaved the tap into the
-# tenant VRF, so its "ip route ... vrf ..." injection silently never
-# installed. Re-run this after any future change to that script.
-#
-# frr-vrf-host-route.sh is also what playground/vrf-lite-clos/ uses, with
-# identical host-side behavior -- only this lab's leaf/spine side (EVPN AFI
-# + a real VXLAN VTEP) differs from vrf-lite-clos's (plain VRF-scoped
-# ipv4 unicast, no EVPN/VXLAN at all). The script itself only ever talks to
-# FRR's RIB via vtysh; which network-side technology carries that route is
-# explicitly the network team's own choice, not this script's concern.
-#
-# The per-tenant VRF (vrf01c9a2a0762a), its L3VNI (104000), and the
-# route-target (999:100) baked into the frr.conf files and topo.clab.yml's
-# exec blocks are this lab's own fixed test fixture -- vrf01c9a2a0762a is
-# frr-vrf-host-route.sh's own sha256-derived name for tenant_id
-# "tenant-test0000000000000" (see the attach payloads below).
+# playground/evpn-vxlan-clos/run-test.sh -- see README.md in this directory
+# for the topology diagram and full design rationale (including the real
+# frr-vrf-host-route.sh bug this lab caught, and why it shares that script
+# unmodified with playground/vrf-lite-clos/). Deploys the containerlab lab,
+# runs examples/vnap-plugins/frr-vrf-host-route.sh against a fake VM on both
+# "host1" and "host2", and pings across the fabric.
 #
 # Requires: containerlab (https://containerlab.dev), Docker, and passwordless
 # (or interactive) sudo.

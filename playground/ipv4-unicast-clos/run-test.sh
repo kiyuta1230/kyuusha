@@ -1,27 +1,11 @@
 #!/usr/bin/env bash
-# playground/ipv4-unicast-clos/run-test.sh -- deploys a leaf-spine-leaf CLOS
-# lab (containerlab, topo.clab.yml) running real FRR on every node, with no
-# VRF, no EVPN, no VXLAN anywhere: one ASN per hypervisor, unnumbered eBGP
-# per hop, plain `address-family ipv4 unicast` the whole way, matching
-# docs/network-deployment-guide.md「3.5. Pure L3デプロイの場合」's recommended reference
-# config for the IP-address-unique case. Then runs kyuusha's actual
-# examples/vnap-plugins/frr-ipv4-unicast.sh (the real file, not a
-# reimplementation) on both "host1" and "host2" against a fake VM (a veth
-# pair + netns standing in for a Firecracker tap+guest), and pings across
-# the fabric.
-#
-# Unlike playground/evpn-vxlan-clos/ and playground/vrf-lite-clos/ (both of
-# which carry a per-tenant VRF end-to-end so overlapping tenant addresses
-# never collide), this lab's whole premise is that every tenant's address
-# space is unique fabric-wide -- so there is nothing here enforcing tenant
-# isolation at the network layer at all. See frr-ipv4-unicast.sh's own
-# header comment for what backstops that assumption in a real deployment.
-#
-# This lab also verifies something the other two don't need: leaf1/leaf2
-# each originate a default route toward their host-facing interface
-# (`neighbor <iface> default-originate`), and host1 actually uses it --
-# since a hypervisor with no VRF of its own has no other way to reach
-# anything outside its local Subnet.
+# playground/ipv4-unicast-clos/run-test.sh -- see README.md in this
+# directory for the topology diagram and full design rationale (including
+# why there's no VRF here, and the default-route-from-Leaf requirement this
+# lab verifies). Deploys the containerlab lab, runs
+# examples/vnap-plugins/frr-ipv4-unicast.sh against a fake VM on both
+# "host1" and "host2", pings across the fabric, and confirms host1 actually
+# received and uses a default route from leaf1.
 #
 # Requires: containerlab (https://containerlab.dev), Docker, and passwordless
 # (or interactive) sudo.

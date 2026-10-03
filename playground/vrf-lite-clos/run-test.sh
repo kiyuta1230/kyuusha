@@ -1,29 +1,11 @@
 #!/usr/bin/env bash
-# playground/vrf-lite-clos/run-test.sh -- deploys a leaf-spine-leaf CLOS lab
-# (containerlab, topo.clab.yml) running real FRR on every node, with a
-# per-tenant VRF end-to-end but NO EVPN and NO VXLAN anywhere: one ASN per
-# hypervisor (host1/host2), numbered eBGP per hop (unnumbered eBGP does not
-# establish inside a non-default VRF instance on FRR 10.5.1 -- a real
-# limitation hit while building this lab), plain VRF-scoped
-# `address-family ipv4 unicast` the whole way. Then runs kyuusha's actual
-# examples/vnap-plugins/frr-vrf-host-route.sh (the real file, not a
-# reimplementation, unmodified from playground/evpn-vxlan-clos/'s copy) on
-# both "host1" and "host2" against a fake VM (a veth pair + netns standing in
-# for a Firecracker tap+guest), and pings across the fabric.
-#
-# This lab formalizes a design already verified working in an earlier
-# scratchpad test: frr-vrf-host-route.sh's host-side behavior (gateway_ip as
-# a /32, proxy_arp, vtysh static-route injection inside the tenant VRF) is
-# IDENTICAL whether the network side carries that route via EVPN+VXLAN (see
-# playground/evpn-vxlan-clos/) or via plain VRF-scoped BGP (here) -- the
-# script only ever talks to FRR's RIB via vtysh, and which network-side
-# technology relays that route onward is the network team's own choice, not
-# this script's concern.
-#
-# The per-tenant VRF (vrf01c9a2a0762a) baked into the frr.conf files and
-# topo.clab.yml's exec blocks is this lab's own fixed test fixture --
-# vrf01c9a2a0762a is frr-vrf-host-route.sh's own sha256-derived name for
-# tenant_id "tenant-test0000000000000" (see the attach payloads below).
+# playground/vrf-lite-clos/run-test.sh -- see README.md in this directory
+# for the topology diagram and full design rationale (including why this
+# lab shares frr-vrf-host-route.sh unmodified with
+# playground/evpn-vxlan-clos/, and the FRR 10.5.1 unnumbered-eBGP-in-VRF
+# limitation this lab works around). Deploys the containerlab lab, runs
+# examples/vnap-plugins/frr-vrf-host-route.sh against a fake VM on both
+# "host1" and "host2", and pings across the fabric.
 #
 # Requires: containerlab (https://containerlab.dev), Docker, and passwordless
 # (or interactive) sudo.
