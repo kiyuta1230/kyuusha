@@ -67,7 +67,7 @@ func usage() {
   kyuusha hypervisor bootstrap-token create -zone=... [flags]   (dev-only, local signing; see internal/bootstraptoken)
   kyuusha image <create|build|get|list|watch|share|delete> [flags]
   kyuusha image build -dockerfile=... -context=... -registry=... -repo=... -kernel-url=... [flags]   (builds a KERNEL_ROOTFS Image from a Dockerfile's rootfs; requires docker/tar/mkfs.ext4 locally, see docs/specs/image.md)
-  kyuusha subnet <create|get|list|watch|delete> [flags]
+  kyuusha subnet <create|get|list|watch|delete|add-finalizer|remove-finalizer> [flags]
   kyuusha netif <create|get|list|watch|set-firewall-rules|delete> [flags]
   kyuusha volume <create|get|list|watch|delete> [flags]
   kyuusha volattach <create|get|list|watch|delete> [flags]

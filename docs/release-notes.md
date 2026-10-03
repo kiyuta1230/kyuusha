@@ -7,6 +7,22 @@
 
 ## 2026-10-03
 
+- **Subnet/NetworkInterfaceでFinalizerを安全に使えるようにした**（kyuusha-vpcからの
+  変更依頼A5）。VLAN ID/IPの返却を、Delete呼び出し時点から「実際に消えた時点」
+  （network-reconcilerのWatchが`EventDeleted`を観測した時）へ移し、Finalizer待ちの間は
+  資源を保持し続けるようにした。Updateでの所有者チェック（`checkFinalizerMutation`を
+  `resource.CheckFinalizerMutation`として共通化）、2回目のDeleteで`tenant_usage`を
+  二重減算しないこと、削除中Subnetへの新規NetworkInterface/VM作成の拒否、CLIの
+  `subnet add-finalizer`/`remove-finalizer`も追加
+- **VLAN ID/IPが削除後も再利用されない実バグを発見・修正した**（上記の作業中に発見）:
+  払い出しを行うnetwork-reconcilerは削除を一切観測しておらず、Delete RPCが行う返却は
+  払い出しに使われないAPIプロセス側のプールに対するもので効果が無かった。そのため
+  削除したSubnetのVLAN ID・NetworkInterfaceのIPは、network-reconcilerを再起動するまで
+  二度と払い出されなかった（playgroundで、同じzoneでSubnetの作成→削除を繰り返すと
+  VLAN IDが1→2→3と増え続けることを確認）。上記の`EventDeleted`での返却により修正し、
+  playgroundで作成→削除の繰り返しがVLAN ID 1を再利用すること、Finalizer付きSubnetを
+  Deleteしても消えずVLAN IDを保持し（その間の新規Subnetは別のIDになる）、Finalizerを
+  外すと実際に消えてVLAN IDが再利用されることを確認
 - **Admission Webhookをnetworkサービスに配線した**（kyuusha-vpcからの変更依頼A4）。
   Subnet Create/Update/Delete、NetworkInterface Create/Update/`UpdateFirewallRules`が
   書き込み前にwebhookを呼ぶ（`network`の`-admission-webhook-urls`等、computeと同じ
@@ -17,8 +33,6 @@
   SubnetのCIDRがVPCのCIDR内か」を検査するテスト用webhookをホストで動かし、範囲外の
   Createが理由付きの`PermissionDenied`で拒否されること、`DELETE`に`old_object`が載る
   こと、webhook停止時にfail-closedで`Unavailable`になることを確認
-- 作業中にplaygroundホストのディスクが満杯（Dockerのビルドキャッシュ12GB）になり
-  docker buildが失敗したため、ビルドキャッシュのみを削除した
 - **Subnet/NetworkInterface/VirtualMachineに汎用のラベル・アノテーション
   （`meta.labels`/`meta.annotations`）を追加した**（kyuusha-vpcからの変更依頼A1）。
   外部ソフトウェアが自分の情報（どのVPCに属するか等）をkyuushaのリソースに記録するための、

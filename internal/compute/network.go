@@ -56,6 +56,9 @@ func validateNetworkInterfaces(ctx context.Context, client networkv1.SubnetServi
 		if sn.GetStatus().GetPhase() != "Ready" {
 			return "", fmt.Errorf("%w: subnet %q is not Ready (phase=%s)", ErrValidation, a.SubnetID, sn.GetStatus().GetPhase())
 		}
+		if sn.GetMeta().GetDeletedAt() != nil {
+			return "", fmt.Errorf("%w: subnet %q is being deleted", ErrValidation, a.SubnetID)
+		}
 		subnetZone := sn.GetSpec().GetZone()
 		if zone == "" {
 			zone = subnetZone

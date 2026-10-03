@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
@@ -486,14 +487,26 @@ func TestService_CreateNetworkInterfaceReportsIPPoolExhausted(t *testing.T) {
 		t.Fatalf("expected phase Pending on IP pool exhaustion, got %s", n3.Status.Phase)
 	}
 
-	// Deleting n1 frees its IP; the retry sweep should then let n3 through.
+	// Deleting n1 frees its IP -- via the reconciler's watch observing the
+	// Deleted event (releaseNetworkInterface), not the Delete call itself
+	// -- after which the retry sweep lets n3 through.
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go svc.watchPendingNetworkInterfaces(watchCtx)
 	if err := svc.DeleteNetworkInterface(ctx, "tenant-a", n1.Meta.ID); err != nil {
 		t.Fatalf("DeleteNetworkInterface: %v", err)
 	}
-	svc.retryPendingNetworkInterfaces(ctx)
-	retried, err := svc.GetNetworkInterface(ctx, "tenant-a", n3.Meta.ID)
-	if err != nil {
-		t.Fatalf("GetNetworkInterface: %v", err)
+	var retried *NetworkInterface
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		svc.retryPendingNetworkInterfaces(ctx)
+		retried, err = svc.GetNetworkInterface(ctx, "tenant-a", n3.Meta.ID)
+		if err != nil {
+			t.Fatalf("GetNetworkInterface: %v", err)
+		}
+		if retried.Status.Phase == NetworkInterfacePhaseReady || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if retried.Status.Phase != NetworkInterfacePhaseReady {
 		t.Fatalf("expected n3 to go Ready after the retry sweep, got %s", retried.Status.Phase)

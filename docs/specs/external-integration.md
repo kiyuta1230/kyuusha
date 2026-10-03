@@ -120,21 +120,24 @@ kyuusha vm remove-finalizer -tenant=... -id=... -finalizer="acme.corp/network-ac
 `kyuusha vm get`/`list`/`watch`の出力には`finalizers=...`と`deleted_at=...`が
 表示される。
 
-### 現状の対応範囲: VirtualMachineのみ
+### 現状の対応範囲: VirtualMachine・Subnet・NetworkInterface
 
 Finalizer機構自体は`internal/resource.Store`（全リソース共通の汎用実装）にあり
-どの型でも使えるが、実際に意味のある形で使えるのは**VirtualMachineだけ**。
+どの型でも使えるが、実際に意味のある形で使えるのは**VirtualMachine・Subnet・
+NetworkInterface**（Updateでの追加・削除、所有者チェック、削除待ちの間の資源保持が
+揃っているもの）。CLIは`vm`と`subnet`の`add-finalizer`/`remove-finalizer`。
 
 - `compute.Service.Delete`はFinalizerが残っている時、`store.Delete`を呼ぶ前に
   `status.phase`を`Deleting`へ遷移させる。`tenant_usage`（Quota使用量）は
   Delete呼び出し時点で減算する——Finalizerが解放されて実際にオブジェクトが
   消えるタイミングではない（同一テナント内で一時的にQuotaの余裕が実態より
   多く見える、という無害な近似。詳細はコード中のコメント参照）
-- Subnet/NetworkInterface/Volumeの各`Delete`は、VLAN/IPプールの解放や
-  `tenant_usage`減算を無条件かつ即座に行っており、これらにFinalizerを付けると
-  プール割当だけ先に解放される整合性の穴がある（`docs/architecture.md`
-  「Finalizer」節「既知の穴」参照）。今のところこれらの型にFinalizerを付ける
-  経路（CLI等）が無いため実害はないが、対応は個別に必要——**現状これらの型に
+- Subnet/NetworkInterfaceは、Finalizerで削除が止まっている間もVLAN ID/IPを保持し
+  続け、実際に消えた時点で初めてプールへ返却する（[network仕様](network.md)
+  「IPAM」参照）。`tenant_usage`の扱いはVirtualMachineと同じ近似
+- Volumeの`Delete`は資源の解放と`tenant_usage`減算を無条件かつ即座に行っており、
+  Finalizerを付けると割当だけ先に解放される整合性の穴がある（`docs/architecture.md`
+  「Finalizer」節「既知の穴」参照）——**現状Volumeには
   Finalizerを使わないこと**
 
 ### 認可: 削除できるのは追加した本人かadminだけ

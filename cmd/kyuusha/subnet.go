@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	networkv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1"
+	resourcev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/resource/v1"
 )
 
 func dialSubnets(addr string) networkv1.SubnetServiceClient {
@@ -38,6 +39,10 @@ func subnetCmd(args []string) {
 		subnetWatch(args[1:])
 	case "delete":
 		subnetDelete(args[1:])
+	case "add-finalizer":
+		subnetSetFinalizer(args[1:], true)
+	case "remove-finalizer":
+		subnetSetFinalizer(args[1:], false)
 	default:
 		usage()
 		os.Exit(2)
@@ -223,13 +228,71 @@ func subnetDelete(args []string) {
 	}
 }
 
+// subnetSetFinalizer adds (add=true) or removes one finalizer via
+// Get-then-Update, same as vm add-finalizer/remove-finalizer.
+func subnetSetFinalizer(args []string, add bool) {
+	verb := "remove-finalizer"
+	if add {
+		verb = "add-finalizer"
+	}
+	fs := flag.NewFlagSet("subnet "+verb, flag.ExitOnError)
+	addr := fs.String("addr", "localhost:8080", "api-gateway address")
+	token := fs.String("token", "", "bearer token (default: $KYUUSHA_TOKEN)")
+	tenant := fs.String("tenant", "", "tenant ID (required)")
+	id := fs.String("id", "", "subnet ID (required)")
+	finalizer := fs.String("finalizer", "", "holder name, e.g. \"vpc.example.com/cleanup\" (required)")
+	fs.Parse(args)
+	if *tenant == "" {
+		*tenant = resolveTenant(*token)
+	}
+	if *tenant == "" || *id == "" || *finalizer == "" {
+		fatal("-tenant, -id, and -finalizer are required")
+	}
+	client := dialSubnets(*addr)
+	ctx := authedContext(context.Background(), *token)
+
+	sn, err := client.Get(ctx, &networkv1.GetSubnetRequest{TenantId: *tenant, Id: *id})
+	if err != nil {
+		fatal("get: %v", err)
+	}
+	var kept []*resourcev1.Finalizer
+	present := false
+	for _, f := range sn.GetMeta().GetFinalizers() {
+		if f.GetName() == *finalizer {
+			present = true
+			if !add {
+				continue
+			}
+		}
+		kept = append(kept, f)
+	}
+	if add == present {
+		printSubnet(sn) // nothing to change: idempotent no-op
+		return
+	}
+	if add {
+		kept = append(kept, &resourcev1.Finalizer{Name: *finalizer})
+	}
+	sn.Meta.Finalizers = kept
+	updated, err := client.Update(ctx, &networkv1.UpdateSubnetRequest{TenantId: *tenant, Subnet: sn})
+	if err != nil {
+		fatal("update: %v", err)
+	}
+	printSubnet(updated)
+}
+
 func printSubnet(sn *networkv1.Subnet) {
-	fmt.Printf("id=%s name=%s tenant=%s labels=%s zone=%s cidr=%s mesh_group=%s unique_cidr=%t visibility=%s shared_with=%s phase=%s vlan_id=%d rv=%d\n",
+	finalizerNames := make([]string, len(sn.GetMeta().GetFinalizers()))
+	for i, f := range sn.GetMeta().GetFinalizers() {
+		finalizerNames[i] = f.GetName()
+	}
+	fmt.Printf("id=%s name=%s tenant=%s labels=%s zone=%s cidr=%s mesh_group=%s unique_cidr=%t visibility=%s shared_with=%s phase=%s vlan_id=%d finalizers=%s deleted_at=%s rv=%d\n",
 		sn.GetMeta().GetId(), sn.GetMeta().GetName(), sn.GetMeta().GetTenantId(), formatKeyValues(sn.GetMeta().GetLabels()),
 		sn.GetSpec().GetZone(), sn.GetSpec().GetCidr(), sn.GetSpec().GetMeshGroup(),
 		sn.GetSpec().GetUniqueCidr(), sn.GetSpec().GetVisibility(),
 		strings.Join(sn.GetSpec().GetSharedWithTenantIds(), ","),
-		sn.GetStatus().GetPhase(), sn.GetStatus().GetVlanId(), sn.GetMeta().GetResourceVersion())
+		sn.GetStatus().GetPhase(), sn.GetStatus().GetVlanId(),
+		strings.Join(finalizerNames, ","), deletedAtString(sn.GetMeta().GetDeletedAt()), sn.GetMeta().GetResourceVersion())
 }
 
 func parseSubnetVisibility(s string) networkv1.SubnetVisibility {

@@ -1028,15 +1028,19 @@ sequenceDiagram
 Finalizerを使う経路が存在するのはVirtualMachineのみ（`compute.Service.Delete`が
 Finalizer存在時に`status.phase = Deleting`へ遷移させてからstore.Deleteを呼ぶ）。
 
-**既知の穴**: Subnet/NetworkInterface/Volumeの各`Delete`実装は、VLAN/IPプールの
-解放や`tenant_usage`の減算を「Deleteが呼ばれた時点で」無条件に行っている。これらの
-型に将来Finalizerを付けると、オブジェクト自体はまだ存在している（Finalizer待ち）
-のに、プール割当だけ先に解放されてしまう整合性の穴がある。今のところこれらの型に
-Finalizerを付ける経路が無いため実害はないが、対応は個別に必要。
+**資源の解放は「実際に消えた時点」**: Finalizer待ちのオブジェクトはまだ存在している
+ので、それが持つ資源（VLAN ID、IP等）はDelete呼び出しではなく実際の削除（Watchの
+`EventDeleted`）に紐付けて解放する——Subnet/NetworkInterfaceはnetwork-reconcilerの
+Watchで返却する（払い出しを行うプールがそのプロセスにしか無いことも、DeleteのRPC
+ではなくWatchに紐付ける理由）。**既知の穴**: Volumeの`Delete`は資源の解放と
+`tenant_usage`の減算を「Deleteが呼ばれた時点で」無条件に行っており、Finalizerを付けると
+オブジェクトはまだ存在するのに割当だけ先に解放される。Volumeに付ける経路が無いため
+実害はないが、対応は個別に必要。
 
 **Finalizerの所有権（実装済み）**: `Finalizer`は`{name, added_by}`の構造体で、
 `added_by`は追加した呼び出し者の実JWT `sub`がサーバー側で刻む値であり、クライアント
-が指定した値は常に無視される（`compute.Service.Update`の`checkFinalizerMutation`）。
+が指定した値は常に無視される（`resource.CheckFinalizerMutation`、VirtualMachine/Subnet/
+NetworkInterfaceのUpdateが共通で使う）。
 削除は「`added_by`と同じ`sub`」または「admin ロール」のみ許可し、それ以外は
 `ErrValidation`で拒否されFinalizerはそのまま残る——ただし`added_by`が空文字列
 （このplumbing導入前に付いたエントリ、あるいはapi-gatewayを経由しない内部呼び出し

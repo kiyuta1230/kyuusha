@@ -306,11 +306,38 @@ func (s *Service) watchPendingSubnets(ctx context.Context) {
 		return
 	}
 	for e := range events {
+		if e.Type == EventDeleted {
+			s.releaseSubnet(e.Object)
+			continue
+		}
 		if e.Type != EventAdded || e.Object.Status.Phase != SubnetPhasePending {
 			continue
 		}
 		sn := e.Object
 		s.tryAllocateVLAN(ctx, &sn)
+	}
+}
+
+// releaseSubnet/releaseNetworkInterface return an object's VLAN ID/IP to
+// this process's pool once the object is actually gone (its Deleted
+// event), never at Delete-call time: a Subnet/NetworkInterface held by a
+// Finalizer lingers with deleted_at set and must keep its VLAN ID/IP until
+// then, or they could be handed to something else while it still exists.
+// Only network-reconciler allocates, so only its own pool's release
+// matters -- which is why this hangs off its watch rather than off the
+// Delete RPC (served by the API binary, whose pool is never allocated
+// from). A deletion landing between NewService's rebuildPools and this
+// watch starting is missed until the next restart; the window is the few
+// milliseconds of startup.
+func (s *Service) releaseSubnet(sn Subnet) {
+	if sn.Status.VLANID != 0 {
+		s.vlans.release(sn.Spec.Zone, sn.Status.VLANID)
+	}
+}
+
+func (s *Service) releaseNetworkInterface(n NetworkInterface) {
+	if n.Status.IPAddress != "" {
+		s.ips.release(n.Spec.SubnetID, n.Status.IPAddress)
 	}
 }
 
@@ -324,6 +351,10 @@ func (s *Service) watchPendingNetworkInterfaces(ctx context.Context) {
 		return
 	}
 	for e := range events {
+		if e.Type == EventDeleted {
+			s.releaseNetworkInterface(e.Object)
+			continue
+		}
 		if e.Type != EventAdded || e.Object.Status.Phase != NetworkInterfacePhasePending {
 			continue
 		}
@@ -497,6 +528,9 @@ func (s *Service) CreateSubnetWithMetadata(ctx context.Context, tenantID, name s
 // successful allocation rolls the allocation back, so it isn't leaked on a
 // resource nobody ever sees as Ready.
 func (s *Service) tryAllocateVLAN(ctx context.Context, sn *Subnet) {
+	if sn.Meta.DeletedAt != nil {
+		return // being deleted (held by a Finalizer): never give it a VLAN ID now
+	}
 	id, ok := s.vlans.allocate(sn.Spec.Zone)
 	if !ok {
 		sn.Status.Conditions = upsertCondition(sn.Status.Conditions, resource.Condition{
@@ -549,6 +583,11 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 	if err != nil {
 		return nil, err
 	}
+	finalizers, err := resource.CheckFinalizerMutation(ctx, current.Meta.Finalizers, subnet.Meta.Finalizers)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	subnet.Meta.Finalizers = finalizers
 	if err := s.admit(ctx, admissionwebhook.Request{
 		Operation: "UPDATE", Resource: "Subnet", TenantID: current.Meta.TenantID, Name: current.Meta.Name, ID: current.Meta.ID,
 		Labels: subnet.Meta.Labels, Annotations: subnet.Meta.Annotations, Spec: admissionSubnetSpecJSON(subnet.Spec),
@@ -563,9 +602,13 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 	return &out, nil
 }
 
-// DeleteSubnet releases the Subnet's VLAN ID back to its zone's pool first
-// (if it ever held one -- a Subnet deleted while still Pending never did),
-// mirroring compute's capacity-release-before-delete pattern.
+// DeleteSubnet deletes the Subnet -- or, if it carries Finalizers, marks it
+// deleted_at and leaves it in place until they're all removed via Update
+// (see resource.Store's Delete). Its VLAN ID returns to the pool only once
+// it's actually gone (releaseSubnet). tenant_usage, by contrast, drops at
+// the first Delete call, the same "Delete was requested" approximation
+// compute.Service.Delete documents for VirtualMachine; a repeated Delete
+// while Finalizers are pending doesn't drop it again.
 func (s *Service) DeleteSubnet(ctx context.Context, tenantID, id string) error {
 	// Admission runs before taking usageMu: a webhook round trip must not
 	// hold up every other tenant's Create/Delete.
@@ -581,11 +624,15 @@ func (s *Service) DeleteSubnet(ctx context.Context, tenantID, id string) error {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 
-	if sn, err := s.subnets.Get(ctx, tenantID, id); err == nil && sn.Status.Phase == SubnetPhaseReady {
-		s.vlans.release(sn.Spec.Zone, sn.Status.VLANID)
+	sn, err := s.subnets.Get(ctx, tenantID, id)
+	if err != nil {
+		return err
 	}
 	if err := s.subnets.Delete(ctx, tenantID, id); err != nil {
 		return err
+	}
+	if sn.Meta.DeletedAt != nil {
+		return nil // already counted down by the first Delete call
 	}
 
 	usage := s.usage[tenantID]
@@ -652,6 +699,9 @@ func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenant
 	if subnet.Status.Phase != SubnetPhaseReady {
 		return nil, fmt.Errorf("%w: subnet %q is not Ready (phase=%s)", ErrValidation, spec.SubnetID, subnet.Status.Phase)
 	}
+	if subnet.Meta.DeletedAt != nil {
+		return nil, fmt.Errorf("%w: subnet %q is being deleted", ErrValidation, spec.SubnetID)
+	}
 
 	limit, err := lookupQuota(ctx, s.identityClient, tenantID)
 	if err != nil {
@@ -703,6 +753,9 @@ func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenant
 // in cmd/network-reconciler, not in the (possibly multi-replica) API
 // handler.
 func (s *Service) tryAllocateIP(ctx context.Context, n *NetworkInterface, cidr, gatewayIP string, allocatableRanges []string) {
+	if n.Meta.DeletedAt != nil {
+		return // being deleted (held by a Finalizer): never give it an IP now
+	}
 	if n.Status.MACAddress == "" {
 		n.Status.MACAddress = s.allocateMAC()
 	}
@@ -763,6 +816,11 @@ func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInte
 		!firewallRulesEqual(current.Spec.EgressRules, iface.Spec.EgressRules) {
 		return nil, fmt.Errorf("%w: ingress_rules/egress_rules can only be changed via UpdateFirewallRules", ErrValidation)
 	}
+	finalizers, err := resource.CheckFinalizerMutation(ctx, current.Meta.Finalizers, iface.Meta.Finalizers)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	iface.Meta.Finalizers = finalizers
 	if err := s.admit(ctx, admissionwebhook.Request{
 		Operation: "UPDATE", Resource: "NetworkInterface", TenantID: current.Meta.TenantID, Name: current.Meta.Name, ID: current.Meta.ID,
 		Labels: iface.Meta.Labels, Annotations: iface.Meta.Annotations, Spec: admissionNetworkInterfaceSpecJSON(iface.Spec),
@@ -887,17 +945,21 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
 	}
 }
 
-// DeleteNetworkInterface releases the interface's IP back to its Subnet's
-// pool first (if it ever held one), mirroring DeleteSubnet.
+// DeleteNetworkInterface mirrors DeleteSubnet: Finalizers hold the
+// interface (and its IP, see releaseNetworkInterface) in place.
 func (s *Service) DeleteNetworkInterface(ctx context.Context, tenantID, id string) error {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 
-	if n, err := s.interfaces.Get(ctx, tenantID, id); err == nil && n.Status.Phase == NetworkInterfacePhaseReady && n.Status.IPAddress != "" {
-		s.ips.release(n.Spec.SubnetID, n.Status.IPAddress)
+	n, err := s.interfaces.Get(ctx, tenantID, id)
+	if err != nil {
+		return err
 	}
 	if err := s.interfaces.Delete(ctx, tenantID, id); err != nil {
 		return err
+	}
+	if n.Meta.DeletedAt != nil {
+		return nil // already counted down by the first Delete call
 	}
 
 	usage := s.usage[tenantID]

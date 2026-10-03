@@ -60,8 +60,13 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
   `watchPendingVolumeAttachments`/`watchPendingVolumes`（[Volume仕様](volume.md)
   「排他制御」参照）と同じ形
 - 成功すると同じConditionが`status: false`に更新される（削除はされない）
-- SubnetのDelete/NetworkInterfaceのDeleteは、`Ready`で実際に払い出し済みだった場合のみ
-  VLAN ID/IPアドレスをプールへ返却する
+- VLAN ID/IPアドレスがプールへ返却されるのは、Subnet/NetworkInterfaceが**実際に消えた
+  とき**——network-reconcilerが自分のWatchで`EventDeleted`を観測した時点（払い出しを行う
+  プールはnetwork-reconcilerのプロセス内にしか無いため）。Delete呼び出しの時点ではない:
+  Finalizerが付いていればオブジェクトは`deleted_at`付きで残り、その間VLAN ID/IPも保持
+  され続ける（他のSubnet/NetworkInterfaceへ再払い出しされない）。`tenant_usage`は
+  VirtualMachineと同じ近似で最初のDelete呼び出し時点に1回だけ減算する。削除中
+  （`deleted_at`付き）のSubnetには新しいNetworkInterfaceを作れない（VM Createも拒否）
 
 ## `spec.mesh_group`（同一テナント内の自動許可、実装済み）
 
