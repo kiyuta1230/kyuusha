@@ -58,7 +58,12 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
   別goroutine）が新規作成された`Pending`のSubnet/NetworkInterfaceの`EventAdded`に即座に
   反応し、10秒の定期スイープを待たず払い出しを試みる——block-storageの
   `watchPendingVolumeAttachments`/`watchPendingVolumes`（[Volume仕様](volume.md)
-  「排他制御」参照）と同じ形
+  「排他制御」参照）と同じ形。これらのWatchは切れても最後に見た`resource_version`から
+  張り直す（切れている間の変更・削除もリプレイされる）。再開点がetcdのコンパクションで
+  消えていた場合は、etcd上の割当済みVLAN ID/IPをプールへ「使用中」として付け直した
+  上で最初からリプレイする——このとき解放はしない（払い出し済みでまだ保存されていない
+  割当を解放すると二重払い出しになりうるため）ので、その隙間で起きた削除の返却だけは
+  次の再起動まで遅れる
 - 成功すると同じConditionが`status: false`に更新される（削除はされない）
 - VLAN ID/IPアドレスがプールへ返却されるのは、Subnet/NetworkInterfaceが**実際に消えた
   とき**——network-reconcilerが自分のWatchで`EventDeleted`を観測した時点（払い出しを行う
@@ -157,7 +162,10 @@ Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
 
 ## Update RPCで変えられるもの
 
-- **Subnet**: `meta`（labels/annotations/finalizers）と`spec`。`status`（`vlan_id`等）は
+- **Subnet**: `meta`（labels/annotations/finalizers）と`spec`。ただし`spec.zone`/`cidr`/
+  `gateway_ip`はCreate後に変えられない（エラー）——VLAN IDはzoneのプールから、各
+  NetworkInterfaceのIPはcidrから払い出し済みで、稼働中のゲスト・ホストのブリッジは
+  gateway_ipで設定済みのため。`status`（`vlan_id`等）は
   常に保存済みの値が残る——呼び出し側が指定した`vlan_id`を受け入れると、そのテナントの
   VMを別テナントのVLANへ配線できてしまうため
 - **NetworkInterface**: `meta`のみ。`spec.ingress_rules`/`egress_rules`は

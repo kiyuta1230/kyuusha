@@ -93,3 +93,29 @@ func TestService_UpdateCannotForgeServerOwnedFields(t *testing.T) {
 		t.Fatalf("UpdateNetworkInterface changing vm_id: got %v, want ErrValidation", err)
 	}
 }
+
+func TestService_UpdateSubnetRejectsAddressingChanges(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
+	for name, mutate := range map[string]func(*Subnet){
+		"zone":       func(s *Subnet) { s.Spec.Zone = "zone-b" },
+		"cidr":       func(s *Subnet) { s.Spec.CIDR = "10.0.9.0/24" },
+		"gateway_ip": func(s *Subnet) { s.Spec.GatewayIP = "10.0.1.254" },
+	} {
+		cur, _ := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
+		mutate(cur)
+		if _, err := svc.UpdateSubnet(ctx, cur); !errors.Is(err, ErrValidation) {
+			t.Errorf("changing %s: got %v, want ErrValidation", name, err)
+		}
+	}
+	// Other spec fields stay updatable.
+	cur, _ := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
+	cur.Spec.DNSSuffix = "example.internal"
+	if out, err := svc.UpdateSubnet(ctx, cur); err != nil || out.Spec.DNSSuffix != "example.internal" {
+		t.Fatalf("changing dns_suffix: %v, %+v", err, out)
+	}
+}

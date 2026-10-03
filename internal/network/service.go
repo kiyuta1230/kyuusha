@@ -235,8 +235,28 @@ func (s *Service) rebuildPools(ctx context.Context) error {
 			maxMACOct = oct
 		}
 	}
-	s.nextMACOct = maxMACOct
+	// Only ever raise the counter: remarkPools re-runs this on a live
+	// process, where lowering it would re-issue MACs already handed out.
+	for {
+		cur := atomic.LoadUint32(&s.nextMACOct)
+		if maxMACOct <= cur || atomic.CompareAndSwapUint32(&s.nextMACOct, cur, maxMACOct) {
+			break
+		}
+	}
 	return nil
+}
+
+// remarkPools is runWatchLoop's onPruned for network-reconciler's watches:
+// re-marks every VLAN ID/IP currently in etcd as used. It deliberately
+// never frees anything -- an allocation already taken from the pool but
+// not yet persisted would look free in a fresh listing, and freeing it
+// could hand the same VLAN ID/IP out twice. So a deletion that happened
+// inside the compacted gap stays unreturned until the next restart (an
+// accepted, rare leak), but nothing is ever double-allocated.
+func (s *Service) remarkPools(ctx context.Context) {
+	if err := s.rebuildPools(ctx); err != nil {
+		slog.Error("network: re-mark pools after watch history was pruned failed", "err", err)
+	}
 }
 
 // parseMACOct extracts allocateMAC's counter value back out of a MAC
@@ -301,22 +321,17 @@ func (s *Service) Run(ctx context.Context) error {
 // capacity to actually free up elsewhere -- retryPendingSubnets' periodic
 // sweep is the right (and sufficient) backstop for that case.
 func (s *Service) watchPendingSubnets(ctx context.Context) {
-	events, err := s.WatchSubnets(ctx, "", 0)
-	if err != nil {
-		slog.Error("watch subnets for pending allocation failed", "err", err)
-		return
-	}
-	for e := range events {
+	runWatchLoop(ctx, "subnets", func(ctx context.Context, rv int64) (<-chan SubnetEvent, error) { return s.WatchSubnets(ctx, "", rv) }, ErrSubnetHistoryPruned, s.remarkPools, func(e SubnetEvent) {
 		if e.Type == EventDeleted {
 			s.releaseSubnet(e.Object)
-			continue
+			return
 		}
 		if e.Type != EventAdded || e.Object.Status.Phase != SubnetPhasePending {
-			continue
+			return
 		}
 		sn := e.Object
 		s.tryAllocateVLAN(ctx, &sn)
-	}
+	})
 }
 
 // releaseSubnet/releaseNetworkInterface return an object's VLAN ID/IP to
@@ -346,26 +361,23 @@ func (s *Service) releaseNetworkInterface(n NetworkInterface) {
 // ip_address/mac_address allocation via tryAllocateIP -- see its doc
 // comment for why only EventAdded triggers an immediate attempt.
 func (s *Service) watchPendingNetworkInterfaces(ctx context.Context) {
-	events, err := s.WatchNetworkInterfaces(ctx, "", 0)
-	if err != nil {
-		slog.Error("watch network interfaces for pending allocation failed", "err", err)
-		return
-	}
-	for e := range events {
+	runWatchLoop(ctx, "network interfaces", func(ctx context.Context, rv int64) (<-chan NetworkInterfaceEvent, error) {
+		return s.WatchNetworkInterfaces(ctx, "", rv)
+	}, ErrNetworkInterfaceHistoryPruned, s.remarkPools, func(e NetworkInterfaceEvent) {
 		if e.Type == EventDeleted {
 			s.releaseNetworkInterface(e.Object)
-			continue
+			return
 		}
 		if e.Type != EventAdded || e.Object.Status.Phase != NetworkInterfacePhasePending {
-			continue
+			return
 		}
 		n := e.Object
 		subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID)
 		if err != nil || subnet.Status.Phase != SubnetPhaseReady {
-			continue // retryPendingNetworkInterfaces' sweep retries once the Subnet is Ready
+			return // retryPendingNetworkInterfaces' sweep retries once the Subnet is Ready
 		}
 		s.tryAllocateIP(ctx, &n, subnet.Spec.CIDR, subnet.Spec.GatewayIP, subnet.Spec.AllocatableIPRanges)
-	}
+	})
 }
 
 // sweepOrphanedNetworkInterfaces implements docs/architecture.md's
@@ -592,6 +604,15 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 	subnet.Meta.Finalizers = finalizers
+	// zone/cidr/gateway_ip are fixed at Create: the VLAN ID was allocated
+	// from zone's pool, every NetworkInterface's IP from cidr, and every
+	// running guest and host bridge is configured with gateway_ip --
+	// changing any of them under existing allocations would leave
+	// addresses outside the CIDR, a VLAN ID from the wrong zone's pool, or
+	// a gateway colliding with an already-allocated IP.
+	if subnet.Spec.Zone != current.Spec.Zone || subnet.Spec.CIDR != current.Spec.CIDR || subnet.Spec.GatewayIP != current.Spec.GatewayIP {
+		return nil, fmt.Errorf("%w: spec.zone/cidr/gateway_ip cannot be changed after Create", ErrValidation)
+	}
 	// status is server-owned (vlan_id above all: a caller-chosen vlan_id
 	// would wire this tenant's VMs into another tenant's VLAN). This method
 	// only serves the Update RPC; internal writers go through s.subnets.

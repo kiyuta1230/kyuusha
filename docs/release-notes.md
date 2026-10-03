@@ -7,6 +7,18 @@
 
 ## 2026-10-03
 
+- **network-reconcilerのWatchが切れると以後の払い出し・返却が止まる問題を修正した**。
+  `watchPendingSubnets`/`watchPendingNetworkInterfaces`は、元のetcd Watchが終わると
+  goroutineごと終了し、再起動まで新規Subnet/NetworkInterfaceの即時払い出しと削除時の
+  VLAN ID/IP返却が行われなくなっていた。最後に見た`resource_version`から張り直す
+  共通ループにし、再開点がコンパクションで消えていた場合はプールを付け直して
+  リプレイするようにした（ユニットテストで再開・コンパクション時の挙動を確認。
+  playgroundでetcdを20秒止めて戻した後も払い出し・返却が機能することを確認——この
+  ときはetcdクライアント自身が再接続したためWatchは切れなかった）
+- **Subnetの`spec.zone`/`cidr`/`gateway_ip`をCreate後に変更できないようにした**。
+  それまでVLAN ID/IP払い出し後でもUpdateで変えられ、CIDR外のIPや別zoneのプールの
+  VLAN ID、払い出し済みIPと衝突するgateway_ipが生じえた。playgroundでCIDRの変更が
+  `InvalidArgument`になり、`dns_suffix`等の変更は引き続き効くことを確認
 - **Update RPC経由でサーバー管理のフィールドを書き換えられたセキュリティ上の穴を修正した**
   （上記の変更依頼の作業中に発見）。Subnet/NetworkInterface/VirtualMachineのUpdateが、
   リクエストに入った`status`（と、VM/NetworkInterfaceでは`spec`）をそのまま保存していた。
