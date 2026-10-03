@@ -271,6 +271,7 @@ func parseMACOct(mac string) (n uint32, ok bool) {
 func (s *Service) Run(ctx context.Context) error {
 	go s.watchPendingSubnets(ctx)
 	go s.watchPendingNetworkInterfaces(ctx)
+	go s.watchVMPlacement(ctx)
 
 	ticker := time.NewTicker(pendingSweepInterval)
 	defer ticker.Stop()
@@ -383,8 +384,11 @@ func (s *Service) sweepOrphanedNetworkInterfaces(ctx context.Context) {
 		return
 	}
 	for _, iface := range ifaces {
-		_, err := s.computeClient.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: iface.Meta.TenantID, Id: iface.Spec.VMID})
+		vm, err := s.computeClient.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: iface.Meta.TenantID, Id: iface.Spec.VMID})
 		if err == nil {
+			if want := interfaceHypervisor(vm); iface.Status.Hypervisor != want {
+				s.syncInterfaceHypervisor(ctx, iface.Meta.TenantID, iface.Spec.VMID, want)
+			}
 			continue
 		}
 		if status.Code(err) != codes.NotFound {

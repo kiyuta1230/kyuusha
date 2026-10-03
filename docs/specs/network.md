@@ -155,6 +155,17 @@ Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
 [Quota仕様](quota.md)「networkのQuota判定」参照）。カウントは常に**呼び出し元テナント**
 （=実際にattachするテナント）に課金される——Subnetの所有テナントではない。
 
+## `NetworkInterface.status.hypervisor`
+
+そのNetworkInterface（IP）が今どのHypervisorにいるか。network-reconcilerが全テナントの
+VirtualMachineをWatchし、VMが`Running`の間はVMの`status.hypervisor`を、それ以外
+（スケジュール前、`Stopped`、`Migrating`中）は空文字列を、そのVMの全NetworkInterfaceへ
+書き込む——compute-agentはBootの中でtapを配線し終えてからRunningを報告するので、
+「Running＝そのHypervisorで配線済み」とみなせる。Migrateでの移動も、Migrating中は空、
+移動先でRunningになった時点で移動先のHypervisorになる。Watchの取りこぼし（VMが既に
+Runningの後から作ったNetworkInterface等）は、10分ごとのorphan GCスイープがVMを
+Getするついでに同期し直す。
+
 ## この実装がカバーしないもの
 
 - **クロスHypervisor接続**: tap配線自体は下記「tap配線とローカルネットワーク」の通り
@@ -164,11 +175,9 @@ Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
   ホスト間のL2を延伸する仕組みが必要で、これは別の後続マイルストーンとして未着手
   ——このスコープの絞り方自体、最初の実VM起動（[Firecracker起動仕様](firecracker-boot.md)
   参照）を「ネットワークなし」に絞った時と同じ考え方
-- `NetworkInterface.status.hypervisor`は現状常に空文字列のまま（tap配線が実装された今も
-  未実装）。networkサービス側でどのHypervisorに実際にバインドされたかを追跡するには、
-  `NetworkInterfacePhase`にすでに用意されている`Binding`/`Rebinding`フェーズを使った
-  compute-agent→network側への報告の仕組みが要るが、tap配線そのものとは別の作業として
-  切り出している
+- `NetworkInterfacePhase`の`Binding`/`Rebinding`フェーズ（compute-agentが実際の配線
+  完了をnetworkへ報告する仕組み）は未実装。`status.hypervisor`は下記の通りVMの状態から
+  導出している
 - ネットワーク分離の実現方式（VRF/ルートリーク禁止によるテナント間非疎通性、
   DNS/名前解決の拡張機能）は設計のみ（`docs/architecture.md`参照）、実装はまだ
 - **NetworkInterfaceのオーファンGC**: VM Deleteはcomputeの予約解放とcompute-agentへの

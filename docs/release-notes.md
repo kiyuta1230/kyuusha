@@ -7,6 +7,11 @@
 
 ## 2026-10-03
 
+- **`NetworkInterface.status.hypervisor`を実装した**（kyuusha-vpcからの変更依頼A6）。
+  network-reconcilerが全テナントのVMをWatchし、VMがRunningの間はそのHypervisorを、
+  それ以外は空を書き込む（orphan GCスイープでも同期し直す）。CLIの`netif`表示に
+  `hypervisor=`を追加。playgroundで、Running中はVMと同じHypervisor、Stopで空、別の
+  HypervisorへMigrateしてStartすると移動先になることを確認
 - **Subnet/NetworkInterfaceでFinalizerを安全に使えるようにした**（kyuusha-vpcからの
   変更依頼A5）。VLAN ID/IPの返却を、Delete呼び出し時点から「実際に消えた時点」
   （network-reconcilerのWatchが`EventDeleted`を観測した時）へ移し、Finalizer待ちの間は

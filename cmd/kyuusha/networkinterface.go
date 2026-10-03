@@ -257,10 +257,10 @@ func netifDelete(args []string) {
 }
 
 func printNetworkInterface(n *networkv1.NetworkInterface) {
-	fmt.Printf("id=%s name=%s tenant=%s labels=%s vm=%s subnet=%s phase=%s ip=%s mac=%s ingress_rules=%s egress_rules=%s effective_ingress_rules=%s effective_egress_rules=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s labels=%s vm=%s subnet=%s phase=%s hypervisor=%s ip=%s mac=%s ingress_rules=%s egress_rules=%s effective_ingress_rules=%s effective_egress_rules=%s rv=%d\n",
 		n.GetMeta().GetId(), n.GetMeta().GetName(), n.GetMeta().GetTenantId(), formatKeyValues(n.GetMeta().GetLabels()),
 		n.GetSpec().GetVmId(), n.GetSpec().GetSubnetId(),
-		n.GetStatus().GetPhase(), n.GetStatus().GetIpAddress(), n.GetStatus().GetMacAddress(),
+		n.GetStatus().GetPhase(), n.GetStatus().GetHypervisor(), n.GetStatus().GetIpAddress(), n.GetStatus().GetMacAddress(),
 		formatFirewallRules(n.GetSpec().GetIngressRules()), formatFirewallRules(n.GetSpec().GetEgressRules()),
 		formatFirewallRules(n.GetStatus().GetEffectiveIngressRules()), formatFirewallRules(n.GetStatus().GetEffectiveEgressRules()),
 		n.GetMeta().GetResourceVersion())
