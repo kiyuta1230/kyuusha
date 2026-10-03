@@ -434,9 +434,9 @@ message NetworkInterfaceStatus {
 フィールドだったが、削除した。これと同等以上の制御（例: 外部の申請システムと連携した
 事前承認済みACLルールかのチェック）が必要になった場合は、専用フィールドを増やすのではなく
 `internal/admissionwebhook`（[external-integration.md](specs/external-integration.md)
-「ゲート系(作成側): Admission Webhook」参照、現状`VirtualMachineService.Create`のみに
-配線済み）を`network`サービスの`CreateNetworkInterface`/`UpdateFirewallRules`にも配線
-する方針にする——resource-agnosticなゲートとして最初からその用途を想定して設計されている。
+「ゲート系(作成側): Admission Webhook」参照。`network`サービスのSubnet Create/Update/Delete、
+NetworkInterface Create/Update/`UpdateFirewallRules`に配線済み）で外部から検証する
+——resource-agnosticなゲートとして最初からその用途を想定して設計されている。
 
 `tenant_id`(`ObjectMeta`)は`Subnet`単位で持つが、実際に`NetworkInterface`をattachできる
 テナントは所有テナントだけとは限らない——`spec.visibility`/`spec.shared_with_tenant_ids`
@@ -1610,8 +1610,8 @@ L2共有そのものの攻撃面は残る——そのため共有の可否の区
 密結合ではない場合は、上記の直接attachではなく、専用のSubnetを持たせた上で経路だけを狭く共有する
 という手段も引き続き使える——ただし現在kyuusha側にはその意図を記録する専用フィールドは無く
 （旧`shared_with_tenant_ids`のACL参照専用の意味は削除済み）、必要になれば
-`internal/admissionwebhook`をこのサービスへ配線する形で実現する方針（前節「networkサービスの
-リソース」参照）。
+`network`サービスに配線済みの`internal/admissionwebhook`で外部から検証する形で実現する
+（前節「networkサービスのリソース」参照）。
 
 ### 制約: VLANの4094上限はType-2デプロイの宿命として受け入れる
 

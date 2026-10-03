@@ -101,6 +101,10 @@ func toStatus(err error) error {
 		return status.Error(codes.Aborted, err.Error())
 	case errors.Is(err, network.ErrSubnetHistoryPruned), errors.Is(err, network.ErrNetworkInterfaceHistoryPruned):
 		return status.Error(codes.OutOfRange, err.Error())
+	case errors.Is(err, network.ErrAdmissionDenied):
+		return status.Error(codes.PermissionDenied, err.Error())
+	case errors.Is(err, network.ErrAdmissionUnavailable):
+		return status.Error(codes.Unavailable, err.Error())
 	}
 	if status.Code(err) != codes.Unknown {
 		return err

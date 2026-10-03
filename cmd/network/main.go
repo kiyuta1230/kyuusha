@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -42,6 +43,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
+	"github.com/kiyuta1230/kyuusha/internal/admissionwebhook"
 	"github.com/kiyuta1230/kyuusha/internal/etcdconn"
 	"github.com/kiyuta1230/kyuusha/internal/mtls"
 	"github.com/kiyuta1230/kyuusha/internal/network"
@@ -64,6 +66,9 @@ func main() {
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA callers' certificates must chain to")
 	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
+	admissionWebhookURLs := flag.String("admission-webhook-urls", "", "comma-separated external validation webhook URLs consulted synchronously on Subnet Create/Update/Delete and NetworkInterface Create/Update/UpdateFirewallRules (see docs/specs/external-integration.md \"ゲート系(作成側)\"). All must allow; empty (the default) disables this entirely")
+	admissionWebhookTimeout := flag.Duration("admission-webhook-timeout", admissionwebhook.DefaultTimeout, "per-webhook timeout for -admission-webhook-urls")
+	admissionWebhookFailOpen := flag.Bool("admission-webhook-fail-open", false, "if true, an unreachable/erroring webhook is treated as an implicit allow instead of denying the request (an explicit deny from a different webhook is never overridden either way)")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -161,6 +166,13 @@ func main() {
 	if err != nil {
 		slog.Error("new network service", "err", err)
 		os.Exit(1)
+	}
+	if *admissionWebhookURLs != "" {
+		svc.AdmissionGate = admissionwebhook.Gate{
+			URLs:     strings.Split(*admissionWebhookURLs, ","),
+			Timeout:  *admissionWebhookTimeout,
+			FailOpen: *admissionWebhookFailOpen,
+		}
 	}
 
 	serverCreds, err := mtls.ServerCredentials(*tlsCert, *tlsKey, *tlsCA)

@@ -45,12 +45,32 @@ import (
 // resource type's own Service's job (see internal/compute/service.go's
 // Create for VirtualMachine's), not something this resource-agnostic
 // package should know the shape of.
+//
+// For CREATE/UPDATE, Spec/Labels/Annotations are the proposed state; for
+// DELETE, Spec is omitted. OldObject is the currently stored object for
+// UPDATE/DELETE (Kubernetes AdmissionReview's oldObject), nil for CREATE.
 type Request struct {
-	Operation string          `json:"operation"` // "CREATE" -- the only value this package sends today
-	Resource  string          `json:"resource"`  // e.g. "VirtualMachine"
-	TenantID  string          `json:"tenant_id"`
-	Name      string          `json:"name"`
-	Spec      json.RawMessage `json:"spec"`
+	Operation   string            `json:"operation"` // "CREATE", "UPDATE" or "DELETE"
+	Resource    string            `json:"resource"`  // e.g. "VirtualMachine", "Subnet"
+	TenantID    string            `json:"tenant_id"`
+	Name        string            `json:"name"`
+	ID          string            `json:"id,omitempty"` // empty for CREATE (not minted yet)
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	Spec        json.RawMessage   `json:"spec,omitempty"`
+	OldObject   *Object           `json:"old_object,omitempty"`
+}
+
+// Object is a stored object as an UPDATE/DELETE's OldObject. Spec/Status
+// are built by the resource's own Service, same as Request.Spec.
+type Object struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	TenantID    string            `json:"tenant_id"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	Spec        json.RawMessage   `json:"spec,omitempty"`
+	Status      json.RawMessage   `json:"status,omitempty"`
 }
 
 // Response is what a webhook is expected to answer with. Reason is

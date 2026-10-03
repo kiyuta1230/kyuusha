@@ -155,11 +155,10 @@ api-gatewayを経由しない内部呼び出しから付いたエントリ）の
 
 ## ゲート系(作成側): Admission Webhook
 
-Create前の同期的な外部バリデーション（Kubernetesの`ValidatingAdmissionWebhook`
-相当）。`internal/admissionwebhook`が実装、`compute.Service.Create`
-（VirtualMachineのみ、現状）が、Image/NetworkInterface/Quotaといった内部
-バリデーションを全て通した後・実際に永続化する前の最後のゲートとして呼ぶ
-（Quotaと同じ「doomedなVirtualMachineを作ってからErrorにしない」設計に従う）。
+書き込み前の同期的な外部バリデーション（Kubernetesの`ValidatingAdmissionWebhook`
+相当）。`internal/admissionwebhook`が実装し、各サービスが内部バリデーション
+（Quota等）を全て通した後・実際に永続化する前の最後のゲートとして呼ぶ
+（Quotaと同じ「doomedなリソースを作ってからErrorにしない」設計に従う）。
 
 ### 契約
 
@@ -167,8 +166,15 @@ Create前の同期的な外部バリデーション（Kubernetesの`ValidatingAd
   を返して初めて許可**——Kubernetes自身の「全てのvalidating webhookが合意して
   初めて許可」と同じ意味論（「どれか1つの承認で十分」ではない）
   ```json
-  {"operation":"CREATE","resource":"VirtualMachine","tenant_id":"...","name":"...","spec":{...}}
+  {"operation":"UPDATE","resource":"Subnet","tenant_id":"...","name":"...","id":"subnet-...",
+   "labels":{...},"annotations":{...},"spec":{...},
+   "old_object":{"id":"...","name":"...","tenant_id":"...","labels":{...},"annotations":{...},
+                 "spec":{...},"status":{...}}}
   ```
+  `operation`は`CREATE`/`UPDATE`/`DELETE`。`labels`/`annotations`/`spec`は書き込み後の
+  状態（`DELETE`では`spec`無し）、`old_object`は現在保存されている状態
+  （KubernetesのAdmissionReviewの`oldObject`相当。`CREATE`では無し、`id`も
+  まだ無い）。`spec`/`status`はsnake_caseのJSON
   レスポンス:
   ```json
   {"allowed":false,"reason":"..."}
@@ -185,17 +191,23 @@ Create前の同期的な外部バリデーション（Kubernetesの`ValidatingAd
   常に優先される**（fail-openは「答えが得られない」場合の話であり、「はっきり
   ノーと言われた」場合を上書きしない）
 - **タイムアウト**: `-admission-webhook-timeout`（既定3秒）。webhookごとに独立
-- **セキュリティ**: webhook URLの一覧は`compute`サービス起動時のオペレータ
-  設定（`-admission-webhook-urls`、カンマ区切り）のみ——APIからテナントが
+- **セキュリティ**: webhook URLの一覧は`compute`/`network`サービス起動時のオペレータ
+  設定（`-admission-webhook-urls`、カンマ区切り。サービスごとに別々に設定）のみ——APIからテナントが
   登録する経路は無い。「誰がwebhookを登録できるか」という当初の懸念を、
   `internal/compute-agent/netsetup`のVNAPプラグイン（`-network-attach-bin`）
   と同じ「オペレータ設定のみ、テナント非公開」という考え方で回避している
 - **エラーマッピング**: 明示的な拒否は`PermissionDenied`（理由を含む）、
   webhook疎通不能によるfail-closedは`Unavailable`
 
-### 現状の対応範囲: VirtualMachineの`Create`のみ
+### 現状の対応範囲
 
-Finalizerと同じ絞り込み方針——`internal/admissionwebhook.Gate`自体は
-リソース非依存の汎用実装だが、実際に呼ぶ経路があるのは
-`compute.Service.Create`だけ。Update/Delete側へのゲートや他リソース種別への
-展開は、実需が出た時点で追加する。
+| サービス | リソース | 操作 |
+|---|---|---|
+| `compute` | VirtualMachine | `Create` |
+| `network` | Subnet | `Create`/`Update`/`Delete` |
+| `network` | NetworkInterface | `Create`/`Update`/`UpdateFirewallRules`（いずれも`UPDATE`として届く） |
+
+NetworkInterfaceの`Delete`はゲートしない——VM削除時のcompute→networkの後始末や
+networkのorphan GCも同じ経路を通るため、webhookの拒否がVM削除を止めてしまう。
+削除を止めたい用途にはFinalizerを使う。他のリソース種別・操作への展開は、
+実需が出た時点で追加する。

@@ -225,6 +225,7 @@ func (s *Service) CreateWithMetadata(ctx context.Context, tenantID, name string,
 	// only runs once every cheaper internal check has already passed.
 	if webhookAllowed, reason, webhookErr := s.AdmissionGate.Validate(ctx, admissionwebhook.Request{
 		Operation: "CREATE", Resource: "VirtualMachine", TenantID: tenantID, Name: name, Spec: admissionVMSpecJSON(spec),
+		Labels: md.Labels, Annotations: md.Annotations,
 	}); webhookErr != nil {
 		return nil, fmt.Errorf("%w: %v", ErrAdmissionUnavailable, webhookErr)
 	} else if !webhookAllowed {

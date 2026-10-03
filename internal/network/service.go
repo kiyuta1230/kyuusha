@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/kiyuta1230/kyuusha/internal/admissionwebhook"
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -37,6 +38,9 @@ var (
 
 	ErrValidation    = errors.New("network: validation failed")
 	ErrQuotaExceeded = errors.New("network: tenant quota exceeded")
+
+	ErrAdmissionDenied      = errors.New("network: rejected by admission webhook")
+	ErrAdmissionUnavailable = errors.New("network: admission webhook unavailable")
 )
 
 type SubnetEvent = resource.Event[Subnet]
@@ -109,6 +113,12 @@ type Service struct {
 	// fails the RPC itself (see docs/specs/network.md「セキュリティ
 	// バックエンド」).
 	js jetstream.JetStream
+
+	// AdmissionGate is consulted synchronously before Subnet Create/Update/
+	// Delete and NetworkInterface Create/Update/UpdateFirewallRules (see
+	// admit). Zero value (no URLs) allows everything; set by cmd/network's
+	// -admission-webhook-urls.
+	AdmissionGate admissionwebhook.Gate
 }
 
 // NewService constructs a Service and synchronously rebuilds its VLAN/IP
@@ -459,6 +469,12 @@ func (s *Service) CreateSubnetWithMetadata(ctx context.Context, tenantID, name s
 	// it directly -- doing so would make it unsafe to run more than one
 	// replica of this binary (each replica's own pool would drift from the
 	// others' the moment either one allocates).
+	if err := s.admit(ctx, admissionwebhook.Request{
+		Operation: "CREATE", Resource: "Subnet", TenantID: tenantID, Name: name,
+		Labels: md.Labels, Annotations: md.Annotations, Spec: admissionSubnetSpecJSON(spec),
+	}); err != nil {
+		return nil, err
+	}
 	out, err := s.subnets.Create(ctx, tenantID, name, Subnet{
 		Meta:   resource.ObjectMeta{Labels: md.Labels, Annotations: md.Annotations},
 		Spec:   spec,
@@ -529,6 +545,17 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 	if subnet.Spec.Visibility == SubnetVisibilityPublic && !subnet.Spec.UniqueCidr {
 		return nil, fmt.Errorf("%w: spec.visibility=PUBLIC requires spec.unique_cidr=true (open, unvetted cross-tenant attach is only allowed on Public IP address space; a purposeful, owner-vetted grant to specific tenants should use spec.shared_with_tenant_ids instead, on any Subnet)", ErrValidation)
 	}
+	current, err := s.subnets.Get(ctx, subnet.Meta.TenantID, subnet.Meta.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.admit(ctx, admissionwebhook.Request{
+		Operation: "UPDATE", Resource: "Subnet", TenantID: current.Meta.TenantID, Name: current.Meta.Name, ID: current.Meta.ID,
+		Labels: subnet.Meta.Labels, Annotations: subnet.Meta.Annotations, Spec: admissionSubnetSpecJSON(subnet.Spec),
+		OldObject: admissionSubnetObject(current),
+	}); err != nil {
+		return nil, err
+	}
 	out, err := s.subnets.Update(ctx, *subnet)
 	if err != nil {
 		return nil, err
@@ -540,6 +567,17 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 // (if it ever held one -- a Subnet deleted while still Pending never did),
 // mirroring compute's capacity-release-before-delete pattern.
 func (s *Service) DeleteSubnet(ctx context.Context, tenantID, id string) error {
+	// Admission runs before taking usageMu: a webhook round trip must not
+	// hold up every other tenant's Create/Delete.
+	if current, err := s.subnets.Get(ctx, tenantID, id); err == nil {
+		if err := s.admit(ctx, admissionwebhook.Request{
+			Operation: "DELETE", Resource: "Subnet", TenantID: tenantID, Name: current.Meta.Name, ID: id,
+			OldObject: admissionSubnetObject(current),
+		}); err != nil {
+			return err
+		}
+	}
+
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 
@@ -633,6 +671,12 @@ func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenant
 	// (two replicas would independently hand out the same counter value),
 	// so MAC assignment moves to cmd/network-reconciler too, folded into
 	// tryAllocateIP (see its doc comment) rather than done here.
+	if err := s.admit(ctx, admissionwebhook.Request{
+		Operation: "CREATE", Resource: "NetworkInterface", TenantID: tenantID, Name: name,
+		Labels: md.Labels, Annotations: md.Annotations, Spec: admissionNetworkInterfaceSpecJSON(spec),
+	}); err != nil {
+		return nil, err
+	}
 	out, err := s.interfaces.Create(ctx, tenantID, name, NetworkInterface{
 		Meta:   resource.ObjectMeta{Labels: md.Labels, Annotations: md.Annotations},
 		Spec:   spec,
@@ -719,6 +763,13 @@ func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInte
 		!firewallRulesEqual(current.Spec.EgressRules, iface.Spec.EgressRules) {
 		return nil, fmt.Errorf("%w: ingress_rules/egress_rules can only be changed via UpdateFirewallRules", ErrValidation)
 	}
+	if err := s.admit(ctx, admissionwebhook.Request{
+		Operation: "UPDATE", Resource: "NetworkInterface", TenantID: current.Meta.TenantID, Name: current.Meta.Name, ID: current.Meta.ID,
+		Labels: iface.Meta.Labels, Annotations: iface.Meta.Annotations, Spec: admissionNetworkInterfaceSpecJSON(iface.Spec),
+		OldObject: admissionNetworkInterfaceObject(current),
+	}); err != nil {
+		return nil, err
+	}
 
 	out, err := s.interfaces.Update(ctx, *iface)
 	if err != nil {
@@ -754,8 +805,16 @@ func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, 
 	if err != nil {
 		return nil, err
 	}
+	old := n
 	n.Spec.IngressRules = ingress
 	n.Spec.EgressRules = egress
+	if err := s.admit(ctx, admissionwebhook.Request{
+		Operation: "UPDATE", Resource: "NetworkInterface", TenantID: n.Meta.TenantID, Name: n.Meta.Name, ID: n.Meta.ID,
+		Labels: n.Meta.Labels, Annotations: n.Meta.Annotations, Spec: admissionNetworkInterfaceSpecJSON(n.Spec),
+		OldObject: admissionNetworkInterfaceObject(old),
+	}); err != nil {
+		return nil, err
+	}
 
 	out, err := s.interfaces.Update(ctx, n)
 	if err != nil {

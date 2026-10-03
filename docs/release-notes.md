@@ -7,6 +7,18 @@
 
 ## 2026-10-03
 
+- **Admission Webhookをnetworkサービスに配線した**（kyuusha-vpcからの変更依頼A4）。
+  Subnet Create/Update/Delete、NetworkInterface Create/Update/`UpdateFirewallRules`が
+  書き込み前にwebhookを呼ぶ（`network`の`-admission-webhook-urls`等、computeと同じ
+  フラグ）。payloadに`id`・`labels`/`annotations`・`old_object`（変更前の保存済み
+  オブジェクト）を追加し、`operation`に`UPDATE`/`DELETE`が加わった（VM Createの
+  payloadにも`labels`/`annotations`が載るようになった）。NetworkInterfaceの`Delete`は
+  VM削除・orphan GCを止めないよう意図的にゲートしない。playgroundで、「VPCラベル付き
+  SubnetのCIDRがVPCのCIDR内か」を検査するテスト用webhookをホストで動かし、範囲外の
+  Createが理由付きの`PermissionDenied`で拒否されること、`DELETE`に`old_object`が載る
+  こと、webhook停止時にfail-closedで`Unavailable`になることを確認
+- 作業中にplaygroundホストのディスクが満杯（Dockerのビルドキャッシュ12GB）になり
+  docker buildが失敗したため、ビルドキャッシュのみを削除した
 - **Subnet/NetworkInterface/VirtualMachineに汎用のラベル・アノテーション
   （`meta.labels`/`meta.annotations`）を追加した**（kyuusha-vpcからの変更依頼A1）。
   外部ソフトウェアが自分の情報（どのVPCに属するか等）をkyuushaのリソースに記録するための、
