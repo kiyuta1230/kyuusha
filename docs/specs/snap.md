@@ -53,6 +53,18 @@ frr-vrf-host-route.sh`/`frr-ipv4-unicast.sh`のようなpure L3構成）を使�
   もう一方のチェーンが評価されなくなってしまう）。`drop`で明示的な拒否、チェーン末尾にも
   `drop`（該当ルール無しはデフォルト拒否）。両チェーンをreturnで通過した後、実際に許可
   するのはbase chain自身の`policy accept`
+- 常時許可（自Subnet CIDR・`gateway_ip`）は**相手側**のアドレスで判定する——`<tap>-in`
+  （VMの送信）は宛先、`<tap>-out`（VMへの着信）は送信元。VM自身の側で判定すると、
+  アンチスプーフィングで送信元が自分のIPに固定されている以上常に一致し、利用者の
+  ルールが一切効かなくなる
+- **ホストでルーティングされる通信にも同じルールを効かせる**: bridgeのforwardフックが
+  見るのは同じブリッジ内で転送されるフレームだけで、VMがSubnetの外へ出る通信（ゲートウェイ
+  ＝ブリッジ自身宛てにローカル配送される）や、`ip_forward`が有効なホストでのブリッジ間の
+  ルーティング（Dockerは`ip_forward`を有効にする）は通らない。そのため同じtapごとの
+  チェーンを`inet kyuusha_acl`テーブルにも書き、`forward`/`input`/`output`の各フックから
+  （ルーティング後はtap名が見えないので）「ブリッジ名＋VMのIP」で呼ぶ——VMのIPは
+  アンチスプーフィングで保証済み。これが無いと、ルールの無いVM同士でもホスト経由で
+  別テナントのSubnetへ到達できてしまう
 - `<tap>-in`/`<tap>-out`はどちらもARP（`ether type arp`）を常に通す——ARPはIPv4では
   ないので`ip saddr`/`ip daddr`のベースラインに一致せず、conntrackも追跡しないため、
   通さないと同じブリッジ上のVM同士がそもそも互いのMACを解決できない。ARPの正当性の
@@ -118,7 +130,9 @@ conntrack相当（BPFの`LRU_HASH`マップ、全tap共有）を実装してお�
 ### 実トラフィックによる検証
 
 nftacl・ebpf-snapとも、network namespace＋vethで2台のVMを模した実トラフィックの
-特権テストを持つ（`internal/compute-agent/nftacl/nftacl_traffic_test.go`、
+特権テストを持つ（nftaclはさらに、専用のnetns内で2つのSubnetのブリッジと
+`ip_forward=1`を用意し、ホスト経由のルーティングにルールが効くことを確かめる
+`nftacl_routed_test.go`も持つ。`internal/compute-agent/nftacl/nftacl_traffic_test.go`、
 `examples/snap-plugins/ebpf-snap/antispoof_test.go`。rootでないとskip）。正規の
 VM間・VM→ゲートウェイ通信が通ること、送信元IP・送信元MAC・ARP送信者IPの詐称が
 相手側に届かないことを、相手側network namespaceのnftablesカウンタで確認する。

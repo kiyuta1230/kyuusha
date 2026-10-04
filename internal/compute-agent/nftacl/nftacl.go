@@ -58,12 +58,27 @@
 // VM sends to the bridge itself (its gateway_ip) are delivered locally and
 // never reach the forward hook -- a source check only on forward would
 // leave the routed path wide open.
+//
+// # Routed traffic
+//
+// The bridge forward hook only sees frames bridged between two ports of
+// the same bridge. Traffic the host routes -- a VM leaving its Subnet via
+// its gateway_ip (which lives on the bridge itself), or one bridge to
+// another when ip_forward is on (Docker, for one, turns it on) -- never
+// passes it, and would otherwise skip ingress_rules/egress_rules
+// entirely, the host quietly acting as a router between tenants. So the
+// same per-tap chains are written again into an inet-family table, hooked
+// on forward/input/output and keyed by (bridge, VM IP) rather than the
+// tap (see ensureRoutedJumps). Bridged traffic that br_netfilter also
+// hands to the inet hooks just gets the same verdict twice.
 package nftacl
 
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -99,6 +114,13 @@ const (
 	// addressed to the bridge itself (the Subnet's gateway_ip, and so
 	// anything the host routes onward), which never traverse forward.
 	spoofBaseChain = "antispoof"
+
+	// inet-family base chains: the same per-tap rules again, for traffic
+	// the host routes (or terminates/originates) rather than bridges --
+	// see the package doc comment's "Routed traffic".
+	inetFwdChain = "routed_forward"
+	inetInChain  = "routed_input"
+	inetOutChain = "routed_output"
 )
 
 func inChain(tap string) string    { return tap + "-in" }    // iifname == tap -- enforces EgressRules
@@ -117,23 +139,19 @@ func Apply(iface Interface) error {
 	fmt.Fprintf(&setup, "add chain bridge %s %s\n", table, inChain(iface.TapName))
 	fmt.Fprintf(&setup, "add chain bridge %s %s\n", table, outChain(iface.TapName))
 	fmt.Fprintf(&setup, "add chain bridge %s %s { type filter hook prerouting priority -200; policy accept; }\n", table, spoofBaseChain)
+	fmt.Fprintf(&setup, "add table inet %s\n", table)
+	for _, c := range []struct{ name, hook string }{{inetFwdChain, "forward"}, {inetInChain, "input"}, {inetOutChain, "output"}} {
+		fmt.Fprintf(&setup, "add chain inet %s %s { type filter hook %s priority 0; policy accept; }\n", table, c.name, c.hook)
+	}
+	fmt.Fprintf(&setup, "add chain inet %s %s\n", table, inChain(iface.TapName))
+	fmt.Fprintf(&setup, "add chain inet %s %s\n", table, outChain(iface.TapName))
 	if err := run(setup.String()); err != nil {
 		return err
 	}
 
 	var rules strings.Builder
-	fmt.Fprintf(&rules, "flush chain bridge %s %s\n", table, inChain(iface.TapName))
-	fmt.Fprintf(&rules, "flush chain bridge %s %s\n", table, outChain(iface.TapName))
-	writeBaseline(&rules, inChain(iface.TapName), iface.SubnetCIDR, iface.GatewayIP, "saddr")
-	writeBaseline(&rules, outChain(iface.TapName), iface.SubnetCIDR, iface.GatewayIP, "daddr")
-	for _, r := range iface.EgressRules {
-		writeRule(&rules, inChain(iface.TapName), r, "daddr") // VM -> remote peer: peer is the destination
-	}
-	for _, r := range iface.IngressRules {
-		writeRule(&rules, outChain(iface.TapName), r, "saddr") // remote sender -> VM: peer is the source
-	}
-	fmt.Fprintf(&rules, "add rule bridge %s %s drop\n", table, inChain(iface.TapName))
-	fmt.Fprintf(&rules, "add rule bridge %s %s drop\n", table, outChain(iface.TapName))
+	writeTapChains(&rules, "bridge", iface)
+	writeTapChains(&rules, "inet", iface)
 	// Unknown address (either one empty) leaves any previously installed
 	// anti-spoofing chain untouched rather than flushing it: re-Apply's
 	// only post-boot caller (UpdateFirewallRules) changes rules, never the
@@ -148,7 +166,7 @@ func Apply(iface Interface) error {
 		return err
 	}
 
-	if err := ensureJumpRules(baseChain, map[string]string{
+	if err := ensureJumpRules("bridge", baseChain, map[string]string{
 		inChain(iface.TapName):  fmt.Sprintf("iifname %q", iface.TapName),
 		outChain(iface.TapName): fmt.Sprintf("oifname %q", iface.TapName),
 	}); err != nil {
@@ -157,9 +175,59 @@ func Apply(iface Interface) error {
 	if !antiSpoof {
 		return nil
 	}
-	return ensureJumpRules(spoofBaseChain, map[string]string{
+	if err := ensureJumpRules("bridge", spoofBaseChain, map[string]string{
 		spoofChain(iface.TapName): fmt.Sprintf("iifname %q", iface.TapName),
-	})
+	}); err != nil {
+		return err
+	}
+	return ensureRoutedJumps(iface.TapName, iface.IPAddress)
+}
+
+// ensureRoutedJumps hooks tapName's inet-family chains into routed
+// traffic. Past the bridge, the tap itself is no longer visible -- a
+// routed packet's interface is the bridge -- so the VM is identified by
+// (bridge, its own IP) instead; anti-spoofing (bridge prerouting) has
+// already guaranteed nothing else on that bridge sends from that IP. A
+// tap with no bridge master (a non-bridge VNAP wiring, which nftacl
+// doesn't support anyway) gets no routed jumps.
+func ensureRoutedJumps(tapName, ip string) error {
+	target, err := os.Readlink(filepath.Join("/sys/class/net", tapName, "master"))
+	if err != nil {
+		return nil
+	}
+	br := filepath.Base(target)
+	from := fmt.Sprintf("iifname %q ip saddr %s", br, ip) // the VM's own outbound traffic
+	to := fmt.Sprintf("oifname %q ip daddr %s", br, ip)   // traffic about to be delivered to the VM
+	if err := ensureJumpRules("inet", inetFwdChain, map[string]string{inChain(tapName): from, outChain(tapName): to}); err != nil {
+		return err
+	}
+	if err := ensureJumpRules("inet", inetInChain, map[string]string{inChain(tapName): from}); err != nil {
+		return err
+	}
+	return ensureJumpRules("inet", inetOutChain, map[string]string{outChain(tapName): to})
+}
+
+// writeTapChains (re)writes tapName's -in/-out chains in fam's table:
+// baseline, then the tenant's rules, then default drop.
+func writeTapChains(b *strings.Builder, fam string, iface Interface) {
+	in, out := inChain(iface.TapName), outChain(iface.TapName)
+	fmt.Fprintf(b, "flush chain %s %s %s\n", fam, table, in)
+	fmt.Fprintf(b, "flush chain %s %s %s\n", fam, table, out)
+	// The baseline names the *peer*, like writeRule: the destination of the
+	// VM's outbound traffic, the source of traffic delivered to it.
+	// (Matching the VM's own side instead -- saddr on -in, daddr on -out --
+	// is always true once anti-spoofing pins the VM to its own IP, which
+	// would make every rule below unreachable.)
+	writeBaseline(b, fam, in, iface.SubnetCIDR, iface.GatewayIP, "daddr")
+	writeBaseline(b, fam, out, iface.SubnetCIDR, iface.GatewayIP, "saddr")
+	for _, r := range iface.EgressRules {
+		writeRule(b, fam, in, r, "daddr") // VM -> remote peer: peer is the destination
+	}
+	for _, r := range iface.IngressRules {
+		writeRule(b, fam, out, r, "saddr") // remote sender -> VM: peer is the source
+	}
+	fmt.Fprintf(b, "add rule %s %s %s drop\n", fam, table, in)
+	fmt.Fprintf(b, "add rule %s %s %s drop\n", fam, table, out)
 }
 
 // writeAntiSpoof fills a tap's prerouting chain: everything the VM sends
@@ -190,18 +258,20 @@ func writeAntiSpoof(b *strings.Builder, chain, ip, mac string) {
 // not IPv4, so no ip saddr/daddr baseline rule matches it, and conntrack
 // doesn't track it). Whether an ARP frame is legitimate is the
 // anti-spoofing chain's job (see writeAntiSpoof), not this one's.
-func writeBaseline(b *strings.Builder, chain, subnetCIDR, gatewayIP, addrKeyword string) {
-	fmt.Fprintf(b, "add rule bridge %s %s ct state established,related return\n", table, chain)
-	fmt.Fprintf(b, "add rule bridge %s %s ether type arp return\n", table, chain)
+func writeBaseline(b *strings.Builder, fam, chain, subnetCIDR, gatewayIP, addrKeyword string) {
+	fmt.Fprintf(b, "add rule %s %s %s ct state established,related return\n", fam, table, chain)
+	if fam == "bridge" { // inet hooks never see ARP
+		fmt.Fprintf(b, "add rule %s %s %s ether type arp return\n", fam, table, chain)
+	}
 	if subnetCIDR != "" {
-		fmt.Fprintf(b, "add rule bridge %s %s ip %s %s return\n", table, chain, addrKeyword, subnetCIDR)
+		fmt.Fprintf(b, "add rule %s %s %s ip %s %s return\n", fam, table, chain, addrKeyword, subnetCIDR)
 	}
 	if gatewayIP != "" {
-		fmt.Fprintf(b, "add rule bridge %s %s ip %s %s return\n", table, chain, addrKeyword, gatewayIP)
+		fmt.Fprintf(b, "add rule %s %s %s ip %s %s return\n", fam, table, chain, addrKeyword, gatewayIP)
 	}
 }
 
-func writeRule(b *strings.Builder, chain string, r FirewallRule, addrKeyword string) {
+func writeRule(b *strings.Builder, fam, chain string, r FirewallRule, addrKeyword string) {
 	verdict := "return" // allow: this direction checks out, let the other tap's jump (if any) still run
 	if r.Action == "deny" {
 		verdict = "drop" // deny is terminal: no need to wait on the other side
@@ -224,13 +294,13 @@ func writeRule(b *strings.Builder, chain string, r FirewallRule, addrKeyword str
 	}
 	switch {
 	case r.SourceCIDR != "" && proto != "":
-		fmt.Fprintf(b, "add rule bridge %s %s ip %s %s %s %s\n", table, chain, addrKeyword, r.SourceCIDR, proto, verdict)
+		fmt.Fprintf(b, "add rule %s %s %s ip %s %s %s %s\n", fam, table, chain, addrKeyword, r.SourceCIDR, proto, verdict)
 	case r.SourceCIDR != "":
-		fmt.Fprintf(b, "add rule bridge %s %s ip %s %s %s\n", table, chain, addrKeyword, r.SourceCIDR, verdict)
+		fmt.Fprintf(b, "add rule %s %s %s ip %s %s %s\n", fam, table, chain, addrKeyword, r.SourceCIDR, verdict)
 	case proto != "":
-		fmt.Fprintf(b, "add rule bridge %s %s %s %s\n", table, chain, proto, verdict)
+		fmt.Fprintf(b, "add rule %s %s %s %s %s\n", fam, table, chain, proto, verdict)
 	default:
-		fmt.Fprintf(b, "add rule bridge %s %s %s\n", table, chain, verdict) // any protocol, any address -- a blanket allow/deny
+		fmt.Fprintf(b, "add rule %s %s %s %s\n", fam, table, chain, verdict) // any protocol, any address -- a blanket allow/deny
 	}
 }
 
@@ -240,15 +310,15 @@ func writeRule(b *strings.Builder, chain string, r FirewallRule, addrKeyword str
 // `add rule` isn't idempotent the way `add table`/`add chain` are (it would
 // append a duplicate jump on every call, e.g. every UpdateFirewallRules
 // over a VM's lifetime).
-func ensureJumpRules(base string, jumps map[string]string) error {
-	existing, err := jumpTargets(base)
+func ensureJumpRules(fam, base string, jumps map[string]string) error {
+	existing, err := jumpTargets(fam, base)
 	if err != nil {
 		return err
 	}
 	var add strings.Builder
 	for target, match := range jumps {
 		if !existing[target] {
-			fmt.Fprintf(&add, "add rule bridge %s %s %s jump %s\n", table, base, match, target)
+			fmt.Fprintf(&add, "add rule %s %s %s %s jump %s\n", fam, table, base, match, target)
 		}
 	}
 	if add.Len() == 0 {
@@ -271,8 +341,8 @@ type nftRuleset struct {
 // jumpTargets returns the set of chain names chain already jumps to (via
 // any rule) -- ensureJumpRules only needs presence, not the rule handle
 // jumpHandles also returns (that's Remove's own use).
-func jumpTargets(chain string) (map[string]bool, error) {
-	handles, err := jumpHandles(chain)
+func jumpTargets(fam, chain string) (map[string]bool, error) {
+	handles, err := jumpHandles(fam, chain)
 	if err != nil {
 		return nil, err
 	}
@@ -283,13 +353,13 @@ func jumpTargets(chain string) (map[string]bool, error) {
 	return out, nil
 }
 
-func jumpHandles(chain string) (map[string]int, error) {
-	out, err := exec.Command("nft", "-j", "list", "chain", "bridge", table, chain).CombinedOutput()
+func jumpHandles(fam, chain string) (map[string]int, error) {
+	out, err := exec.Command("nft", "-j", "list", "chain", fam, table, chain).CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(out), "No such file or directory") {
 			return map[string]int{}, nil // table/chain doesn't exist yet
 		}
-		return nil, fmt.Errorf("nftacl: nft -j list chain bridge %s %s: %w: %s", table, chain, err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("nftacl: nft -j list chain %s %s %s: %w: %s", fam, table, chain, err, strings.TrimSpace(string(out)))
 	}
 	var parsed nftRuleset
 	if err := json.Unmarshal(out, &parsed); err != nil {
@@ -318,18 +388,25 @@ func jumpHandles(chain string) (map[string]int, error) {
 // jumpHandles) and its now-unreferenced chains. No-op for whatever part is
 // already absent, so safe to call more than once.
 func Remove(tapName string) error {
+	in, out, spoof := inChain(tapName), outChain(tapName), spoofChain(tapName)
 	var del strings.Builder
-	for base, targets := range map[string][]string{
-		baseChain:      {inChain(tapName), outChain(tapName)},
-		spoofBaseChain: {spoofChain(tapName)},
+	for _, j := range []struct {
+		fam, base string
+		targets   []string
+	}{
+		{"bridge", baseChain, []string{in, out}},
+		{"bridge", spoofBaseChain, []string{spoof}},
+		{"inet", inetFwdChain, []string{in, out}},
+		{"inet", inetInChain, []string{in}},
+		{"inet", inetOutChain, []string{out}},
 	} {
-		handles, err := jumpHandles(base)
+		handles, err := jumpHandles(j.fam, j.base)
 		if err != nil {
 			return err
 		}
-		for _, target := range targets {
+		for _, target := range j.targets {
 			if h, ok := handles[target]; ok {
-				fmt.Fprintf(&del, "delete rule bridge %s %s handle %d\n", table, base, h)
+				fmt.Fprintf(&del, "delete rule %s %s %s handle %d\n", j.fam, table, j.base, h)
 			}
 		}
 	}
@@ -340,8 +417,8 @@ func Remove(tapName string) error {
 	}
 
 	var errs []error
-	for _, chain := range []string{inChain(tapName), outChain(tapName), spoofChain(tapName)} {
-		script := fmt.Sprintf("delete chain bridge %s %s\n", table, chain)
+	for _, c := range []struct{ fam, chain string }{{"bridge", in}, {"bridge", out}, {"bridge", spoof}, {"inet", in}, {"inet", out}} {
+		script := fmt.Sprintf("delete chain %s %s %s\n", c.fam, table, c.chain)
 		if err := run(script); err != nil && !strings.Contains(err.Error(), "No such file or directory") {
 			errs = append(errs, err)
 		}

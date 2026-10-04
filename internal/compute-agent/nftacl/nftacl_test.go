@@ -104,8 +104,9 @@ func TestApplyAnyProtocolRule(t *testing.T) {
 	}
 
 	ruleset := mustListRuleset(t)
-	if strings.Count(ruleset, "10.125.0.0/24") != 2 {
-		t.Fatalf("expected the any-protocol rule in both %s/%s chains, got:\n%s", inChain(tap), outChain(tap), ruleset)
+	// Both chains, in both the bridge and the inet (routed) table.
+	if strings.Count(ruleset, "10.125.0.0/24") != 4 {
+		t.Fatalf("expected the any-protocol rule in both %s/%s chains of both tables, got:\n%s", inChain(tap), outChain(tap), ruleset)
 	}
 }
 
