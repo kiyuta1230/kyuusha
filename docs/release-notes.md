@@ -7,6 +7,14 @@
 
 ## 2026-10-04
 
+- **`vlan-trunk.sh`をgatewayを名乗らない純粋なL2延伸にした**（kyuusha-vpcからの
+  変更依頼B5）。それまでは組み込み実装と同じくブリッジに`gateway_ip`を付けていたため、
+  同じSubnetのVMを持つ全ハイパーバイザーとファブリックのSVIが、同じVLAN上で同じIPを
+  別々のMACで名乗っていた。gatewayはファブリック側（VRFの中のSVI）が持つという
+  デプロイガイドの既定構成に合わせた。`playground/vlan-clos/`にleaf1のSVIとその先の
+  アドレスを足し、修正前のスクリプトではgatewayへのARPに3者（2ホストのブリッジとSVI）が
+  応答することを、修正後はSVIだけが応答し、両ホストのVMがSVI経由でSubnetの外へ
+  出られることを確認
 - **nftacl（既定のSNAP実装）の`ingress_rules`/`egress_rules`が実質何も制限していなかった
   2つの実バグを修正した**（kyuusha-vpcからの変更依頼B3、要検証として依頼されたもの）:
   - **ホストでルーティングされる通信にACLが効いていなかった**: ルールをbridgeの

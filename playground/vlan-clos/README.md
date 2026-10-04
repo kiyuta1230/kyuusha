@@ -24,6 +24,13 @@ this lab only exercises `-network-attach-bin` wiring, not
  leaf1 ===== (br0, VLAN-aware, trunk vid 4) ===== spine ===== (same) ===== leaf2
 ```
 
+`leaf1` also carries the Subnet's gateway: an SVI on VLAN 4 (`10.99.0.254`)
+plus an address beyond it (`192.0.2.1`), standing in for the leaf's SVI in the
+tenant's VRF. `vlan-trunk.sh` puts no address on the hypervisor bridges -- the
+gateway lives only in the fabric -- and the test checks exactly that: no host
+bridge carries `gateway_ip`, ARP for the gateway is answered by the SVI alone,
+and both fake VMs reach `192.0.2.1` through it.
+
 `leaf1`/`spine`/`leaf2` are plain Linux VLAN-aware bridges (`br0`,
 `vlan_filtering 1`) standing in for real switches, trunking VLAN ID 4 across
 every link -- the thing a real ToR's trunk port configuration would do (see

@@ -41,7 +41,12 @@
 - `examples/vnap-plugins/vlan-trunk.sh`——VLANトランク（Type-2、本ガイドの既定の前提）
   デプロイ向け。組み込みのLinuxブリッジ実装（`kbr<vlan_id>`）と同じ配線に加えて、
   アップリンクNICへ802.1Qタグ付きVLANサブインターフェースを作成しそのブリッジへ
-  加えることで、組み込み実装には無い**実際のホスト跨ぎL2疎通**を実現する。他の
+  加えることで、組み込み実装には無い**実際のホスト跨ぎL2疎通**を実現する。
+  **純粋なL2の延伸に徹し、ブリッジに`gateway_ip`を付けない**（組み込み実装との違い）
+  ——Subnetのgatewayはファブリック側（テナントを分離するVRFの中のleaf/ToRのSVI）が持つ。
+  全ホストのブリッジにも同じ`gateway_ip`を付けると、同じVLAN上で全ホストとSVIが
+  同じIPを別々のMACで名乗ってARPを奪い合い、勝ったホストがファブリックのVRFを
+  迂回してルーティングしてしまうため。他の
   参考実装と違い、どのNICがアップリンクかというホストレベルの設定を、VNAP payloadでは
   なく環境変数`VNAP_UPLINK_IFACE`（compute-agentプロセスから継承）で受け取る——
   これはFRR設定のようなプロトコルレベルの環境依存が無く、`frr-ipv4-unicast.sh`/
@@ -49,7 +54,9 @@
   （[network-deployment-guide.md](../network-deployment-guide.md)
   「1. VLANプール設計」参照）。containerlab製のleaf-spine-leaf CLOS疑似ファブリック
   （本物のVLAN-aware Linuxブリッジをスイッチ役に見立てた4ホップ構成）でこのスクリプト
-  自体をそのまま実行し、実機確認済み（詳細はdocs/release-notes.md参照）
+  自体をそのまま実行し、実機確認済み（ホスト跨ぎのVM間疎通に加え、leaf1のSVIを
+  gatewayとしてSubnet外へ出られること、gatewayへのARPに応答するのがSVIだけであること。
+  詳細はdocs/release-notes.md参照）
 - `examples/vnap-plugins/frr-ipv4-unicast.sh`——pure L3・IP一意
   （[network-deployment-guide.md](../network-deployment-guide.md)
   「3.5. Pure L3デプロイの場合」参照）デプロイ向けのサンプル。VRFを一切使わず、

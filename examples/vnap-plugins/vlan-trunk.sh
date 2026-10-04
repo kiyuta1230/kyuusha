@@ -17,8 +17,15 @@
 #
 #   1. ensures a shared Linux bridge for this vlan_id (kbr<vlan_id>, same
 #      naming netsetup's own bridgeName() uses -- harmless to share the
-#      name since netsetup's own bridge code never runs on this path) with
-#      the Subnet's gateway_ip assigned to it, same as the built-in path
+#      name since netsetup's own bridge code never runs on this path).
+#      Unlike the built-in path, the bridge gets NO address: the Subnet's
+#      gateway_ip belongs to the fabric (the leaf/ToR SVI in the VRF that
+#      isolates this tenant -- docs/network-deployment-guide.md's default
+#      topology). Putting it on every hypervisor's bridge too would have
+#      every host answer ARP for the same IP with its own MAC on the same
+#      VLAN (contending with each other and with the SVI), and a host that
+#      wins would route the guest's traffic itself, around the fabric's
+#      VRF. This script is a pure L2 extension.
 #   2. ensures a VLAN sub-interface of $VNAP_UPLINK_IFACE for this
 #      vlan_id exists and is a port on that bridge -- this is the actual
 #      cross-host L2 extension the built-in path is missing
@@ -27,11 +34,11 @@
 # Unlike frr-vrf-host-route.sh/frr-ipv4-unicast.sh, nothing here is FRR/BGP-specific or otherwise
 # protocol-configuration-heavy -- the switch side needs an ordinary trunk
 # port allowing this AZ's VLAN range (docs/network-deployment-guide.md
-# already assumes this for the default topology) and, for L2-to-L2/gateway
-# duty, a plain SVI (core/ToR) or a designated gateway switch (CLOS) --
-# neither is anything new this script requires.
+# already assumes this for the default topology) and, as each Subnet's
+# gateway_ip, a plain SVI (core/ToR) or a designated gateway switch (CLOS)
+# -- required, since nothing on the hypervisor answers for gateway_ip.
 #
-# Requires: a real iproute2 `ip` (not busybox's -- needs `ip addr replace`),
+# Requires: a real iproute2 `ip` (not busybox's -- needs `type vlan`),
 # `jq`, and the environment variable VNAP_UPLINK_IFACE set to the name of
 # this host's VLAN-trunked uplink NIC (a physical interface, or a bond) --
 # there's no per-request field for this in the VNAP payload since it's a
@@ -63,9 +70,6 @@ attach)
 		echo "vlan-trunk: attach requires vlan_id" >&2
 		exit 1
 	fi
-	gateway_ip="$(json gateway_ip)"
-	prefix_len="$(json prefix_len)"
-
 	out="$(ip link add "$bridge" type bridge 2>&1)" || case "$out" in
 	*"File exists"*) ;;
 	*) echo "vlan-trunk: $out" >&2; exit 1 ;;
@@ -73,14 +77,6 @@ attach)
 	if ! ip link set "$bridge" up; then
 		echo "vlan-trunk: ip link set $bridge up failed" >&2
 		exit 1
-	fi
-	if [ -n "$gateway_ip" ] && [ -n "$prefix_len" ]; then
-		# "replace", not "add": attach must be idempotent (see this
-		# script's doc comment and docs/specs/vnap.md「冪等性」).
-		if ! ip addr replace "${gateway_ip}/${prefix_len}" dev "$bridge"; then
-			echo "vlan-trunk: assign gateway_ip to $bridge failed" >&2
-			exit 1
-		fi
 	fi
 
 	if ! ip link set "$VNAP_UPLINK_IFACE" up; then

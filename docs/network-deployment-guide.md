@@ -127,7 +127,9 @@ L2ストレッチに頼らない別の実現方式がある）
   （`-network-attach-bin`未指定）はホスト内のLinuxブリッジ配線のみでこのタグ付けを
   一切行わないが、`examples/vnap-plugins/vlan-trunk.sh`という参考VNAPプラグインが
   アップリンクNICへのVLANサブインターフェース作成を代わりに担う——ゼロから自作する
-  必要はない（[VNAP仕様](specs/vnap.md)「参考実装」参照）。Pure L3デプロイでは
+  必要はない（[VNAP仕様](specs/vnap.md)「参考実装」参照）。このときSubnetの
+  `gateway_ip`は**ファブリック側（そのVLANのVRFのSVI）に必ず設定する**——
+  `vlan-trunk.sh`はハイパーバイザー側でgatewayを名乗らない（純粋なL2の延伸）。Pure L3デプロイでは
   事情が異なる——「3.5. Pure L3デプロイの場合」参照
 
 ## 2. VRF設計とルートリークポリシー（最重要）
