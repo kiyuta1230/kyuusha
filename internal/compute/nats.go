@@ -218,6 +218,11 @@ type NetworkInterfaceInfo struct {
 	// Attach is the interface's Network/NetworkClass context and its
 	// Subnet's allocated values, handed through to VNAP/SNAP plugins.
 	Attach AttachInfo `json:"attach"`
+	// DNSServers/DNSSearch configure the guest's resolver: the Subnet's
+	// dns_servers, else its NetworkClass's default for the zone; the
+	// search domain is the Network's dns_suffix. MTU rides in Attach.MTU.
+	DNSServers []string `json:"dns_servers,omitempty"`
+	DNSSearch  string   `json:"dns_search,omitempty"`
 	// Primary mirrors the originating NetworkAttachment.Primary: only the
 	// primary interface gets a default route in the guest (see
 	// docker/fc-guest-init.sh) -- a VM with several NICs would otherwise

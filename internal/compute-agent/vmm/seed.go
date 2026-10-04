@@ -98,6 +98,18 @@ func buildNetworkConfig(ifaces []NetIface) string {
 		if ni.Primary && ni.GatewayIP != "" {
 			fmt.Fprintf(&eths, "    gateway4: %s\n", ni.GatewayIP)
 		}
+		if ni.Attach.MTU > 0 {
+			fmt.Fprintf(&eths, "    mtu: %d\n", ni.Attach.MTU)
+		}
+		if ni.Primary && (len(ni.DNSServers) > 0 || ni.DNSSearch != "") {
+			fmt.Fprintf(&eths, "    nameservers:\n")
+			if len(ni.DNSServers) > 0 {
+				fmt.Fprintf(&eths, "      addresses: [%s]\n", strings.Join(ni.DNSServers, ", "))
+			}
+			if ni.DNSSearch != "" {
+				fmt.Fprintf(&eths, "      search: [%s]\n", ni.DNSSearch)
+			}
+		}
 	}
 	if !any {
 		return ""

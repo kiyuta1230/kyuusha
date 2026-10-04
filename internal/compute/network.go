@@ -160,7 +160,7 @@ func (s *Service) createNetworkInterfaces(ctx context.Context, tenantID, vmID, z
 					info.CIDR, info.GatewayIP = addr.GetCidr(), addr.GetGatewayIp()
 				}
 			}
-			info.Attach = s.attachInfo(ctx, tenantID, sn)
+			info.Attach, info.DNSServers, info.DNSSearch = s.attachInfo(ctx, tenantID, sn)
 		}
 		infos = append(infos, info)
 	}
@@ -168,29 +168,41 @@ func (s *Service) createNetworkInterfaces(ctx context.Context, tenantID, vmID, z
 }
 
 // attachInfo resolves sn's Network and NetworkClass into the plugin-facing
-// AttachInfo. Best effort: a lookup failure leaves the corresponding
-// fields empty rather than failing the boot.
-func (s *Service) attachInfo(ctx context.Context, tenantID string, sn *networkv1.Subnet) AttachInfo {
-	out := AttachInfo{
+// AttachInfo, plus the guest's resolver settings: sn's own dns_servers,
+// else the class's default for sn's zone ("*" as the fallback), and the
+// Network's dns_suffix as the search domain. Best effort: a lookup failure
+// leaves the corresponding fields empty rather than failing the boot.
+func (s *Service) attachInfo(ctx context.Context, tenantID string, sn *networkv1.Subnet) (out AttachInfo, dnsServers []string, dnsSearch string) {
+	out = AttachInfo{
 		NetworkID:        sn.GetSpec().GetNetworkId(),
 		SubnetValues:     sn.GetStatus().GetValues(),
 		SubnetAttributes: sn.GetStatus().GetAttributes(),
 	}
+	dnsServers = sn.GetSpec().GetDnsServers()
 	if s.NetworkClient == nil {
-		return out
+		return out, dnsServers, ""
 	}
 	n, err := s.NetworkClient.Get(ctx, &networkv1.GetNetworkRequest{TenantId: tenantID, Id: out.NetworkID})
 	if err != nil {
-		return out
+		return out, dnsServers, ""
 	}
 	out.NetworkLabels, out.NetworkValues, out.NetworkAttributes = n.GetMeta().GetLabels(), n.GetStatus().GetValues(), n.GetStatus().GetAttributes()
+	dnsSearch = n.GetSpec().GetDnsSuffix()
 	if s.NetworkClassClient == nil {
-		return out
+		return out, dnsServers, dnsSearch
 	}
 	if c, err := s.NetworkClassClient.Get(ctx, &networkv1.GetNetworkClassRequest{Id: n.GetSpec().GetNetworkClass()}); err == nil {
 		out.NetworkClass, out.NetworkClassAttributes, out.MTU = c.GetMeta().GetName(), c.GetSpec().GetAttributes(), c.GetSpec().GetMtu()
+		if len(dnsServers) == 0 {
+			defaults := c.GetSpec().GetDefaultDnsServers()
+			if d, ok := defaults[sn.GetSpec().GetZone()]; ok {
+				dnsServers = d.GetServers()
+			} else {
+				dnsServers = defaults["*"].GetServers()
+			}
+		}
 	}
-	return out
+	return out, dnsServers, dnsSearch
 }
 
 // waitForAllocation polls ifaceID until its IP allocation completes

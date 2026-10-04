@@ -71,18 +71,39 @@ while [ $i -lt 8 ]; do
   ip_val=""
   gw_val=""
   primary_val=""
+  mtu_val=""
+  dns_val=""
+  search_val=""
   for arg in $(cat /proc/cmdline); do
     case "$arg" in
       kyuusha.net.$i.ip=*) ip_val=${arg#*=} ;;
       kyuusha.net.$i.gw=*) gw_val=${arg#*=} ;;
       kyuusha.net.$i.primary=*) primary_val=${arg#*=} ;;
+      kyuusha.net.$i.mtu=*) mtu_val=${arg#*=} ;;
+      kyuusha.net.$i.dns=*) dns_val=${arg#*=} ;;
+      kyuusha.net.$i.search=*) search_val=${arg#*=} ;;
     esac
   done
 
   if [ -n "$ip_val" ]; then
+    # MTU from the interface's NetworkClass (docs/specs/network.md), before
+    # the link comes up.
+    if [ -n "$mtu_val" ]; then
+      ip link set "eth$i" mtu "$mtu_val"
+    fi
     ip link set "eth$i" up
     ip addr add "$ip_val" dev "eth$i"
-    echo "kyuusha: eth$i configured ip=$ip_val"
+    echo "kyuusha: eth$i configured ip=$ip_val mtu=$(cat /sys/class/net/eth$i/mtu)"
+    # Resolver settings ride on the primary interface only (one
+    # /etc/resolv.conf per guest).
+    if [ "$primary_val" = "1" ] && { [ -n "$dns_val" ] || [ -n "$search_val" ]; }; then
+      : > /etc/resolv.conf
+      [ -n "$search_val" ] && echo "search $search_val" >> /etc/resolv.conf
+      for ns in $(echo "$dns_val" | tr ',' ' '); do
+        echo "nameserver $ns" >> /etc/resolv.conf
+      done
+      echo "kyuusha: resolv.conf nameservers=$dns_val search=$search_val"
+    fi
 
     if [ -n "$gw_val" ]; then
       if [ "$primary_val" = "1" ]; then

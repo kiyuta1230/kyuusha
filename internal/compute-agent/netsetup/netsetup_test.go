@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"

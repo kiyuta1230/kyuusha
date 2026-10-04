@@ -622,6 +622,8 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.Net
 			PrefixLen:    prefixLen,
 			GatewayIP:    ni.GatewayIP,
 			Attach:       vmm.AttachInfo(ni.Attach),
+			DNSServers:   ni.DNSServers,
+			DNSSearch:    ni.DNSSearch,
 			Primary:      ni.Primary,
 			SubnetCIDR:   ni.CIDR,
 			IngressRules: toVMMFirewallRules(ni.IngressRules),

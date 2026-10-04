@@ -411,7 +411,26 @@ func (f *FakeNetworkClient) Get(ctx context.Context, req *networkv1.GetNetworkRe
 	}
 	return &networkv1.Network{
 		Meta:   &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId(), Labels: map[string]string{"k": "v"}},
-		Spec:   &networkv1.NetworkSpec{NetworkClass: "netclass-1"},
+		Spec:   &networkv1.NetworkSpec{NetworkClass: "netclass-1", DnsSuffix: "cluster.example"},
 		Status: &networkv1.NetworkStatus{Phase: "Ready", Values: map[string]int64{"route_target": 65001}},
+	}, nil
+}
+
+// FakeNetworkClassClient is a minimal networkv1.NetworkClassServiceClient:
+// Get returns a class with an MTU and per-zone default resolvers.
+type FakeNetworkClassClient struct {
+	networkv1.NetworkClassServiceClient
+}
+
+func (f *FakeNetworkClassClient) Get(ctx context.Context, req *networkv1.GetNetworkClassRequest, opts ...grpc.CallOption) (*networkv1.NetworkClass, error) {
+	return &networkv1.NetworkClass{
+		Meta: &resourcev1.ObjectMeta{Id: req.GetId(), Name: "std"},
+		Spec: &networkv1.NetworkClassSpec{
+			Mtu: 1450,
+			DefaultDnsServers: map[string]*networkv1.ZoneDNS{
+				"zone-a": {Servers: []string{"10.0.0.53"}},
+				"*":      {Servers: []string{"10.255.0.53"}},
+			},
+		},
 	}, nil
 }

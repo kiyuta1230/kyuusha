@@ -298,7 +298,13 @@ VNAPプラグイン）。NetworkInterfaceごとに専用のtapデバイス（名
 ないため。代わりに、compute-agentがboot_argsへ`kyuusha.net.<index>.ip=<ip>/<prefix>`
 のような独自のカーネルコマンドライン規約を追記し、ゲスト側の`/init`
 （`docker/fc-guest-init.sh`）が`/proc/cmdline`から直接パースして`ip addr add`
-する。`primary`なインタフェースだけがゲスト側のデフォルトルートを持つ。設定が終わると
+する。`primary`なインタフェースだけがゲスト側のデフォルトルートを持つ。規約の一覧:
+`kyuusha.net.<i>.ip=<ip>/<prefix>`、`.gw=<gateway>`、`.primary=1`、`.mtu=<mtu>`（NetworkClassの
+`mtu`、0なら付けない）、`.dns=<ip>[,<ip>...]`と`.search=<domain>`（primaryのみ。
+リゾルバはSubnetの`dns_servers`、空ならNetworkClassのそのzoneの既定（無ければ`"*"`の既定）、
+searchはNetworkの`dns_suffix`——`/init`が`/etc/resolv.conf`に書く）。cloud-init NoCloudの
+network-config（[cloud-hypervisor起動仕様](cloud-hypervisor-boot.md)参照）にも同じ
+MTU（`mtu`）とリゾルバ（`nameservers`）を書く。設定が終わると
 `/init`はそのインタフェースのgateway_ip（＝ホスト側ブリッジのIP）へpingを打ち、結果を
 シリアルコンソールに書く（`kyuusha vm console`で確認できる）——tap配線が実際に機能して
 いることを、2台目のVMを用意しなくても1台のコンソール出力だけで確認できるようにする

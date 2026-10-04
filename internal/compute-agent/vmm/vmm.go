@@ -302,9 +302,14 @@ type NetIface struct {
 	PrefixLen    int
 	GatewayIP    string
 	// Attach is the Network/NetworkClass context and the Subnet's
-	// allocated values, handed to VNAP/SNAP plugins as-is.
+	// allocated values, handed to VNAP/SNAP plugins as-is. Attach.MTU is
+	// also the guest MTU (0: guest default).
 	Attach  AttachInfo
 	Primary bool
+	// DNSServers/DNSSearch are the guest resolver settings (compute.
+	// NetworkInterfaceInfo's), applied for the primary interface.
+	DNSServers []string
+	DNSSearch  string
 	// SubnetCIDR is this interface's Subnet's own CIDR (compute.
 	// NetworkInterfaceInfo.CIDR verbatim) -- used by snap's default
 	// nftacl implementation to build the "allow within own Subnet"

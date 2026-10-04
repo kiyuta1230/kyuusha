@@ -7,6 +7,14 @@
 
 ## 2026-10-05
 
+- **NetworkClassのDNSリゾルバ・MTU・gatewayの決め方をゲストまで効かせた**（変更依頼A9の
+  実装順序5）。リゾルバはSubnetの`dns_servers`、空ならClassのzoneごとの既定、searchは
+  Networkの`dns_suffix`。MTUはClassの`mtu`。いずれもカーネルコマンドライン規約
+  （`kyuusha.net.<i>.mtu/dns/search`、ゲストの`/init`が適用）とcloud-initの
+  network-configの両方に渡す（それまでkyuushaはゲストにDNSを一切設定していなかった）。
+  playgroundで、`gateway_placement: LAST`・`mtu: 1450`・zone既定のリゾルバを持つClassの
+  Network（`dns_suffix`付き）にVMを立て、ゲストがMTU 1450・`resolv.conf`に既定リゾルバと
+  search・末尾のgateway（.254）への疎通を得ることを確認
 - **Subnetの上位概念`Network`と、払い出しの仕組み`NetworkClass`/`AllocationPool`を導入した**
   （kyuusha-vpcからの変更依頼A9のうち、実装順序の1〜3: リソースとSubnetの払い出し、VMからの
   Network＋AZ指定、Network単位の払い出しとルーティングドメインに関する設計の書き直し）。

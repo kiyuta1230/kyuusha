@@ -511,6 +511,15 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		}
 		if ni.Primary {
 			netArgs = append(netArgs, fmt.Sprintf("kyuusha.net.%d.primary=1", i))
+			if len(ni.DNSServers) > 0 {
+				netArgs = append(netArgs, fmt.Sprintf("kyuusha.net.%d.dns=%s", i, strings.Join(ni.DNSServers, ",")))
+			}
+			if ni.DNSSearch != "" {
+				netArgs = append(netArgs, fmt.Sprintf("kyuusha.net.%d.search=%s", i, ni.DNSSearch))
+			}
+		}
+		if ni.Attach.MTU > 0 {
+			netArgs = append(netArgs, fmt.Sprintf("kyuusha.net.%d.mtu=%d", i, ni.Attach.MTU))
 		}
 	}
 

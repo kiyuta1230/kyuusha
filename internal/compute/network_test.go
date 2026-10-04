@@ -154,3 +154,21 @@ func TestCreateNetworkInterfaces_AttachInfoFromNetwork(t *testing.T) {
 		t.Fatalf("info = %+v", infos[0])
 	}
 }
+
+func TestCreateNetworkInterfaces_ResolverAndMTUFromClass(t *testing.T) {
+	ctx := t.Context()
+	for _, tc := range []struct {
+		zone string
+		want string
+	}{{"zone-a", "10.0.0.53"}, {"zone-z", "10.255.0.53"}} {
+		s := &Service{subnetClient: &FakeSubnetClient{Zone: tc.zone}, netifClient: &FakeNetworkInterfaceClient{}, NetworkClient: &FakeNetworkClient{}, NetworkClassClient: &FakeNetworkClassClient{}}
+		infos, err := s.createNetworkInterfaces(ctx, "tenant-a", "vm-1", tc.zone, []NetworkAttachment{{NetworkID: "network-1", Primary: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := infos[0]
+		if len(i.DNSServers) != 1 || i.DNSServers[0] != tc.want || i.DNSSearch != "cluster.example" || i.Attach.MTU != 1450 || i.Attach.NetworkClass != "std" {
+			t.Fatalf("zone %s: info = %+v, want resolver %s, search cluster.example, mtu 1450", tc.zone, i, tc.want)
+		}
+	}
+}
