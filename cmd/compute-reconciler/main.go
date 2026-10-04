@@ -178,6 +178,8 @@ func main() {
 		slog.Error("new compute service", "err", err)
 		os.Exit(1)
 	}
+	svc.NetworkClient = networkv1.NewNetworkServiceClient(networkConn)
+	svc.NetworkClassClient = networkv1.NewNetworkClassServiceClient(networkConn)
 	prometheus.MustRegister(compute.NewMetricsCollector(svc))
 
 	slog.Info("compute-reconciler: starting")

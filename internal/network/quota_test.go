@@ -17,20 +17,20 @@ func TestService_CreateSubnetEnforcesQuota(t *testing.T) {
 	}
 	const tenant = "tenant-a"
 
-	first, err := svc.CreateSubnet(ctx, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	first, err := svc.CreateSubnet(ctx, tenant, "subnet-1", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.1.0/24", ""))
 	if err != nil {
 		t.Fatalf("first CreateSubnet: %v", err)
 	}
-	if _, err := svc.CreateSubnet(ctx, tenant, "subnet-2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"}); err != nil {
+	if _, err := svc.CreateSubnet(ctx, tenant, "subnet-2", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.2.0/24", "")); err != nil {
 		t.Fatalf("second CreateSubnet (within quota): %v", err)
 	}
-	if _, err := svc.CreateSubnet(ctx, tenant, "subnet-3", SubnetSpec{Zone: "zone-a", CIDR: "10.0.3.0/24"}); !errors.Is(err, ErrQuotaExceeded) {
+	if _, err := svc.CreateSubnet(ctx, tenant, "subnet-3", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.3.0/24", "")); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("third CreateSubnet over max_subnets=2: got %v, want ErrQuotaExceeded", err)
 	}
 
 	// Idempotent re-Create of an existing name must not re-charge quota or
 	// be rejected by the already-exhausted quota.
-	again, err := svc.CreateSubnet(ctx, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	again, err := svc.CreateSubnet(ctx, tenant, "subnet-1", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.1.0/24", ""))
 	if err != nil {
 		t.Fatalf("idempotent re-CreateSubnet: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestService_CreateSubnetEnforcesQuota(t *testing.T) {
 	if err := svc.DeleteSubnet(ctx, tenant, first.Meta.ID); err != nil {
 		t.Fatalf("DeleteSubnet: %v", err)
 	}
-	if _, err := svc.CreateSubnet(ctx, tenant, "subnet-4", SubnetSpec{Zone: "zone-a", CIDR: "10.0.4.0/24"}); err != nil {
+	if _, err := svc.CreateSubnet(ctx, tenant, "subnet-4", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.4.0/24", "")); err != nil {
 		t.Fatalf("CreateSubnet after DeleteSubnet freed quota: %v", err)
 	}
 }
@@ -55,7 +55,7 @@ func TestService_CreateNetworkInterfaceEnforcesQuota(t *testing.T) {
 	}
 	const tenant = "tenant-a"
 
-	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.1.0/24", ""))
 
 	first, err := svc.CreateNetworkInterface(ctx, tenant, "netif-1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: subnet.Meta.ID})
 	if err != nil {
@@ -94,7 +94,7 @@ func TestService_NewServiceRebuildsUsageFromExistingSubnetsAndNetworkInterfaces(
 	if err != nil {
 		t.Fatalf("NewService (first): %v", err)
 	}
-	subnet := mustCreateAndAllocateSubnet(t, ctx, svc1, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	subnet := mustCreateAndAllocateSubnet(t, ctx, svc1, tenant, "subnet-1", userSubnet(t, ctx, svc1, tenant, "zone-a", "10.0.1.0/24", ""))
 	if _, err := svc1.CreateNetworkInterface(ctx, tenant, "netif-1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: subnet.Meta.ID}); err != nil {
 		t.Fatalf("CreateNetworkInterface: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestService_NewServiceRebuildsUsageFromExistingSubnetsAndNetworkInterfaces(
 		t.Fatalf("NewService (second, simulating a restart): %v", err)
 	}
 
-	if _, err := svc2.CreateSubnet(ctx, tenant, "subnet-2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"}); !errors.Is(err, ErrQuotaExceeded) {
+	if _, err := svc2.CreateSubnet(ctx, tenant, "subnet-2", userSubnet(t, ctx, svc2, tenant, "zone-a", "10.0.2.0/24", "")); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("CreateSubnet (after restart, over max_subnets=1): got %v, want ErrQuotaExceeded -- rebuildUsage did not restore usage's state", err)
 	}
 	if _, err := svc2.CreateNetworkInterface(ctx, tenant, "netif-2", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: subnet.Meta.ID}); !errors.Is(err, ErrQuotaExceeded) {

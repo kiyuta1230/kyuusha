@@ -24,9 +24,13 @@ enum VmmDriver {
   VMM_DRIVER_CLOUD_HYPERVISOR = 2;
 }
 
+// NetworkAttachment asks for one NIC on a Network (network_id), in the
+// VM's zone; the network service picks a Subnet with a free address.
+// subnet_id instead pins a specific Subnet (its zone must be the VM's).
 message NetworkAttachment {
   string subnet_id = 1;
   bool primary = 2;
+  string network_id = 3;
 }
 
 message VolumeRequest {
@@ -67,6 +71,10 @@ message VirtualMachineSpec {
   // see NumaNode's doc comment). CLOUD_HYPERVISOR and FIRECRACKER both
   // support this (unlike pci_devices, not driver-restricted).
   bool numa_pinned = 11;
+  // The Availability Zone to run in -- the client's choice (kyuusha never
+  // picks a zone). Required when any network_interfaces entry names only a
+  // Network; otherwise taken from the pinned Subnets (which must agree).
+  string zone = 12;
 }
 
 message VirtualMachineStatus {

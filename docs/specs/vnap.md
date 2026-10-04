@@ -17,8 +17,15 @@
   CNI用語は使わない
 - **attachのpayload**（全フィールド）: `tap_name`/`iface_id`/`vm_id`/`tenant_id`/
   `subnet_id`/`zone`/`subnet_labels`/`mac_address`/`ip_address`/`subnet_cidr`/`prefix_len`/
-  `gateway_ip`/`vlan_id`/`primary`——`subnet_id`/`zone`があるので、プラグインは
-  受け取ったtapがどのSubnetのものかを(zone, vlan_id)から逆引きする必要が無い。
+  `gateway_ip`/`primary`、およびNetwork/NetworkClassの文脈: `network_id`/
+  `network_labels`/`network_class`（Classの名前）/`network_class_attributes`/
+  `network_values`/`network_attributes`（Network単位で払い出された値・属性）/
+  `subnet_values`/`subnet_attributes`（Subnet単位で払い出された値・属性。例:
+  `{"vlan_id": 300}`）/`mtu`——`subnet_id`/`zone`があるので、プラグインは受け取ったtapが
+  どのSubnetのものかを逆引きする必要が無い。払い出された値に固定の名前は無い
+  （NetworkClassとAllocationPoolで管理者が名前を決める、[network仕様](network.md)
+  「リソース」）——例えば`vlan-trunk.sh`は`subnet_values.vlan_id`を802.1Qタグとして使う。
+  1つのホストのプラグインが、`network_class`や属性を見てClassごとに配線を切り替えてよい。
   `subnet_labels`はSubnetの`meta.labels`（[外部システム連携仕様](external-integration.md)
   「ラベルとアノテーション」）の、VMがスケジュールされた時点のスナップショット——
   その後にSubnetのラベルを変えても、稼働中のVMのattachは呼び直されない。
@@ -39,7 +46,8 @@
 **参考実装**:
 
 - `examples/vnap-plugins/vlan-trunk.sh`——VLANトランク（Type-2、本ガイドの既定の前提）
-  デプロイ向け。組み込みのLinuxブリッジ実装（`kbr<vlan_id>`）と同じ配線に加えて、
+  デプロイ向け。組み込みのLinuxブリッジ実装と同じ配線（ただしブリッジはVLAN IDごと:
+  `kbr<subnet_values.vlan_id>`）に加えて、
   アップリンクNICへ802.1Qタグ付きVLANサブインターフェースを作成しそのブリッジへ
   加えることで、組み込み実装には無い**実際のホスト跨ぎL2疎通**を実現する。
   **純粋なL2の延伸に徹し、ブリッジに`gateway_ip`を付けない**（組み込み実装との違い）

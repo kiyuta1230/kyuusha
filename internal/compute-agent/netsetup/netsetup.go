@@ -1,9 +1,9 @@
 // Package netsetup wires a VM's NetworkInterface (see docs/specs/
 // network.md) to a real Linux tap device on this compute-agent's own host,
 // inside its own network namespace. This is deliberately scoped to
-// same-hypervisor connectivity only: every tap for a given Subnet's
-// vlan_id is attached to one Linux bridge per (compute-agent process,
-// vlan_id), and that bridge is given the Subnet's gateway_ip so it acts as
+// same-hypervisor connectivity only: every tap of a given Subnet is
+// attached to one Linux bridge per (compute-agent process, Subnet), and
+// that bridge is given the Subnet's gateway_ip so it acts as
 // a real, pingable local gateway. Two VMs on the same Subnet but different
 // Hypervisors are NOT reachable from each other yet -- that needs a real
 // L2 extension between hosts (a VXLAN overlay or a VLAN trunk to a
@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 )
 
 // Interface is everything Wire needs for one VM network attachment,
@@ -51,7 +53,7 @@ type Interface struct {
 	SubnetCIDR   string
 	GatewayIP    string // the Subnet's gateway_ip; assigned to the VLAN bridge, not the tap
 	PrefixLen    int    // the Subnet CIDR's prefix length, for the bridge's gateway_ip/PrefixLen address
-	VLANID       int32
+	Attach       vmm.AttachInfo
 	Primary      bool
 }
 
@@ -67,7 +69,7 @@ type Wired struct {
 // own job, regardless of attachBin -- see the package doc comment), then
 // attaches it to a local switch: the built-in Linux bridge implementation
 // (ensures iface's VLAN bridge exists, creating it and assigning it
-// GatewayIP the first time any interface for that vlan_id is wired on this
+// GatewayIP the first time any interface of that Subnet is wired on this
 // host) when attachBin is empty, or an external VNAP plugin (see Plugin's
 // doc comment) when it isn't. Idempotent either way: safe to call again
 // for a tap that already exists, or a bridge another interface already
@@ -89,7 +91,7 @@ func Wire(iface Interface, attachBin string) (*Wired, error) {
 }
 
 func wireBuiltinBridge(iface Interface, tap string) error {
-	br := bridgeName(iface.VLANID)
+	br := bridgeName(iface.SubnetID)
 	if err := ensureBridge(br, iface.GatewayIP, iface.PrefixLen); err != nil {
 		return err
 	}
@@ -134,8 +136,13 @@ func TapName(ifaceID string) string {
 	return "tap" + hex.EncodeToString(sum[:6]) // "tap" + 12 hex chars = 15
 }
 
-func bridgeName(vlanID int32) string {
-	return fmt.Sprintf("kbr%d", vlanID)
+// bridgeName derives the built-in wiring's per-Subnet bridge name from the
+// Subnet id ("kbr" + 12 hex chars = 15, IFNAMSIZ-1): one bridge per Subnet
+// per host. A Subnet's allocated values (e.g. a vlan_id) mean nothing to
+// the built-in path, which never leaves the host.
+func bridgeName(subnetID string) string {
+	sum := sha256.Sum256([]byte("subnet/" + subnetID))
+	return "kbr" + hex.EncodeToString(sum[:6])
 }
 
 func ensureBridge(name, gatewayIP string, prefixLen int) error {
@@ -207,8 +214,10 @@ type pluginRequest struct {
 	SubnetCIDR   string            `json:"subnet_cidr,omitempty"`
 	PrefixLen    int               `json:"prefix_len,omitempty"`
 	GatewayIP    string            `json:"gateway_ip,omitempty"`
-	VLANID       int32             `json:"vlan_id,omitempty"`
 	Primary      bool              `json:"primary,omitempty"`
+	// Network/NetworkClass context and allocated values, flattened into
+	// the payload (network_id, subnet_values, ...).
+	vmm.AttachInfo
 }
 
 func attachRequest(iface Interface, tap string) pluginRequest {
@@ -216,7 +225,7 @@ func attachRequest(iface Interface, tap string) pluginRequest {
 		TapName: tap, IfaceID: iface.IfaceID, VMID: iface.VMID, TenantID: iface.TenantID,
 		SubnetID: iface.SubnetID, Zone: iface.Zone, SubnetLabels: iface.SubnetLabels,
 		MACAddress: iface.MACAddress, IPAddress: iface.IPAddress, SubnetCIDR: iface.SubnetCIDR, PrefixLen: iface.PrefixLen,
-		GatewayIP: iface.GatewayIP, VLANID: iface.VLANID, Primary: iface.Primary,
+		GatewayIP: iface.GatewayIP, Primary: iface.Primary, AttachInfo: iface.Attach,
 	}
 }
 

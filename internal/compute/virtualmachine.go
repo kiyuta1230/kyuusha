@@ -60,9 +60,12 @@ func validatePciDevicesForDriver(devices []PciDeviceRequest, driver VmmDriver) e
 	return fmt.Errorf("%w: spec.pci_devices requires driver_hint %s, got %s", ErrValidation, VmmDriverCloudHypervisor, driver)
 }
 
+// NetworkAttachment asks for one NIC on a Network in the VM's zone (the
+// network service picks the Subnet), or pins a SubnetID.
 type NetworkAttachment struct {
-	SubnetID string
-	Primary  bool
+	SubnetID  string
+	NetworkID string
+	Primary   bool
 }
 
 type VolumeRequest struct {
@@ -90,6 +93,9 @@ type VirtualMachineSpec struct {
 	// docs/architecture.md's NUMA/CPUピニング section) -- unlike PciDevices,
 	// not restricted to any particular driver_hint.
 	NumaPinned bool
+	// Zone is where the VM runs: the client's choice, or (when every
+	// attachment pins a Subnet) taken from those Subnets at Create.
+	Zone string
 }
 
 type Phase string

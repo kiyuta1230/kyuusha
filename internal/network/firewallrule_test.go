@@ -53,7 +53,7 @@ func TestService_UpdateFirewallRulesReplacesBothLists(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	const tenant = "tenant-a"
-	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.1.0/24", ""))
 	n := mustCreateAndAllocateNetworkInterface(t, ctx, svc, tenant, "netif-1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: subnet.Meta.ID}, subnet)
 
 	ingress := []FirewallRule{{Protocol: "tcp", PortRange: "22", SourceCIDR: "0.0.0.0/0", Action: "allow"}}
@@ -87,7 +87,7 @@ func TestService_UpdateFirewallRulesRejectsInvalidRule(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	const tenant = "tenant-a"
-	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.1.0/24", ""))
 	n := mustCreateAndAllocateNetworkInterface(t, ctx, svc, tenant, "netif-1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: subnet.Meta.ID}, subnet)
 
 	cases := []FirewallRule{
@@ -111,7 +111,7 @@ func TestService_UpdateNetworkInterfaceRejectsFirewallRuleChange(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	const tenant = "tenant-a"
-	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.1.0/24", ""))
 	n := mustCreateAndAllocateNetworkInterface(t, ctx, svc, tenant, "netif-1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: subnet.Meta.ID}, subnet)
 
 	mutated := *n
@@ -176,12 +176,12 @@ func TestService_UpdateFirewallRulesPublishesUpdateACLWhenScheduled(t *testing.T
 		t.Fatalf("NewService: %v", err)
 	}
 	const tenant = "tenant-a"
-	subnet, err := svc.CreateSubnetWithMetadata(ctx, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"},
+	subnet, err := svc.CreateSubnetWithMetadata(ctx, tenant, "subnet-1", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.1.0/24", "10.0.1.1"),
 		resource.Metadata{Labels: map[string]string{"vpc.example.com/id": "vpc-1"}})
 	if err != nil {
 		t.Fatalf("CreateSubnetWithMetadata: %v", err)
 	}
-	svc.tryAllocateVLAN(ctx, subnet)
+	svc.tryAllocateSubnet(ctx, subnet)
 	n := mustCreateAndAllocateNetworkInterface(t, ctx, svc, tenant, "netif-1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: subnet.Meta.ID}, subnet)
 
 	received := subscribeUpdateACLCommands(t, ctx, js, "hypervisor-1")
@@ -227,7 +227,7 @@ func TestService_UpdateFirewallRulesDoesNotPublishWhenUnscheduled(t *testing.T) 
 		t.Fatalf("NewService: %v", err)
 	}
 	const tenant = "tenant-a"
-	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	subnet := mustCreateAndAllocateSubnet(t, ctx, svc, tenant, "subnet-1", userSubnet(t, ctx, svc, tenant, "zone-a", "10.0.1.0/24", ""))
 	n := mustCreateAndAllocateNetworkInterface(t, ctx, svc, tenant, "netif-1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: subnet.Meta.ID}, subnet)
 
 	// No hypervisor is known, so there's no meaningful subject to watch --

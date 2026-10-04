@@ -11,62 +11,33 @@ package network
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net"
-	"slices"
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 )
 
-type SubnetSpec struct {
-	Zone       string
-	CIDR       string
-	GatewayIP  string
-	DNSServers []string
-	DNSSuffix  string
-	// MeshGroup declares intent only (see docs/specs/network.md): Subnets
-	// sharing a non-empty MeshGroup (same tenant only) are meant to
-	// default-allow each other, bypassing the normal cross-Subnet deny.
-	// Nothing enforces this yet -- no ACL engine exists, the same stage
-	// IngressRules itself is in.
-	MeshGroup string
-	// AllocatableIPRanges restricts IPAM to these "<start>-<end>" IPv4
-	// ranges instead of the whole CIDR (see ipam.go); empty means the
-	// default (whole CIDR minus network/broadcast/GatewayIP).
-	AllocatableIPRanges []string
-	// UniqueCidr declares that this Subnet's CIDR must not overlap any
-	// other Subnet (any tenant) that also has UniqueCidr true -- checked at
-	// Create/Update time (see validateUniqueCIDR). false (the default)
-	// keeps today's behavior: CIDR overlap across different
-	// mesh_groups/tenants is fine (different VRF/VLAN). Independent of
-	// Visibility -- see docs/specs/network.md.
-	UniqueCidr bool
-	// Visibility and SharedWithTenantIDs mirror image.Visibility/
-	// image.Spec.SharedWithTenantIDs exactly: who besides the owning
-	// tenant may actually attach a NetworkInterface to this Subnet (see
-	// subnetUsableBy). Not the same thing field 5 used to be (that was
-	// ACL-reference-only consent, removed -- see the proto's own comment).
-	//
-	// Visibility=SubnetVisibilityPublic (open to any tenant, unvetted)
-	// requires UniqueCidr -- see CreateSubnet/UpdateSubnet's own guard: the
-	// no-purposeless-L2-sharing principle (docs/architecture.md「テナント間
-	// でのSubnet共有」) only accepts this on Public IP address space.
-	// SharedWithTenantIDs (an explicit, owner-named allowlist -- e.g.
-	// injecting a managed-service provider's VM directly into the owner's
-	// own Subnet) has no such requirement: the owner's per-tenant consent
-	// is itself the safeguard, on any Subnet.
-	Visibility          SubnetVisibility
-	SharedWithTenantIDs []string
+// SubnetAddress is one address family's CIDR and gateway.
+type SubnetAddress struct {
+	CIDR      string
+	GatewayIP string
 }
 
-type SubnetVisibility string
-
-const (
-	SubnetVisibilityUnspecified SubnetVisibility = "" // defaults to PRIVATE at Create time
-	SubnetVisibilityPrivate     SubnetVisibility = "PRIVATE"
-	SubnetVisibilityPublic      SubnetVisibility = "PUBLIC"
-)
+// SubnetSpec is the user-written half of a Subnet: what is being asked
+// for. Everything kyuusha allocates (addresses, named values, attributes)
+// lives in SubnetStatus, which Update never changes.
+type SubnetSpec struct {
+	NetworkID string // required, immutable
+	Zone      string // required, immutable
+	// RequestedAddresses is only for a NetworkClass whose CIDR pool is
+	// user-specified (USER_ANY/USER_WITHIN_BLOCKS); immutable.
+	RequestedAddresses []SubnetAddress
+	// DNSServers empty means the NetworkClass's default for Zone.
+	DNSServers []string
+	// AllocatableIPRanges restricts IPAM to these "<start>-<end>" IPv4
+	// ranges instead of the whole CIDR (see ipam.go); empty means the
+	// default (whole CIDR minus network/broadcast/gateway).
+	AllocatableIPRanges []string
+}
 
 type SubnetPhase string
 
@@ -78,9 +49,23 @@ const (
 )
 
 type SubnetStatus struct {
-	Phase      SubnetPhase
-	Conditions []resource.Condition
-	VLANID     int32
+	Phase       SubnetPhase
+	Conditions  []resource.Condition
+	Addresses   []SubnetAddress // effective, at most one per address family
+	Values      map[string]int64
+	Attributes  map[string]string
+	Allocations []Allocation
+}
+
+// IPv4 returns the Subnet's effective IPv4 CIDR and gateway ("" until
+// allocated) -- the only family kyuusha's IPAM hands addresses out of.
+func (s SubnetStatus) IPv4() (cidr, gatewayIP string) {
+	for _, a := range s.Addresses {
+		if familyOf(a.CIDR) == FamilyIPv4 {
+			return a.CIDR, a.GatewayIP
+		}
+	}
+	return "", ""
 }
 
 type Subnet struct {
@@ -105,20 +90,6 @@ func (s *Subnet) GetDeletedAt() *time.Time             { return s.Meta.DeletedAt
 func (s *Subnet) SetDeletedAt(t *time.Time)            { s.Meta.DeletedAt = t }
 func (s *Subnet) GetFinalizers() []resource.Finalizer  { return s.Meta.Finalizers }
 func (s *Subnet) SetFinalizers(f []resource.Finalizer) { s.Meta.Finalizers = f }
-
-// subnetUsableBy mirrors image.visibleTo exactly: true if tenantID may
-// attach a NetworkInterface to sn -- sn's own owner, a PUBLIC sn (any
-// tenant), or a PRIVATE sn that explicitly names tenantID in
-// shared_with_tenant_ids.
-func subnetUsableBy(sn Subnet, tenantID string) bool {
-	if sn.Meta.TenantID == tenantID {
-		return true
-	}
-	if sn.Spec.Visibility == SubnetVisibilityPublic {
-		return true
-	}
-	return slices.Contains(sn.Spec.SharedWithTenantIDs, tenantID)
-}
 
 // getSubnetForInterface resolves subnetID for a NetworkInterface Create or
 // enforcement pass, allowing cross-tenant resolution (unlike a plain
@@ -146,36 +117,4 @@ func (s *Service) getSubnetForInterface(ctx context.Context, tenantID, subnetID 
 		}
 	}
 	return Subnet{}, ErrSubnetNotFound
-}
-
-// validateUniqueCIDR implements SubnetSpec.unique_cidr: when unique, cidr
-// must not overlap any other Subnet (any tenant, including the same one --
-// unlike shared_with_tenant_ids's same-tenant exemption, two of your own
-// unique_cidr Subnets overlapping is still wrong) that also has unique_cidr
-// set. excludeSubnetID skips a Subnet's own prior record on Update. Reuses
-// cidrsOverlap (firewallrule.go), the same overlap check
-// validateCrossTenantRules used to.
-func (s *Service) validateUniqueCIDR(ctx context.Context, excludeSubnetID, cidr string) error {
-	_, cidrNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return err // already rejected by the caller's own CIDR parse
-	}
-	all, err := s.subnets.List(ctx, "")
-	if err != nil {
-		return err
-	}
-	for _, sn := range all {
-		if sn.Meta.ID == excludeSubnetID || !sn.Spec.UniqueCidr {
-			continue
-		}
-		_, snNet, err := net.ParseCIDR(sn.Spec.CIDR)
-		if err != nil {
-			continue
-		}
-		if cidrsOverlap(cidrNet, snNet) {
-			return fmt.Errorf("%w: cidr %q overlaps unique_cidr Subnet %q (tenant %q, cidr %q)",
-				ErrValidation, cidr, sn.Meta.ID, sn.Meta.TenantID, sn.Spec.CIDR)
-		}
-	}
-	return nil
 }

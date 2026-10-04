@@ -138,8 +138,10 @@ func toFirewallRule(r network.FirewallRule) *networkv1.FirewallRule {
 
 func fromNetworkInterfaceSpec(s *networkv1.NetworkInterfaceSpec) network.NetworkInterfaceSpec {
 	spec := network.NetworkInterfaceSpec{
-		VMID:     s.GetVmId(),
-		SubnetID: s.GetSubnetId(),
+		VMID:      s.GetVmId(),
+		SubnetID:  s.GetSubnetId(),
+		NetworkID: s.GetNetworkId(),
+		Zone:      s.GetZone(),
 	}
 	for _, r := range s.GetIngressRules() {
 		spec.IngressRules = append(spec.IngressRules, fromFirewallRule(r))
@@ -152,8 +154,10 @@ func fromNetworkInterfaceSpec(s *networkv1.NetworkInterfaceSpec) network.Network
 
 func toNetworkInterfaceSpec(s network.NetworkInterfaceSpec) *networkv1.NetworkInterfaceSpec {
 	out := &networkv1.NetworkInterfaceSpec{
-		VmId:     s.VMID,
-		SubnetId: s.SubnetID,
+		VmId:      s.VMID,
+		SubnetId:  s.SubnetID,
+		NetworkId: s.NetworkID,
+		Zone:      s.Zone,
 	}
 	for _, r := range s.IngressRules {
 		out.IngressRules = append(out.IngressRules, toFirewallRule(r))
@@ -178,6 +182,7 @@ func toNetworkInterfaceStatusProto(st network.NetworkInterfaceStatus) *networkv1
 		IpAddress:  st.IPAddress,
 		MacAddress: st.MACAddress,
 		Hypervisor: st.Hypervisor,
+		SubnetId:   st.SubnetID,
 	}
 	for _, c := range st.Conditions {
 		out.Conditions = append(out.Conditions, toConditionProto(c))
@@ -191,6 +196,7 @@ func fromNetworkInterfaceStatusProto(st *networkv1.NetworkInterfaceStatus) netwo
 		IPAddress:  st.GetIpAddress(),
 		MACAddress: st.GetMacAddress(),
 		Hypervisor: st.GetHypervisor(),
+		SubnetID:   st.GetSubnetId(),
 	}
 	for _, c := range st.GetConditions() {
 		out.Conditions = append(out.Conditions, fromConditionProto(c))

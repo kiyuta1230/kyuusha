@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"strconv"
 	"testing"
+
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 )
 
 // TestWireCreatesTapAndBridge exercises the real tap/bridge creation path.
@@ -22,7 +25,7 @@ func TestWireCreatesTapAndBridge(t *testing.T) {
 		MACAddress: "02:00:00:00:00:01",
 		GatewayIP:  "10.123.45.1",
 		PrefixLen:  24,
-		VLANID:     4093, // unlikely to collide with a real VLAN in any real environment
+		SubnetID:   "subnet-netsetup-test",
 	}, "")
 	if err != nil {
 		t.Skipf("skipping: tap/bridge creation needs CAP_NET_ADMIN + /dev/net/tun: %v", err)
@@ -42,7 +45,7 @@ func TestWireCreatesTapAndBridge(t *testing.T) {
 		MACAddress: "02:00:00:00:00:01",
 		GatewayIP:  "10.123.45.1",
 		PrefixLen:  24,
-		VLANID:     4093,
+		SubnetID:   "subnet-netsetup-test",
 	}, ""); err != nil {
 		t.Fatalf("re-Wire of the same interface: %v", err)
 	}
@@ -77,7 +80,8 @@ func TestWireInvokesExternalPluginWithFullAttachPayload(t *testing.T) {
 		IfaceID: "test-iface-plugin", VMID: "vm-1", TenantID: "tenant-1",
 		SubnetID: "subnet-1", Zone: "zone-a", SubnetLabels: map[string]string{"vpc.example.com/id": "vpc-1"},
 		MACAddress: "02:00:00:00:00:02", IPAddress: "10.9.9.5", SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
-		PrefixLen: 24, VLANID: 42, Primary: true,
+		PrefixLen: 24, Primary: true,
+		Attach: vmm.AttachInfo{NetworkID: "network-1", NetworkClass: "vlan-std", SubnetValues: map[string]int64{"vlan_id": 300}},
 	}, plugin)
 	if err != nil {
 		t.Skipf("skipping: tap creation needs CAP_NET_ADMIN + /dev/net/tun: %v", err)
@@ -104,10 +108,14 @@ func TestWireInvokesExternalPluginWithFullAttachPayload(t *testing.T) {
 		TapName: wired.TapName, IfaceID: "test-iface-plugin", VMID: "vm-1", TenantID: "tenant-1",
 		SubnetID: "subnet-1", Zone: "zone-a", SubnetLabels: map[string]string{"vpc.example.com/id": "vpc-1"},
 		MACAddress: "02:00:00:00:00:02", IPAddress: "10.9.9.5", SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
-		PrefixLen: 24, VLANID: 42, Primary: true,
+		PrefixLen: 24, Primary: true,
+		AttachInfo: vmm.AttachInfo{NetworkID: "network-1", NetworkClass: "vlan-std", SubnetValues: map[string]int64{"vlan_id": 300}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("plugin attach payload = %+v, want %+v", got, want)
+	}
+	if !strings.Contains(string(stdin), `"subnet_values":{"vlan_id":300}`) || !strings.Contains(string(stdin), `"network_id":"network-1"`) {
+		t.Fatalf("attach context not flattened into the payload: %s", stdin)
 	}
 }
 
@@ -115,7 +123,7 @@ func TestDeleteTapDetachPayloadOmitsAttachOnlyFields(t *testing.T) {
 	dir := t.TempDir()
 	plugin := fakeVNAPPlugin(t, dir, 0)
 
-	wired, err := Wire(Interface{IfaceID: "test-iface-detach", VLANID: 42}, plugin)
+	wired, err := Wire(Interface{IfaceID: "test-iface-detach", SubnetID: "subnet-netsetup-test"}, plugin)
 	if err != nil {
 		t.Skipf("skipping: tap creation needs CAP_NET_ADMIN + /dev/net/tun: %v", err)
 	}
@@ -147,7 +155,7 @@ func TestDeleteTapStillDeletesTapWhenPluginDetachFails(t *testing.T) {
 	dir := t.TempDir()
 	failingPlugin := fakeVNAPPlugin(t, dir, 1)
 
-	wired, err := Wire(Interface{IfaceID: "test-iface-fail-detach", VLANID: 42}, "")
+	wired, err := Wire(Interface{IfaceID: "test-iface-fail-detach", SubnetID: "subnet-netsetup-test"}, "")
 	if err != nil {
 		t.Skipf("skipping: tap creation needs CAP_NET_ADMIN + /dev/net/tun: %v", err)
 	}

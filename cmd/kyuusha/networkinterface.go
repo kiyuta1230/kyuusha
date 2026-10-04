@@ -55,7 +55,9 @@ func netifCreate(args []string) {
 	labels := fs.String("labels", "", "comma-separated key=value meta.labels (see docs/specs/external-integration.md)")
 	annotations := fs.String("annotations", "", "comma-separated key=value meta.annotations (values can't contain commas here; use the API for that)")
 	vmID := fs.String("vm", "", "VM ID (required)")
-	subnetID := fs.String("subnet", "", "subnet ID (required)")
+	subnetID := fs.String("subnet", "", "subnet ID to pin to (or -network and -zone)")
+	networkID := fs.String("network", "", "Network ID; kyuusha picks a Subnet in -zone")
+	zone := fs.String("zone", "", "availability zone (with -network)")
 	ingressRules := fs.String("ingress-rules", "", "comma-separated rules allowed into the VM, protocol:port_range:source_cidr:action (e.g. tcp:22:0.0.0.0/0:allow)")
 	egressRules := fs.String("egress-rules", "", "comma-separated rules allowed out of the VM, same protocol:port_range:source_cidr:action shape")
 	fs.Parse(args)
@@ -63,8 +65,8 @@ func netifCreate(args []string) {
 		*tenant = resolveTenant(*token)
 	}
 
-	if *tenant == "" || *vmID == "" || *subnetID == "" {
-		fatal("-tenant, -vm, and -subnet are required")
+	if *tenant == "" || *vmID == "" || (*subnetID == "" && (*networkID == "" || *zone == "")) {
+		fatal("-tenant, -vm, and -subnet (or -network and -zone) are required")
 	}
 
 	client := dialNetworkInterfaces(*addr)
@@ -78,6 +80,8 @@ func netifCreate(args []string) {
 		Spec: &networkv1.NetworkInterfaceSpec{
 			VmId:         *vmID,
 			SubnetId:     *subnetID,
+			NetworkId:    *networkID,
+			Zone:         *zone,
 			IngressRules: parseFirewallRules(*ingressRules),
 			EgressRules:  parseFirewallRules(*egressRules),
 		},
@@ -257,9 +261,9 @@ func netifDelete(args []string) {
 }
 
 func printNetworkInterface(n *networkv1.NetworkInterface) {
-	fmt.Printf("id=%s name=%s tenant=%s labels=%s vm=%s subnet=%s phase=%s hypervisor=%s ip=%s mac=%s ingress_rules=%s egress_rules=%s effective_ingress_rules=%s effective_egress_rules=%s rv=%d\n",
+	fmt.Printf("id=%s name=%s tenant=%s labels=%s vm=%s network=%s zone=%s subnet=%s phase=%s hypervisor=%s ip=%s mac=%s ingress_rules=%s egress_rules=%s effective_ingress_rules=%s effective_egress_rules=%s rv=%d\n",
 		n.GetMeta().GetId(), n.GetMeta().GetName(), n.GetMeta().GetTenantId(), formatKeyValues(n.GetMeta().GetLabels()),
-		n.GetSpec().GetVmId(), n.GetSpec().GetSubnetId(),
+		n.GetSpec().GetVmId(), n.GetSpec().GetNetworkId(), n.GetSpec().GetZone(), firstNonEmpty(n.GetStatus().GetSubnetId(), n.GetSpec().GetSubnetId()),
 		n.GetStatus().GetPhase(), n.GetStatus().GetHypervisor(), n.GetStatus().GetIpAddress(), n.GetStatus().GetMacAddress(),
 		formatFirewallRules(n.GetSpec().GetIngressRules()), formatFirewallRules(n.GetSpec().GetEgressRules()),
 		formatFirewallRules(n.GetStatus().GetEffectiveIngressRules()), formatFirewallRules(n.GetStatus().GetEffectiveEgressRules()),
@@ -272,4 +276,13 @@ func formatFirewallRules(rules []*networkv1.FirewallRule) string {
 		parts = append(parts, fmt.Sprintf("%s:%s:%s:%s", r.GetProtocol(), r.GetPortRange(), r.GetSourceCidr(), r.GetAction()))
 	}
 	return strings.Join(parts, ",")
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }

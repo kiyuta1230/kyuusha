@@ -1,7 +1,8 @@
 // Command network-reconciler runs only network's reconcile loop
-// (network.Service.Run): vlan_id/ip_address/mac_address allocation for
-// every Subnet/NetworkInterface CreateSubnet/CreateNetworkInterface leave
-// Pending, and the orphaned-NetworkInterface sweep. It serves no gRPC API
+// (network.Service.Run): pool allocation for every Network/Subnet, and
+// ip_address/mac_address allocation for every NetworkInterface, left
+// Pending by their Creates; the orphaned-NetworkInterface sweep; and
+// re-sending update_acl when a Network's membership changes. It serves no gRPC API
 // at all -- cmd/network is the SubnetService/NetworkInterfaceService gRPC
 // binary, safely run as any number of stateless replicas (see its own
 // package doc comment).
@@ -11,16 +12,15 @@
 // invariant and doc comment for the full reasoning (docs/architecture.md
 // "コントロールプレーンサービス自体の可用性" "Reconcile面"). Two replicas
 // running simultaneously could both allocate from the same
-// vlanPool/ipPool/nextMACOct independently, since none of them are
+// allocator/ipPool/nextMACOct independently, since none of them are
 // actually shared state -- each replica's copy would drift the moment
-// either one allocates, handing out the same vlan_id/ip_address/
-// mac_address to two different Subnets/NetworkInterfaces.
+// either one allocates, handing out the same pool value/ip_address/
+// mac_address twice.
 package main
 
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -28,6 +28,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -50,13 +52,8 @@ func main() {
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
 	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
-	vlanRangesFlag := flag.String("vlan-ranges", "", `VLAN IDs each zone may hand out to new Subnets, "<zone>=<lo>-<hi>[,<lo>-<hi>...][;<zone>=...]" ("*" = every zone not listed); empty = 1-4094 everywhere (see docs/specs/network.md)`)
+	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL, for re-sending update_acl to hypervisors when a Network's membership changes")
 	flag.Parse()
-	vlanRanges, err := network.ParseVLANRanges(*vlanRangesFlag)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -124,23 +121,37 @@ func main() {
 	}
 	defer identityConn.Close()
 
+	// NATS: a Network gaining or losing a Subnet changes every member
+	// NIC's effective rules, and this is the process that sees it happen
+	// (see network.Service.republishNetworkACLs).
+	nc, err := nats.Connect(*natsURL)
+	if err != nil {
+		slog.Error("connect to nats", "err", err)
+		os.Exit(1)
+	}
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	if err != nil {
+		slog.Error("jetstream", "err", err)
+		os.Exit(1)
+	}
+	if err := network.EnsureStreams(ctx, js); err != nil {
+		slog.Error("ensure nats streams", "err", err)
+		os.Exit(1)
+	}
+
 	// A second, independent network.Service instance from the API binary's
 	// own -- both need one (Run's methods read/write through it), but
-	// neither shares process memory (including vlanPool/ipPool/
+	// neither shares process memory (including allocator/ipPool/
 	// nextMACOct) with the other, only the etcd state both connect to.
-	// js is nil: this binary serves no gRPC API (no UpdateFirewallRules
-	// handler ever runs here), so publishUpdateACL's NATS notify path is
-	// simply never reached -- see cmd/network/main.go for the binary that
-	// does need it.
-	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn), nil)
+	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn), js)
 	if err != nil {
 		slog.Error("new network service", "err", err)
 		os.Exit(1)
 	}
-	svc.SetVLANRanges(vlanRanges)
 	prometheus.MustRegister(network.NewMetricsCollector(svc))
 
-	slog.Info("network-reconciler: starting", "vlan_ranges", *vlanRangesFlag)
+	slog.Info("network-reconciler: starting")
 	if err := svc.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("reconciler stopped", "err", err)
 		os.Exit(1)

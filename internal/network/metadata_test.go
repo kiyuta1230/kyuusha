@@ -22,7 +22,7 @@ func TestService_SubnetLabelsAndAnnotations(t *testing.T) {
 		Labels:      map[string]string{"vpc.example.com/id": "vpc-1"},
 		Annotations: map[string]string{"example.com/note": "anything at all"},
 	}
-	sn, err := svc.CreateSubnetWithMetadata(ctx, "tenant-a", "sn", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"}, md)
+	sn, err := svc.CreateSubnetWithMetadata(ctx, "tenant-a", "sn", userSubnet(t, ctx, svc, "tenant-a", "zone-a", "10.0.1.0/24", ""), md)
 	if err != nil {
 		t.Fatalf("CreateSubnetWithMetadata: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestService_SubnetLabelsAndAnnotations(t *testing.T) {
 	if _, err := svc.UpdateSubnet(ctx, updated); !errors.Is(err, ErrValidation) {
 		t.Fatalf("UpdateSubnet with an invalid label key: got %v, want ErrValidation", err)
 	}
-	if _, err := svc.CreateSubnetWithMetadata(ctx, "tenant-a", "sn-bad", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"},
+	if _, err := svc.CreateSubnetWithMetadata(ctx, "tenant-a", "sn-bad", userSubnet(t, ctx, svc, "tenant-a", "zone-a", "10.0.2.0/24", ""),
 		resource.Metadata{Labels: map[string]string{"k": "has space"}}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("CreateSubnetWithMetadata with an invalid label value: got %v, want ErrValidation", err)
 	}
@@ -63,17 +63,17 @@ func TestService_UpdateCannotForgeServerOwnedFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn", SubnetSpec{NetworkID: carveNetwork(t, ctx, svc, "tenant-a"), Zone: "zone-a"})
 	forged, _ := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
-	realVLAN := forged.Status.VLANID
-	forged.Status.VLANID = 999
+	realVLAN := forged.Status.Values["vlan_id"]
+	forged.Status.Values = map[string]int64{"vlan_id": 999}
 	forged.Meta.Labels = map[string]string{"k": "v"}
 	out, err := svc.UpdateSubnet(ctx, forged)
 	if err != nil {
 		t.Fatalf("UpdateSubnet: %v", err)
 	}
-	if out.Status.VLANID != realVLAN || out.Meta.Labels["k"] != "v" {
-		t.Fatalf("after Update vlan_id=%d labels=%v, want vlan_id %d kept and the label applied", out.Status.VLANID, out.Meta.Labels, realVLAN)
+	if out.Status.Values["vlan_id"] != realVLAN || out.Meta.Labels["k"] != "v" {
+		t.Fatalf("after Update vlan_id=%d labels=%v, want vlan_id %d kept and the label applied", out.Status.Values["vlan_id"], out.Meta.Labels, realVLAN)
 	}
 
 	n := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, out)
@@ -100,11 +100,12 @@ func TestService_UpdateSubnetRejectsAddressingChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"})
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn", userSubnet(t, ctx, svc, "tenant-a", "zone-a", "10.0.1.0/24", "10.0.1.1"))
 	for name, mutate := range map[string]func(*Subnet){
 		"zone":       func(s *Subnet) { s.Spec.Zone = "zone-b" },
-		"cidr":       func(s *Subnet) { s.Spec.CIDR = "10.0.9.0/24" },
-		"gateway_ip": func(s *Subnet) { s.Spec.GatewayIP = "10.0.1.254" },
+		"network_id": func(s *Subnet) { s.Spec.NetworkID = "network-other" },
+		"cidr":       func(s *Subnet) { s.Spec.RequestedAddresses = []SubnetAddress{{CIDR: "10.0.9.0/24"}} },
+		"gateway_ip": func(s *Subnet) { s.Spec.RequestedAddresses = []SubnetAddress{{CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.254"}} },
 	} {
 		cur, _ := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
 		mutate(cur)
@@ -114,8 +115,8 @@ func TestService_UpdateSubnetRejectsAddressingChanges(t *testing.T) {
 	}
 	// Other spec fields stay updatable.
 	cur, _ := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
-	cur.Spec.DNSSuffix = "example.internal"
-	if out, err := svc.UpdateSubnet(ctx, cur); err != nil || out.Spec.DNSSuffix != "example.internal" {
-		t.Fatalf("changing dns_suffix: %v, %+v", err, out)
+	cur.Spec.DNSServers = []string{"10.0.1.53"}
+	if out, err := svc.UpdateSubnet(ctx, cur); err != nil || len(out.Spec.DNSServers) != 1 {
+		t.Fatalf("changing dns_servers: %v, %+v", err, out)
 	}
 }

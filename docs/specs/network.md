@@ -2,44 +2,99 @@
 
 ## 概要
 
-`network`サービスは`Subnet`・`NetworkInterface`を管理するCRUD+Watchサービス
-（設計は`docs/architecture.md`「networkサービスのリソース: Subnet / NetworkInterface」参照）。
-VLAN ID・IPアドレスの払い出し（IPAM）は実装済みだが、tap配線・compute-agentとの連携は
-まだない。computeが最初にCRUD+Watchだけの状態から始まり、後にスケジューラ・Quota・
-Firecracker起動を順に足していったのと同じ進め方で、このサービスも一段ずつ実体化させている。
+`network`サービスは`AllocationPool`・`NetworkClass`・`Network`・`Subnet`・`NetworkInterface`
+を管理するCRUD+Watchサービス（設計の「なぜ」は`docs/architecture.md`「networkサービスの
+リソース」参照）。NetworkとSubnetが持つ値（VLAN ID・VNI・Route Target・CIDR等）は、
+Networkが参照するNetworkClassが指すAllocationPoolからkyuusha自身が払い出し、
+NetworkInterfaceのIPはSubnetのCIDRから払い出す。値の意味（802.1Qタグにするか、VNIに
+するか、使わないか）はkyuushaは解釈せず、VNAP/SNAPプラグインへそのまま渡す。
 
 ## リソース
 
-`Subnet`はテナント(KaaSクラスタ)が持つ1つ以上のネットワーク区画で、それぞれ独立してVLAN IDを
-持つ。`NetworkInterface`はVirtualMachineとSubnetの結びつきを表す一時的なリソース
-（`VolumeAttachment`と同じ「結びつきそのものをリソースにする」パターン）。フィールドの詳細は
-proto（`proto/kyuusha/network/v1/subnet.proto`・`networkinterface.proto`）参照。
+```
+AllocationPool（管理者）  払い出し元。組の一覧（静的）／整数・CIDR（動的）
+  ▲ 参照
+NetworkClass（管理者）    「どのプールから、どの単位で払い出すか」の定義
+  ▲ 参照（1つ・変更不可）
+Network（テナント）       ルーティングドメイン兼分離の境界。AZをまたぐ
+  └─ Subnet（テナントが依頼、kyuushaが払い出す）  AZに閉じる。CIDR 1つ＝gateway 1つ（アドレスファミリごと）
+       └─ NetworkInterface（VMのNIC）
+```
 
-## IPAM（`internal/network/ipam.go`）
+フィールドの詳細はproto（`proto/kyuusha/network/v1/network.proto`・`subnet.proto`・
+`networkinterface.proto`）参照。
 
-ハイパーバイザーagentは一切関与しない、network自身の中で完結する同期的なプール払い出し
-（`docs/architecture.md`「VLAN IDの払い出し」参照）。
+- **AllocationPool**（クラスタ単位、`tenant_id`は常に空）: 管理者専用——テナントは作れず、
+  見ることもできない（テナントに見えるのは自分のNetwork/Subnetに払い出された値だけ）。
+  形は`oneof`で3種類（データプレーンの種類ではなく、払い出し方の形で分ける）:
+  - **`entries`（組の一覧・静的）**: 管理者が登録した切り離せない組（名前付きの整数、
+    アドレスファミリごとのCIDRとgateway、属性）を1つ丸ごと払い出す。典型はVLAN方式
+    （ネットワーク管理者が事前にCIDRとVLAN IDを決めてスイッチに設定し、組として登録する）
+  - **`integer`（整数・動的）**: 範囲（複数可）から整数を1つ。名前はNetworkClass側の参照が付ける
+  - **`cidr`（CIDR・動的）**: 1つのアドレスファミリのCIDR。`USER_ANY`（利用者が自由に指定、
+    重なってよい）、`USER_WITHIN_BLOCKS`（利用者が指定するが、ブロック内に収まりプール内で
+    重ならないこと）、`CARVE`（ブロックから指定の長さで自動で切り出す）
+  - 各組／プールはkyuushaが解釈しない属性（key/value）を持て、VNAP/SNAPに渡る
+  - 払い出し済みの値が残っている間は、範囲を狭める・組や
+    ブロックを消す・プールを消す、のいずれも拒否する（`FailedPrecondition`）。形
+    （entries/integer/cidr）は変えられない。検証するのは書式だけで、意味は検証しない。
+    プール同士の重なりも検証しない（一意であるべき範囲はどのプールを使うかで管理者が表す）
+- **NetworkClass**（クラスタ単位、作成・変更・削除は管理者）: Network単位で払い出すプール
+  への参照（`network`）と、zoneごとのSubnet単位の参照（`subnet`。`"*"`は全zone共通で、
+  zone個別の指定は`"*"`に**足し合わせる**——同じ名前の値はzone個別が優先）。構造の検証:
+  合成後の各zoneについてCIDRの出どころがアドレスファミリごとに高々1つ、同じ名前の値が
+  複数のプールから来ない、Network単位の参照にCIDRプールを使わない。IPv4のCIDRの出どころが
+  無いzoneにはSubnetを作れない。ほかに属性、`visibility`/`shared_with_tenant_ids`
+  （誰がこのClassでNetworkを作れるか。Classには所有者がいないので`PRIVATE`は「列挙した
+  テナントだけ」）、`allow_public_networks`、zoneごとの既定DNSリゾルバ、MTU、gatewayの
+  決め方（先頭/末尾）、host aggregateの条件を持つ。**参照でありコピーではない**: Classや
+  プールの変更は以降の払い出しにだけ効く。既定のClassは持たない（Network作成時に必須）。
+  Networkが参照している間は削除できない。テナントは`tenant_id`付きのGet/Listで、自分が
+  使えるClassだけを見られる
+- **Network**（テナント所有）: `network_class`（必須・変更不可）、`dns_suffix`、
+  `visibility`/`shared_with_tenant_ids`。`status`にNetwork単位で払い出された値
+  （例: `route_target`）と属性。Subnetが残っている間は削除できない
+- **Subnet**: `spec`は利用者が書く依頼——`network_id`・`zone`（必須・変更不可）、
+  `requested_addresses`（ClassのCIDRプールが利用者指定の場合だけ。変更不可）、
+  `dns_servers`（空ならClassのそのzoneの既定）、`allocatable_ip_ranges`。`status`は
+  システムが書く払い出し結果——`addresses`（実効のCIDR/gateway、アドレスファミリごと）、
+  `values`（例: `vlan_id`）、`attributes`。Subnetを足せるのはNetworkの所有テナントだけ
+- **NetworkInterface**: VirtualMachineとSubnetの結びつき（`VolumeAttachment`と同じ
+  「結びつきそのものをリソースにする」パターン）。`spec.subnet_id`で固定するか、
+  `spec.network_id`＋`spec.zone`を指定し、払い出し時にnetworkサービスがSubnetを選ぶ
+  （`status.subnet_id`）
 
-- **VLAN ID**: zoneごとに独立したプール（既定は1〜4094。0と4095は予約のため対象外）。
-  `Subnet.spec.zone`単位で排他的に払い出す。同じ番号を別zoneで再利用できる。
-  払い出すのはnetwork-reconcilerだけなので、範囲はその起動フラグ`-vlan-ranges`で
-  zoneごとに絞れる: `"<zone>=<lo>-<hi>[,<lo>-<hi>...][;<zone>=...]"`（`*`は列挙して
-  いない全zoneの既定、単独の`<n>`は`<n>-<n>`）。例: `zone-a=100-2000;zone-b=100-1000,3000-3500`。
-  未指定なら全zoneで1〜4094。範囲を後から狭めても、範囲外で既に払い出し済みの
-  VLAN IDはそのSubnetが使い続ける（新しく払い出されないだけ）。範囲を使い切ると、
-  他の枯渇と同じく新しいSubnetは`Pending`のまま待つ
-- **IPアドレス**: `Subnet`ごとに、その`spec.cidr`の中から排他的に払い出す。ネットワーク
-  アドレス・ブロードキャストアドレス・（設定されていれば）`spec.gateway_ip`は対象外。
-  `/31`・`/32`（利用可能なホストアドレスが無い）や IPv6 CIDR は現状非対応で、常に
-  「枯渇」として扱われる
-- **`spec.allocatable_ip_ranges`**: 空なら上記の通りCIDR全体が対象。指定した場合は
-  `["10.0.1.10-10.0.1.20", ...]`のように`<開始>-<終了>`形式のIPv4範囲だけが払い出し対象になる
-  （例: 既存の静的割当や将来予約でCIDRの一部を空けておきたい場合）。Create時に各範囲が
-  `spec.cidr`の外に出ていないかを検証する（`ErrValidation`）。範囲内であってもネットワーク
-  アドレス・ブロードキャストアドレス・`gateway_ip`は常に除外される（範囲側でうっかり
-  含めても無視されるだけで、エラーにはしない）
-- **MACアドレス**: グローバルな連番から生成する簡易実装。枯渇しうる共有プールではないため
-  IPAMとしての特別な設計は不要（今後もこのままで問題ない見込み）
+## 払い出し（`internal/network/alloc.go`、`ipam.go`）
+
+ハイパーバイザーagentは一切関与しない、network自身の中で完結する払い出し。払い出しを
+行うのは単一レプリカのnetwork-reconcilerだけで、APIバイナリ（`network`）のCreateは
+常に`Pending`で作るだけ——プールの帳簿はプロセス内のメモリにしか無いため（起動時に
+etcd上の全Network/Subnetの`status.allocations`と全NetworkInterfaceのIP/MACから再構築する）。
+
+- **Network**: 作成されるとClassの`network`参照から全て払い出し（全部成功するか、
+  1つも払い出さない）、`Ready`になる
+- **Subnet**: Networkが`Ready`になった後、Classの「そのzoneの合成済み参照」から全て
+  払い出し（同じく全部か無しか）、`Ready`になる。同じNetwork内でCIDRが重なることは
+  禁止（Network＝1つのルーティングドメインのため）——利用者指定のCIDRはCreate時に、
+  切り出し・組のCIDRは払い出し時に、Network内の他のSubnetと重ならないものを選ぶ。
+  別のNetwork同士は重なってよい。gatewayは利用者指定・組の指定がなければClassの
+  `gateway_placement`（既定は先頭の利用可能アドレス）で決める
+- **IPアドレス**: SubnetのIPv4 CIDRから排他的に払い出す。ネットワークアドレス・
+  ブロードキャストアドレス・gatewayは対象外。`/31`・`/32`やIPv6は現状非対応で、
+  常に「枯渇」として扱う（IPv6のIPAM自体は未実装。CIDR/gatewayの項目とプールは
+  アドレスファミリごとに持てる形になっている）
+- **Subnetの選択**: `network_id`＋`zone`で作られたNetworkInterfaceは、そのNetworkの
+  そのzoneの`Ready`なSubnetを作成の古い順に試し、空きのある最初のSubnetからIPを
+  払い出す——Subnetの選択とIPの払い出しが同じ処理の中で行われるので、「選んだ直後に
+  枯渇した」という競合が起きない。どのSubnetにも空きがなければ`Pending`のまま
+  `NoFreeAddress`のConditionで報告する（Subnetを足す合図）
+- **`spec.allocatable_ip_ranges`**: 指定するとその`<開始>-<終了>`形式のIPv4範囲だけが
+  払い出し対象になる。CIDRが分かっている時点（利用者指定ならCreate時、それ以外は
+  Update時）に、範囲がCIDRの外に出ていないかを検証する
+- **MACアドレス**: グローバルな連番から生成する簡易実装
+- **管理者による修正**: システムが書く値（`status.values`/`attributes`）は、
+  `SetStatusValues` RPC（Network/Subnet）で管理者だけが修正できる（ファブリック側の
+  手作業の変更に合わせる等）。テナントのUpdateでは変えられない
 
 ### プール枯渇時の挙動
 
@@ -47,132 +102,108 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
 リクエスト自体は正当で、他のリソースが削除されれば空きが出るかもしれないため、VMの
 スケジュール失敗時と同じ考え方（[VMスケジュール仕様](vm-scheduling.md)参照）を採る。
 
-- `Subnet`: `status.phase`が`Pending`のまま、`Condition{type: VlanPoolExhausted, status:
-  true}`を報告する
-- `NetworkInterface`: 同様に`Pending`のまま`Condition{type: IPPoolExhausted, status: true}`
-  を報告する（`mac_address`は枯渇に関係なく即座に払い出し済み）
-- 10秒間隔の定期スイープ（`Service.Run`）が全`Pending`のSubnet/NetworkInterfaceに対して
-  再度払い出しを試みる（他のSubnet/NetworkInterfaceのDelete自体はPending中のものを
-  再トリガーしないため、VMスケジュールの定期スイープと同じ理由で必要）。加えて
-  `watchPendingSubnets`/`watchPendingNetworkInterfaces`（`Service.Run`から起動する
-  別goroutine）が新規作成された`Pending`のSubnet/NetworkInterfaceの`EventAdded`に即座に
-  反応し、10秒の定期スイープを待たず払い出しを試みる——block-storageの
+- `Network`/`Subnet`: `Pending`のまま`Condition{type: AllocationPending, status: true}`
+  を理由付きで報告する（プールの枯渇、利用者指定のCIDRがブロック外、Networkがまだ
+  Readyでない等）
+- `NetworkInterface`: `Pending`のまま`Condition{type: NoFreeAddress, status: true}`
+  （`mac_address`は即座に払い出し済み）
+- 10秒間隔の定期スイープ（`Service.Run`）が全`Pending`のNetwork/Subnet/NetworkInterfaceに
+  対して再度払い出しを試みる。加えて`watchPendingNetworks`/`watchPendingSubnets`/
+  `watchPendingNetworkInterfaces`が新規作成の`EventAdded`に即座に反応する——block-storageの
   `watchPendingVolumeAttachments`/`watchPendingVolumes`（[Volume仕様](volume.md)
   「排他制御」参照）と同じ形。これらのWatchは切れても最後に見た`resource_version`から
   張り直す（切れている間の変更・削除もリプレイされる）。再開点がetcdのコンパクションで
-  消えていた場合は、etcd上の割当済みVLAN ID/IPをプールへ「使用中」として付け直した
+  消えていた場合は、etcd上の割当済みの値/IPをプールへ「使用中」として付け直した
   上で最初からリプレイする——このとき解放はしない（払い出し済みでまだ保存されていない
   割当を解放すると二重払い出しになりうるため）ので、その隙間で起きた削除の返却だけは
   次の再起動まで遅れる
 - 成功すると同じConditionが`status: false`に更新される（削除はされない）
-- VLAN ID/IPアドレスがプールへ返却されるのは、Subnet/NetworkInterfaceが**実際に消えた
-  とき**——network-reconcilerが自分のWatchで`EventDeleted`を観測した時点（払い出しを行う
-  プールはnetwork-reconcilerのプロセス内にしか無いため）。Delete呼び出しの時点ではない:
-  Finalizerが付いていればオブジェクトは`deleted_at`付きで残り、その間VLAN ID/IPも保持
-  され続ける（他のSubnet/NetworkInterfaceへ再払い出しされない）。`tenant_usage`は
-  VirtualMachineと同じ近似で最初のDelete呼び出し時点に1回だけ減算する。削除中
-  （`deleted_at`付き）のSubnetには新しいNetworkInterfaceを作れない（VM Createも拒否）
+- 値/IPアドレスがプールへ返却されるのは、Network/Subnet/NetworkInterfaceが**実際に消えた
+  とき**——network-reconcilerが自分のWatchで`EventDeleted`を観測した時点。Delete呼び出しの
+  時点ではない: Finalizerが付いていればオブジェクトは`deleted_at`付きで残り、その間
+  値/IPも保持され続ける。`tenant_usage`はVirtualMachineと同じ近似で最初のDelete呼び出し
+  時点に1回だけ減算する。削除中（`deleted_at`付き）のNetwork/Subnetには新しい
+  Subnet/NetworkInterfaceを作れない（VM Createも拒否）
 
-## `spec.mesh_group`（同一テナント内の自動許可、実装済み）
+## 同じNetwork内の既定の疎通
 
-同一テナントが複数のAZにまたがってSubnetを持つ場合（AZ毎に別Subnet/別VLANになる設計、
-`docs/architecture.md`「マルチAZにまたがるVirtualMachineは作れない」参照）、AZ間の
-**経路**はRoute Targetによる自動交換で疎通するが、`NetworkInterfaceSpec.ingress_rules`/
-`egress_rules`の**ACL**はSubnet CIDR外を既定で拒否するため（[SNAP仕様](snap.md)参照）、
-AZ間で通信したい場合は本来Subnetの組み合わせごとに手動でallowルールを書く必要がある。
+**同じNetworkのSubnet同士は既定で疎通し、別のNetwork同士は既定で疎通しない**。
+`Service.EffectiveFirewallRules`（`internal/network/firewallrule.go`）が、対象
+NetworkInterfaceのSubnetと同じNetworkの他の全Subnetについて`{source_cidr: <そのSubnetの
+IPv4 CIDR>, action: allow, protocol: ""（=プロトコル問わず）}`という暗黙のルールを
+`ingress_rules`/`egress_rules`両方の末尾に追加する。**`spec`には混ぜない**——実際に
+compute-agentへ送る最終ルール一覧（`status.effective_ingress_rules`/
+`effective_egress_rules`）を組み立てる時にだけ合成する。
 
-`spec.mesh_group`は、この手間を減らすための宣言フィールド: 同一テナント内で同じ
-`mesh_group`値を持つSubnet同士は、デフォルトで互いを許可する。
-`Service.EffectiveFirewallRules`（`internal/network/firewallrule.go`）が、
-対象NetworkInterfaceのSubnetが非空の`mesh_group`を持つ場合、同一テナント・同じ
-`mesh_group`・自分以外の各Subnetについて`{source_cidr: <sibling CIDR>, action: allow,
-protocol: ""（=プロトコル問わず）}`という暗黙のルールを`ingress_rules`/`egress_rules`
-両方の末尾に追加する。**`spec`（etcd永続化値、`Get`/`List`で見える宣言値）には混ぜない**
-——`SubnetCIDR`/`GatewayIP`のbaseline同様、実際にcompute-agentへ送る最終ルール一覧
-（`status.effective_ingress_rules`/`effective_egress_rules`、`Create`/`Get`のみ埋める。
-下記参照）を組み立てる時にだけ合成する。
+**Networkの配下が変わったら配下の全NIC
+のホスト側ACLを配り直す**: Subnetが`Ready`になった時、またはSubnetが実際に消えた時、
+network-reconcilerがそのNetworkの全Subnet上の全NetworkInterface（Networkを共有された
+他テナントのNICも含む）について`update_acl`を発行する（`republishNetworkACLs`）。
+compute-agentは古い版の`update_acl`を捨てるので、NIC自体は変わっていない配り直しは
+「NICの`resource_version`」と「きっかけになった変更のrevision」の大きい方を版にする。
 
-## `spec.unique_cidr` / `spec.visibility` / `spec.shared_with_tenant_ids`（Public IP Attach、実装済み）
+Network同士の分離をどう実現するかはデータプレーン次第: VRF系（VLAN＋ファブリックのVRF、
+EVPN、VRF-lite、ホストのVRF）では経路そのものが分かれ、VRFを持たないIP一意のpure L3では
+全てが1つの経路表に載るためACLの既定拒否で分ける（SNAPの責務）。ルーティングドメインの
+値（Route Target、L3 VNI等）はNetwork単位で払い出す（Classの`network`参照）。
 
-Public IP Attach（floating IP相当）は新しいリソース種別を増やさず、`Subnet`の一機能
-として最小限サポートする: `Subnet`は元々「テナントが宣言したアドレス空間の一区画を
-kyuushaが払い出し管理するだけで、自らプロビジョニングはしない」という立ち位置を持って
-おり、CIDRがプライベート空間か外部到達可能な公開IP空間かはSubnet自身にとって本質差では
-ない。**Public IP Attach = 公開IP用Subnetへのもう1本の`NetworkInterface`**であり、
-`status.ip_address`がそのまま公開IPになる。
+## Network/NetworkClassの共有と公開
 
-- **`spec.unique_cidr`**（bool）: trueの場合のみ、`Subnet.Create`/`Update`は他の
-  `unique_cidr=true`なSubnet（**同一テナント内・テナント間を問わず**）との`cidr`重複を
-  `ErrValidation`で拒否する（`internal/network/subnet.go`の`validateUniqueCIDR`、
-  `cidrsOverlap`によるoverlap判定）。false（既定）は従来通り: 異なる`mesh_group`/
-  テナント間ならCIDR重複を許容する（VRF/VLANが分かれているため実害がない）。主な用途は
-  公開IP用アドレス空間の宣言
-- **`spec.visibility`/`spec.shared_with_tenant_ids`**: `kyuusha.image.v1.ImageSpec`の
-  同名フィールドと全く同じ意味・同じ規約（[Image仕様](image.md)参照）。`visibility`が
-  `PUBLIC`なら任意のテナントが、`PRIVATE`（既定）なら所有テナントと
-  `shared_with_tenant_ids`に列挙されたテナントだけが、この`Subnet`へ実際に
-  `NetworkInterface`をattachできる。`internal/network/subnet.go`の
-  `subnetUsableBy`（`internal/image`の`visibleTo`のミラー）が判定し、
-  `CreateNetworkInterface`だけがこれをチェックする（後述）。
-
-  **`visibility=PUBLIC`は`unique_cidr=true`を要求する**（`CreateSubnet`/
-  `UpdateSubnet`が`ErrValidation`で強制）——所有テナントが相手を個別に検証しない
-  無条件のオープン共有は、Public IP用アドレス空間に限って許容し、通常のプライベート
-  Subnetでの無目的なL2共有（ARP spoofing等の攻撃面の共有）を防ぐため
-  （[architecture.md](../architecture.md)「テナント間でのSubnet共有」参照）。
-  一方`shared_with_tenant_ids`（所有テナントが個別に名指しする許可）にはこの制約が無く、
-  `unique_cidr`を問わずどのSubnetでも使える——所有テナント自身の個別の同意そのものが
-  安全装置になるため（例: マネージドDBサービスの提供者テナントを、顧客テナント自身の
-  プライベートSubnetへ直接招き入れる）
-
-典型的な運用: 管理者が`unique_cidr=true`・`visibility=PRIVATE`・
-`shared_with_tenant_ids=[使わせたいテナントID...]`（または全テナントに開放するなら
-`visibility=PUBLIC`）な公開IP用Subnetを1つ作り、対象テナントがそこへ2本目の
-`NetworkInterface`を作成する。
-
-**旧`shared_with_tenant_ids`（field 5）は削除した**——「他テナントが自分の
-`ingress_rules`/`egress_rules`の中でこのSubnetのCIDRをallow宛先として名指ししてよいか」
-というACL参照専用の同意フィールド（`validateCrossTenantRules`が強制していた）で、今回の
-「実際にattachしてよいか」とは別物だった。この種のポリシー（例: 外部の申請システムと
-連携し、事前承認済みのACLルールかどうかをチェックする）が必要になった場合は、専用
-フィールドを増やすのではなく、既存の`internal/admissionwebhook`
-（[external-integration.md](external-integration.md)「ゲート系(作成側): Admission
-Webhook」、現状`VirtualMachineService.Create`のみに配線済み、resource-agnostic設計）を
-この`network`サービスの`CreateNetworkInterface`/`UpdateFirewallRules`にも配線する方針
-にする。
+- **Networkの共有**: `visibility`/`shared_with_tenant_ids`（`kyuusha.image.v1.ImageSpec`の
+  同名フィールドと同じ意味）。所有テナント、`PUBLIC`なら任意のテナント、`PRIVATE`（既定）
+  なら`shared_with_tenant_ids`に列挙したテナントが、このNetworkにNetworkInterfaceを
+  attachできる（Networkの一部のSubnetだけを共有することはできない）。共有された
+  テナントはそのNetwork、およびそのSubnetをGetで読める。判定は
+  `CreateNetworkInterface`のときだけ行う
+- **`PUBLIC`にできるのは`allow_public_networks`を持つClassのNetworkだけ**——所有テナントが
+  相手を個別に検証しない無条件のオープン共有は、公開IPのように共有するためのアドレス空間
+  に限る（[architecture.md](../architecture.md)「テナント間でのNetwork共有」参照）。
+  CIDRが重ならないことはプールの構造（自動で切り出すCIDRプール、組の一覧）で管理者が
+  保証し、kyuushaが改めてCIDRの一意性を検証することはしない
+- **Public IP Attach**: 公開IP用のClass（`allow_public_networks`、一意なCIDRを払い出す
+  プール、管理者側だけが使える`PRIVATE`のClass）で、AZごとのSubnetを束ねた公開IP用の
+  Networkを管理者が作り、`PUBLIC`または`shared_with_tenant_ids`で開放する。テナントは
+  そこへ2本目のNetworkInterfaceを作る——`status.ip_address`がそのまま公開IPになる
+- **Classの利用許可**: `visibility`/`shared_with_tenant_ids`の判定はNetwork作成時だけ。
+  既存のNetworkへのSubnetの追加では判定しないので、許可を外しても既存のNetworkは
+  Subnetを足し続けられる。他テナントから共有されたNetworkにNICを付けるだけならClassの
+  許可は要らない
 
 ## Create時のバリデーション
 
-`NetworkInterface.Create`は`spec.subnet_id`が指す`Subnet`が存在し、`Ready`であり、
-呼び出しテナントから見て利用可能（`subnetUsableBy`、上記参照）であることを検証する
-（存在しない/未Ready/利用不可なら`ErrValidation`）。**所有テナント以外からの
-attachが常に拒否されるわけではない**点が以前と違う——`internal/network/subnet.go`の
-`getSubnetForInterface`が、呼び出しテナント自身のnamespaceで見つからなければ全テナント
-横断で`Meta.ID`一致を探し、見つかったSubnetに対して`subnetUsableBy`を判定する。これは
-「参照先が存在しない・使えない状態のリソースを作らない」という、computeのImage検証
-（[Image仕様](image.md)参照）と同じ設計原則。IPAM自体のプール枯渇は上記の通りCreateを
+- `Network.Create`: Classが存在し呼び出しテナントが使えること、`visibility`の制約（上記）
+- `Subnet.Create`: Networkが呼び出しテナント自身のもので削除中でないこと、Classの
+  そのzoneにIPv4のアドレスの出どころがあること、`requested_addresses`がClassのCIDRプールの
+  種類に合っていること（利用者指定なら必須、払い出し型なら指定不可）とNetwork内の他の
+  Subnetと重ならないこと、`dns_servers`がIPであること
+- `NetworkInterface.Create`: `subnet_id`指定ならそのSubnetが存在し`Ready`で削除中でない
+  こと（`network_id`/`zone`はSubnetから決まる）。いずれの場合もNetworkが存在し、呼び出し
+  テナントから使えて（上記）削除中でないこと。`network_id`＋`zone`の場合、Subnetがまだ
+  無くてもよい（`Pending`で待つ）
+
+これは「参照先が存在しない・使えない状態のリソースを作らない」という、computeのImage
+検証（[Image仕様](image.md)参照）と同じ設計原則。払い出しの枯渇は上記の通りCreateを
 拒否しない（Pendingで受理する）ため、この検証とは別軸。
 
-`Subnet.Create`/`NetworkInterface.Create`はいずれも、上記の検証に加えてテナントの
-Subnet数/NetworkInterface数Quota（`Tenant.spec.quota.max_subnets`/
-`max_network_interfaces`）判定を同じCreate内で同期的に行う。`NetworkInterface`側は
-このQuota判定を上記のSubnet存在/Ready検証より後に行う（詳細は
-[Quota仕様](quota.md)「networkのQuota判定」参照）。カウントは常に**呼び出し元テナント**
-（=実際にattachするテナント）に課金される——Subnetの所有テナントではない。
+`Subnet.Create`/`NetworkInterface.Create`はいずれも、テナントのSubnet数/NetworkInterface数
+Quota（`Tenant.spec.quota.max_subnets`/`max_network_interfaces`）判定を同じCreate内で同期的に
+行う（詳細は[Quota仕様](quota.md)「networkのQuota判定」参照）。カウントは常に
+**呼び出し元テナント**（=実際にattachするテナント）に課金される。
 
 ## Update RPCで変えられるもの
 
-- **Subnet**: `meta`（labels/annotations/finalizers）と`spec`。ただし`spec.zone`/`cidr`/
-  `gateway_ip`はCreate後に変えられない（エラー）——VLAN IDはzoneのプールから、各
-  NetworkInterfaceのIPはcidrから払い出し済みで、稼働中のゲスト・ホストのブリッジは
-  gateway_ipで設定済みのため。`status`（`vlan_id`等）は
-  常に保存済みの値が残る——呼び出し側が指定した`vlan_id`を受け入れると、そのテナントの
-  VMを別テナントのVLANへ配線できてしまうため
+- **Network**: `meta`と`spec`（`network_class`は変更不可）。`status`は常に保存済みの値が残る
+- **NetworkClass**/**AllocationPool**: `meta`と`spec`（上記の制約付き）
+- **Subnet**: `meta`と`spec`のうち`dns_servers`/`allocatable_ip_ranges`。
+  `network_id`/`zone`/`requested_addresses`は変えられない（エラー）——払い出された値・
+  CIDR・各NICのIP・稼働中のゲストとホストのブリッジのgatewayは全てそこから決まっている
+  ため。`status`は常に保存済みの値が残る——呼び出し側が指定した`vlan_id`等を受け入れると、
+  そのテナントのVMを別テナントのVLANへ配線できてしまうため
 - **NetworkInterface**: `meta`のみ。`spec.ingress_rules`/`egress_rules`は
   `UpdateFirewallRules`経由でしか変えられず（差分があるとエラー）、`spec.vm_id`/
-  `subnet_id`の変更はエラー、`status`（`ip_address`/`mac_address`/`hypervisor`等）は
-  常に保存済みの値が残る——SNAPのアンチスプーフィングはこの`ip_address`/`mac_address`を
-  信用するため
+  `subnet_id`/`network_id`/`zone`の変更はエラー、`status`（`ip_address`/`mac_address`/
+  `hypervisor`/`subnet_id`等）は常に保存済みの値が残る——SNAPのアンチスプーフィングは
+  この`ip_address`/`mac_address`を信用するため
 
 ## `NetworkInterface.status.hypervisor`
 
@@ -197,8 +228,9 @@ Getするついでに同期し直す。
 - `NetworkInterfacePhase`の`Binding`/`Rebinding`フェーズ（compute-agentが実際の配線
   完了をnetworkへ報告する仕組み）は未実装。`status.hypervisor`は下記の通りVMの状態から
   導出している
-- ネットワーク分離の実現方式（VRF/ルートリーク禁止によるテナント間非疎通性、
-  DNS/名前解決の拡張機能）は設計のみ（`docs/architecture.md`参照）、実装はまだ
+- ネットワーク分離の物理的な実現（VRF/ルートリーク禁止によるNetwork間非疎通性、
+  DNS/名前解決の拡張機能）はファブリック・VNAP側の責務。kyuushaは
+  ルーティングドメインの値をNetwork単位で払い出してVNAPに渡すところまで
 - **NetworkInterfaceのオーファンGC**: VM Deleteはcomputeの予約解放とcompute-agentへの
   削除コマンド送出のみ行い、そのVMが持っていたNetworkInterfaceには一切触れない
   （`compute.Reconciler.releaseIfReserved`参照）。`docs/architecture.md`が決めている
@@ -215,51 +247,52 @@ Getするついでに同期し直す。
 
 ## compute側の統合
 
-VM Create時、`spec.network_interfaces`の各要素（`subnet_id`）についてSubnetの存在/
-同一テナント/`Ready`を検証し（`compute.validateNetworkInterfaces`、上記「Create時の
-バリデーション」と同じ形）、参照先Subnetがすべて同じzoneであることも合わせて検証する
-（マルチAZにまたがるVirtualMachineは作れない、という`docs/architecture.md`の決定を
-ここで強制する）。この検証で得たzoneは、VMがPhasePendingからスケジュールされる
-瞬間（`Reconciler.reconcile`）にもう一度Subnetを引き直して再計算し、
-`scheduleVM`のzoneフィルタ（[vm-scheduling.md](vm-scheduling.md)参照）に渡す
-——Create時点とスケジュール時点の間でSubnetが変わる可能性があるため、キャッシュせず
-毎回引き直す。
+VMの`spec.network_interfaces`の各要素は**Network**を指定する（`network_id`）。特定の
+Subnetに固定したい場合は`subnet_id`を指定する。VMの`spec.zone`（どのAZに置くか）は
+**クライアントが決める**——kyuushaがAZを選ぶことはない。Networkだけを指定した要素が
+あれば`spec.zone`は必須で、Subnetを固定した要素だけならそのSubnetのzoneから決まる
+（全て同じzoneでなければならない——マルチAZにまたがるVirtualMachineは作れない、という
+`docs/architecture.md`の決定）。VM Create時に`compute.validateNetworkInterfaces`が
+Network/Subnetの存在・利用可否・削除中でないことを検証し、決まったzoneを`spec.zone`に
+保存する。スケジュールの瞬間（`Reconciler.reconcile`）にも同じ検証をやり直し、zoneを
+`scheduleVM`のzoneフィルタ（[vm-scheduling.md](vm-scheduling.md)参照）に渡す。
 
-実際のNetworkInterfaceオブジェクトの作成は、VMがPhaseScheduledになった時点
-（`Reconciler.reconcile`のPhaseScheduledケース）で行う。まだ一度もスケジュールされて
-いないPending中のVMのために先にNetworkInterfaceを作ってしまうと、そのVMが結局
-一度も動かないまま終わった場合にオーファンになるため。作成する各NetworkInterfaceの
-`name`は`iface-<vm-id>-<index>`という決定的な命名（`docs/architecture.md`
-「子リソースのID命名規則」参照）で、これがそのままCreateの冪等性キーになる
-——reconcileが同じVMに対して複数回呼ばれても（例えば直前のUpdateが失敗して
-リトライされても）二重に作られることはない。作成に成功したNetworkInterfaceの
-IDは`VirtualMachineStatus.interface_refs`に書き込まれ、`Phase = Provisioning`
-への遷移と同じUpdateで永続化される。
+実際のNetworkInterfaceオブジェクトの作成は、VMがPhaseScheduledになった時点で行う
+（まだ一度もスケジュールされていないVMのために作るとオーファンになるため）。`name`は
+`iface-<vm-id>-<index>`という決定的な命名（`docs/architecture.md`「子リソースのID命名規則」
+参照）で、これがCreateの冪等性キーになる。Networkだけの要素は`network_id`＋`zone`で
+作り、networkサービスがSubnetを選ぶ（上記「払い出し」）。作成に成功した
+NetworkInterfaceのIDは`VirtualMachineStatus.interface_refs`に書き込まれる。
 
-`network_interfaces`は`image_id`と違い必須ではない（空配列でも良い）。空の場合、
-zoneは強制されず（`scheduleVM`のzoneフィルタは無効化）、NetworkInterfaceも
-作られない——ネットワークなし・シリアルのみのVMという、現状のFirecracker実VM起動の
-第一段階（[firecracker-boot.md](firecracker-boot.md)参照）とも整合する。
+compute-agentへは、払い出されたIP/MACに加えて、そのSubnetのCIDR/gateway、Network/
+NetworkClassの文脈（`network_id`、Networkのラベル・払い出された値・属性、Classの名前・
+属性・MTU、Subnetの払い出された値・属性）を渡す——compute-agentはnetworkサービスの
+クライアントを持たないため（Imageのkernel/rootfs解決と同じ理由）。computeは
+`NetworkService`/`NetworkClassService`のクライアントも持つ（`cmd/compute`・
+`cmd/compute-reconciler`が設定）。
 
-CLIからは`kyuusha vm create -subnets=<id1>,<id2>,...`で指定でき、先頭のSubnetが
-`primary`になる。
+`network_interfaces`は必須ではない（空配列でも良い）。空の場合、zoneは強制されず、
+NetworkInterfaceも作られない。
+
+CLIからは`kyuusha vm create -networks=<id1>,... -zone=<zone>`（Subnetを固定するなら
+`-subnets=<id>,...`）で指定でき、先頭が`primary`になる。
 
 ## tap配線とローカルネットワーク
 
 「compute-agentに統合する」という上記の設計方針を実装したのが
 `internal/compute-agent/netsetup`。`Reconciler.reconcile`のPhaseScheduledケースで
-作られた各NetworkInterface（IP/MAC）とそのSubnet（CIDR/gateway_ip/vlan_id）は
-`compute.CreateCommand.interfaces`としてcompute-agentに渡り（compute-agentはnetwork
-サービスのクライアントを一切持たない——Imageのkernel/rootfs解決と同じ理由）、
-compute-agentがそこから実際のtapデバイスを作る。
+作られた各NetworkInterface（IP/MAC）とそのSubnet（CIDR/gateway）は
+`compute.CreateCommand.interfaces`としてcompute-agentに渡り、compute-agentがそこから
+実際のtapデバイスを作る。
 
-具体的には、`vlan_id`ごとに1つのLinuxブリッジ（`kbr<vlan_id>`）をcompute-agent自身の
-ネットワーク名前空間内に作り、そのブリッジにSubnetの`gateway_ip`をそのまま割り当てる
-——ブリッジ自身が「そのSubnetのローカルなゲートウェイ」として実際に機能するようにして
-いる。NetworkInterfaceごとに専用のtapデバイス（名前は`netif-...`のような長いIDから
-決定的に導出した短い名前。Linuxのインタフェース名は15文字までしか使えないため）を
-作ってそのブリッジにmasterとして繋ぎ、Firecrackerの`network-interfaces`設定
-（`host_dev_name`/`guest_mac`）にそのtapを渡す。
+組み込みの配線（`-network-attach-bin`未指定）では、Subnetごとに1つのLinuxブリッジ
+（`kbr`＋Subnet IDから導出した12桁の16進）をcompute-agent自身のネットワーク名前空間内に
+作り、そのブリッジにSubnetのgatewayをそのまま割り当てる——ブリッジ自身が「そのSubnetの
+ローカルなゲートウェイ」として機能する。Subnetに払い出された値（VLAN ID等）はホストの外へ
+出ない組み込みの配線には意味が無いので使わない（それを使うのは`vlan-trunk.sh`等の
+VNAPプラグイン）。NetworkInterfaceごとに専用のtapデバイス（名前は長いIDから決定的に導出
+した短い名前。Linuxのインタフェース名は15文字まで）を作ってそのブリッジにmasterとして
+繋ぎ、Firecrackerの`network-interfaces`設定（`host_dev_name`/`guest_mac`）にそのtapを渡す。
 
 ゲストIPの設定にはDHCPもkernelのIP autoconfigurationも使っていない——確実に効く保証が
 ないため。代わりに、compute-agentがboot_argsへ`kyuusha.net.<index>.ip=<ip>/<prefix>`
@@ -298,5 +331,10 @@ exit code」という呼び出し規約を共有するが、配線とACL強制�
 
 ## エンドポイント
 
-`network :8084`（`SubnetService`, `NetworkInterfaceService`）。api-gateway経由でのみ
-到達可能（[システム構成仕様](system-overview.md)参照）。CLIは[CLI仕様](cli.md)参照。
+`network :8084`（`AllocationPoolService`, `NetworkClassService`, `NetworkService`,
+`SubnetService`, `NetworkInterfaceService`）。api-gateway経由でのみ到達可能
+（[システム構成仕様](system-overview.md)参照）——`SubnetService`/
+`NetworkInterfaceService`は組み込みのプロキシで、残りはapi-gatewayの外部バックエンドと
+同じ汎用転送（[外部システム連携仕様](external-integration.md)「外部バックエンドの登録」）で
+`kyuusha.network.v1.*`ごと転送する。AllocationPool・NetworkClassの作成/変更/削除は
+`tenant_id`を持たないので、テナント横断のロール（`admin`、`network-admin`等）だけが通る。CLIは[CLI仕様](cli.md)参照。

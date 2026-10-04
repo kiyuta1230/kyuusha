@@ -24,8 +24,8 @@ func TestMetricsCollector_CountsByTenantAndPhase(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	sn1 := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn1", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
-	if _, err := svc.CreateSubnet(ctx, "tenant-b", "sn2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"}); err != nil {
+	sn1 := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn1", userSubnet(t, ctx, svc, "tenant-a", "zone-a", "10.0.1.0/24", ""))
+	if _, err := svc.CreateSubnet(ctx, "tenant-b", "sn2", userSubnet(t, ctx, svc, "tenant-b", "zone-a", "10.0.2.0/24", "")); err != nil {
 		t.Fatalf("CreateSubnet sn2: %v", err)
 	}
 	mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn1.Meta.ID}, sn1)

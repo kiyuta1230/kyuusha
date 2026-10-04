@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/kiyuta1230/kyuusha/internal/authn"
 	"github.com/kiyuta1230/kyuusha/internal/network"
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 
@@ -93,14 +94,33 @@ func (s *SubnetServer) Watch(req *networkv1.WatchSubnetsRequest, stream networkv
 	return stream.Context().Err()
 }
 
+// SetStatusValues is the admin-only correction of a Subnet's
+// system-written values: authz lets the tenant itself through (it's the
+// tenant's own Subnet), so the admin check is here.
+func (s *SubnetServer) SetStatusValues(ctx context.Context, req *networkv1.SetSubnetStatusValuesRequest) (*networkv1.Subnet, error) {
+	if !authn.CallerIsAdminFromContext(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "only an admin may correct system-written values")
+	}
+	sn, err := s.svc.SetSubnetStatusValues(ctx, req.GetTenantId(), req.GetId(), req.GetValues(), req.GetAttributes())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	return toSubnet(*sn), nil
+}
+
 func toStatus(err error) error {
 	switch {
-	case errors.Is(err, network.ErrSubnetNotFound), errors.Is(err, network.ErrNetworkInterfaceNotFound):
+	case errors.Is(err, network.ErrSubnetNotFound), errors.Is(err, network.ErrNetworkInterfaceNotFound),
+		errors.Is(err, network.ErrNetworkNotFound), errors.Is(err, network.ErrNetworkClassNotFound), errors.Is(err, network.ErrAllocationPoolNotFound):
 		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, network.ErrSubnetConflict), errors.Is(err, network.ErrNetworkInterfaceConflict):
+	case errors.Is(err, network.ErrSubnetConflict), errors.Is(err, network.ErrNetworkInterfaceConflict),
+		errors.Is(err, network.ErrNetworkConflict), errors.Is(err, network.ErrNetworkClassConflict), errors.Is(err, network.ErrAllocationPoolConflict):
 		return status.Error(codes.Aborted, err.Error())
-	case errors.Is(err, network.ErrSubnetHistoryPruned), errors.Is(err, network.ErrNetworkInterfaceHistoryPruned):
+	case errors.Is(err, network.ErrSubnetHistoryPruned), errors.Is(err, network.ErrNetworkInterfaceHistoryPruned),
+		errors.Is(err, network.ErrNetworkHistoryPruned), errors.Is(err, network.ErrNetworkClassHistoryPruned), errors.Is(err, network.ErrAllocationPoolHistoryPruned):
 		return status.Error(codes.OutOfRange, err.Error())
+	case errors.Is(err, network.ErrInUse):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, network.ErrAdmissionDenied):
 		return status.Error(codes.PermissionDenied, err.Error())
 	case errors.Is(err, network.ErrAdmissionUnavailable):
@@ -112,64 +132,47 @@ func toStatus(err error) error {
 	return status.Error(codes.InvalidArgument, err.Error())
 }
 
+func fromAddresses(as []*networkv1.SubnetAddress) []network.SubnetAddress {
+	var out []network.SubnetAddress
+	for _, a := range as {
+		out = append(out, network.SubnetAddress{CIDR: a.GetCidr(), GatewayIP: a.GetGatewayIp()})
+	}
+	return out
+}
+
+func toAddresses(as []network.SubnetAddress) []*networkv1.SubnetAddress {
+	var out []*networkv1.SubnetAddress
+	for _, a := range as {
+		out = append(out, &networkv1.SubnetAddress{Cidr: a.CIDR, GatewayIp: a.GatewayIP})
+	}
+	return out
+}
+
 func fromSubnetSpec(s *networkv1.SubnetSpec) network.SubnetSpec {
 	return network.SubnetSpec{
+		NetworkID:           s.GetNetworkId(),
 		Zone:                s.GetZone(),
-		CIDR:                s.GetCidr(),
-		GatewayIP:           s.GetGatewayIp(),
+		RequestedAddresses:  fromAddresses(s.GetRequestedAddresses()),
 		DNSServers:          s.GetDnsServers(),
-		DNSSuffix:           s.GetDnsSuffix(),
-		MeshGroup:           s.GetMeshGroup(),
 		AllocatableIPRanges: s.GetAllocatableIpRanges(),
-		UniqueCidr:          s.GetUniqueCidr(),
-		Visibility:          fromSubnetVisibility(s.GetVisibility()),
-		SharedWithTenantIDs: s.GetSharedWithTenantIds(),
 	}
 }
 
 func toSubnetSpec(s network.SubnetSpec) *networkv1.SubnetSpec {
 	return &networkv1.SubnetSpec{
+		NetworkId:           s.NetworkID,
 		Zone:                s.Zone,
-		Cidr:                s.CIDR,
-		GatewayIp:           s.GatewayIP,
+		RequestedAddresses:  toAddresses(s.RequestedAddresses),
 		DnsServers:          s.DNSServers,
-		DnsSuffix:           s.DNSSuffix,
-		MeshGroup:           s.MeshGroup,
 		AllocatableIpRanges: s.AllocatableIPRanges,
-		UniqueCidr:          s.UniqueCidr,
-		Visibility:          toSubnetVisibility(s.Visibility),
-		SharedWithTenantIds: s.SharedWithTenantIDs,
-	}
-}
-
-// fromSubnetVisibility/toSubnetVisibility mirror internal/image/grpcserver's
-// fromVisibility/toVisibility exactly -- own copy, not a shared helper (each
-// service's proto enum is its own type, same "each layer has its own
-// mirror" convention this codebase uses elsewhere).
-func fromSubnetVisibility(v networkv1.SubnetVisibility) network.SubnetVisibility {
-	switch v {
-	case networkv1.SubnetVisibility_PRIVATE:
-		return network.SubnetVisibilityPrivate
-	case networkv1.SubnetVisibility_PUBLIC:
-		return network.SubnetVisibilityPublic
-	default:
-		return network.SubnetVisibilityUnspecified
-	}
-}
-
-func toSubnetVisibility(v network.SubnetVisibility) networkv1.SubnetVisibility {
-	switch v {
-	case network.SubnetVisibilityPrivate:
-		return networkv1.SubnetVisibility_PRIVATE
-	case network.SubnetVisibilityPublic:
-		return networkv1.SubnetVisibility_PUBLIC
-	default:
-		return networkv1.SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED
 	}
 }
 
 func toSubnetStatusProto(st network.SubnetStatus) *networkv1.SubnetStatus {
-	out := &networkv1.SubnetStatus{Phase: string(st.Phase), VlanId: st.VLANID}
+	out := &networkv1.SubnetStatus{
+		Phase: string(st.Phase), Addresses: toAddresses(st.Addresses), Values: st.Values,
+		Attributes: st.Attributes, Allocations: toAllocationsProto(st.Allocations),
+	}
 	for _, c := range st.Conditions {
 		out.Conditions = append(out.Conditions, toConditionProto(c))
 	}
@@ -177,7 +180,10 @@ func toSubnetStatusProto(st network.SubnetStatus) *networkv1.SubnetStatus {
 }
 
 func fromSubnetStatusProto(st *networkv1.SubnetStatus) network.SubnetStatus {
-	out := network.SubnetStatus{Phase: network.SubnetPhase(st.GetPhase()), VLANID: st.GetVlanId()}
+	out := network.SubnetStatus{
+		Phase: network.SubnetPhase(st.GetPhase()), Addresses: fromAddresses(st.GetAddresses()), Values: st.GetValues(),
+		Attributes: st.GetAttributes(), Allocations: fromAllocationsProto(st.GetAllocations()),
+	}
 	for _, c := range st.GetConditions() {
 		out.Conditions = append(out.Conditions, fromConditionProto(c))
 	}

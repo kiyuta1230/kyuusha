@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +35,21 @@ var (
 	ErrNetworkInterfaceNotFound      = errors.New("network_interface: not found")
 	ErrNetworkInterfaceConflict      = errors.New("network_interface: resource_version conflict")
 	ErrNetworkInterfaceHistoryPruned = errors.New("network_interface: watch resume point too old, relist required")
+
+	ErrNetworkNotFound      = errors.New("network: not found")
+	ErrNetworkConflict      = errors.New("network: resource_version conflict")
+	ErrNetworkHistoryPruned = errors.New("network: watch resume point too old, relist required")
+
+	ErrNetworkClassNotFound      = errors.New("network_class: not found")
+	ErrNetworkClassConflict      = errors.New("network_class: resource_version conflict")
+	ErrNetworkClassHistoryPruned = errors.New("network_class: watch resume point too old, relist required")
+
+	ErrAllocationPoolNotFound      = errors.New("allocation_pool: not found")
+	ErrAllocationPoolConflict      = errors.New("allocation_pool: resource_version conflict")
+	ErrAllocationPoolHistoryPruned = errors.New("allocation_pool: watch resume point too old, relist required")
+
+	// ErrInUse: deleting/shrinking something still referenced or allocated.
+	ErrInUse = errors.New("network: still in use")
 
 	ErrValidation    = errors.New("network: validation failed")
 	ErrQuotaExceeded = errors.New("network: tenant quota exceeded")
@@ -75,21 +90,23 @@ const pendingSweepInterval = 10 * time.Second
 // the active-deletion path this backstops.
 const orphanSweepInterval = 10 * time.Minute
 
-// Service implements the SubnetService/NetworkInterfaceService CRUD+Watch
-// surface against in-memory resource.Stores, with real (if simple) IPAM:
-// Subnet Create allocates a VLAN ID from a per-zone pool (docs/architecture.md
-// "VLAN IDの払い出し"), NetworkInterface Create allocates an IP from its
-// Subnet's own CIDR (see ipam.go). Neither involves a hypervisor agent --
-// both are synchronous, in-memory pool operations. Pool exhaustion doesn't
-// reject Create (the request itself is valid, capacity may free up later):
-// the resource is created Pending with a Condition, and Run's periodic
-// sweep retries it. No tap wiring exists yet -- see docs/specs/network.md
-// for the current boundary and why that stays out of this service.
+// Service implements the network service: AllocationPool/NetworkClass/
+// Network/Subnet/NetworkInterface CRUD+Watch, with kyuusha's own
+// allocation: a Network's and Subnet's values come from the pools its
+// NetworkClass references (alloc.go), a NetworkInterface's IP from its
+// Subnet's CIDR (ipam.go). Allocation never involves a hypervisor agent
+// and never rejects a Create: the resource is created Pending, allocated
+// by network-reconciler (Run), and left Pending with a Condition while a
+// pool is exhausted, retried by Run's periodic sweep. See
+// docs/specs/network.md.
 type Service struct {
 	subnets    *resource.Store[Subnet, *Subnet]
 	interfaces *resource.Store[NetworkInterface, *NetworkInterface]
+	networks   *resource.Store[Network, *Network]
+	classes    *resource.Store[NetworkClass, *NetworkClass]
+	pools      *resource.Store[AllocationPool, *AllocationPool]
 
-	vlans *vlanPool
+	alloc *allocator
 	ips   *ipPool
 
 	nextMACOct uint32
@@ -105,13 +122,13 @@ type Service struct {
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
 
-	// js is used only by UpdateFirewallRules's publishUpdateACL, to notify
-	// whichever hypervisor is currently running a NetworkInterface's VM
-	// that its ingress_rules/egress_rules changed. nil (e.g. cmd/network-
-	// reconciler, which serves no UpdateFirewallRules RPC at all, and most
-	// tests) makes publishUpdateACL a no-op -- best-effort, never blocks or
-	// fails the RPC itself (see docs/specs/network.md「セキュリティ
-	// バックエンド」).
+	// js is used by publishUpdateACL, to notify whichever hypervisor is
+	// currently running a NetworkInterface's VM that its effective rules
+	// changed: from UpdateFirewallRules (cmd/network), and from a Network's
+	// membership changing (cmd/network-reconciler, see
+	// republishNetworkACLs). nil (most tests) makes it a no-op --
+	// best-effort, never blocks or fails anything (see docs/specs/
+	// network.md「セキュリティバックエンド」).
 	js jetstream.JetStream
 
 	// AdmissionGate is consulted synchronously before Subnet Create/Update/
@@ -121,8 +138,8 @@ type Service struct {
 	AdmissionGate admissionwebhook.Gate
 }
 
-// NewService constructs a Service and synchronously rebuilds its VLAN/IP
-// pools (see rebuildPools) and tenant quota usage (see rebuildUsage) from
+// NewService constructs a Service and synchronously rebuilds its
+// allocation/IP pools (see rebuildPools) and tenant quota usage (see rebuildUsage) from
 // etcd before returning -- callers must not start serving Create requests
 // until this returns, or a Create racing either rebuild could hand out an
 // id/address/quota charge the rebuild was about to reserve.
@@ -142,11 +159,26 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 			Conflict:      ErrNetworkInterfaceConflict,
 			HistoryPruned: ErrNetworkInterfaceHistoryPruned,
 		}),
+		networks: resource.NewStore[Network, *Network](etcdClient, "network", resource.StoreErrors{
+			NotFound:      ErrNetworkNotFound,
+			Conflict:      ErrNetworkConflict,
+			HistoryPruned: ErrNetworkHistoryPruned,
+		}),
+		classes: resource.NewStore[NetworkClass, *NetworkClass](etcdClient, "netclass", resource.StoreErrors{
+			NotFound:      ErrNetworkClassNotFound,
+			Conflict:      ErrNetworkClassConflict,
+			HistoryPruned: ErrNetworkClassHistoryPruned,
+		}),
+		pools: resource.NewStore[AllocationPool, *AllocationPool](etcdClient, "allocpool", resource.StoreErrors{
+			NotFound:      ErrAllocationPoolNotFound,
+			Conflict:      ErrAllocationPoolConflict,
+			HistoryPruned: ErrAllocationPoolHistoryPruned,
+		}),
 		computeClient:  computeClient,
 		identityClient: identityClient,
 		quota:          quota,
 		js:             js,
-		vlans:          newVLANPool(),
+		alloc:          newAllocator(),
 		ips:            newIPPool(),
 		usage:          make(map[string]tenantUsage),
 	}
@@ -192,16 +224,9 @@ func (s *Service) rebuildUsage(ctx context.Context) error {
 	return nil
 }
 
-// SetVLANRanges restricts which VLAN IDs each zone hands out (see
-// VLANRanges). Only cmd/network-reconciler allocates VLAN IDs, so only it
-// needs to call this; call it before starting the allocation watch.
-func (s *Service) SetVLANRanges(r VLANRanges) {
-	s.vlans.setRanges(r)
-}
-
-// rebuildPools restores vlans/ips/nextMACOct's in-memory allocation state
-// from every existing Subnet/NetworkInterface in etcd. Without this,
-// vlanPool/ipPool/nextMACOct -- all purely in-memory, populated only by
+// rebuildPools restores alloc/ips/nextMACOct's in-memory allocation state
+// from every existing Network/Subnet/NetworkInterface in etcd. Without this,
+// allocator/ipPool/nextMACOct -- all purely in-memory, populated only by
 // allocations made within this process's own lifetime -- forget every VLAN
 // ID/IP address/MAC address already allocated on EVERY restart of this
 // process, not just a hypothetical multi-replica scenario: a plain
@@ -218,8 +243,17 @@ func (s *Service) rebuildPools(ctx context.Context) error {
 		return fmt.Errorf("network: rebuild pools: list subnets: %w", err)
 	}
 	for _, sn := range subnets {
-		if sn.Status.VLANID != 0 {
-			s.vlans.markUsed(sn.Spec.Zone, sn.Status.VLANID)
+		for _, al := range sn.Status.Allocations {
+			s.alloc.markUsed(al)
+		}
+	}
+	networks, err := s.networks.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("network: rebuild pools: list networks: %w", err)
+	}
+	for _, n := range networks {
+		for _, al := range n.Status.Allocations {
+			s.alloc.markUsed(al)
 		}
 	}
 	ifaces, err := s.interfaces.List(ctx, "")
@@ -229,7 +263,7 @@ func (s *Service) rebuildPools(ctx context.Context) error {
 	var maxMACOct uint32
 	for _, n := range ifaces {
 		if n.Status.IPAddress != "" {
-			s.ips.markUsed(n.Spec.SubnetID, n.Status.IPAddress)
+			s.ips.markUsed(n.SubnetID(), n.Status.IPAddress)
 		}
 		if oct, ok := parseMACOct(n.Status.MACAddress); ok && oct > maxMACOct {
 			maxMACOct = oct
@@ -247,7 +281,7 @@ func (s *Service) rebuildPools(ctx context.Context) error {
 }
 
 // remarkPools is runWatchLoop's onPruned for network-reconciler's watches:
-// re-marks every VLAN ID/IP currently in etcd as used. It deliberately
+// re-marks every pool allocation/IP currently in etcd as used. It deliberately
 // never frees anything -- an allocation already taken from the pool but
 // not yet persisted would look free in a fresh listing, and freeing it
 // could hand the same VLAN ID/IP out twice. So a deletion that happened
@@ -289,6 +323,7 @@ func parseMACOct(mac string) (n uint32, ok bool) {
 // cmd/network-reconciler calls this; cmd/network (the gRPC API) never
 // does. Blocks until ctx is done.
 func (s *Service) Run(ctx context.Context) error {
+	go s.watchPendingNetworks(ctx)
 	go s.watchPendingSubnets(ctx)
 	go s.watchPendingNetworkInterfaces(ctx)
 	go s.watchVMPlacement(ctx)
@@ -302,6 +337,7 @@ func (s *Service) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			s.retryPendingNetworks(ctx)
 			s.retryPendingSubnets(ctx)
 			s.retryPendingNetworkInterfaces(ctx)
 		case <-orphanTicker.C:
@@ -324,17 +360,20 @@ func (s *Service) watchPendingSubnets(ctx context.Context) {
 	runWatchLoop(ctx, "subnets", func(ctx context.Context, rv int64) (<-chan SubnetEvent, error) { return s.WatchSubnets(ctx, "", rv) }, ErrSubnetHistoryPruned, s.remarkPools, func(e SubnetEvent) {
 		if e.Type == EventDeleted {
 			s.releaseSubnet(e.Object)
+			if len(e.Object.Status.Addresses) > 0 {
+				s.republishNetworkACLs(ctx, e.Object.Meta.TenantID, e.Object.Spec.NetworkID, e.ResourceVersion)
+			}
 			return
 		}
 		if e.Type != EventAdded || e.Object.Status.Phase != SubnetPhasePending {
 			return
 		}
 		sn := e.Object
-		s.tryAllocateVLAN(ctx, &sn)
+		s.tryAllocateSubnet(ctx, &sn)
 	})
 }
 
-// releaseSubnet/releaseNetworkInterface return an object's VLAN ID/IP to
+// releaseSubnet/releaseNetworkInterface return an object's pool values/IP to
 // this process's pool once the object is actually gone (its Deleted
 // event), never at Delete-call time: a Subnet/NetworkInterface held by a
 // Finalizer lingers with deleted_at set and must keep its VLAN ID/IP until
@@ -346,14 +385,12 @@ func (s *Service) watchPendingSubnets(ctx context.Context) {
 // watch starting is missed until the next restart; the window is the few
 // milliseconds of startup.
 func (s *Service) releaseSubnet(sn Subnet) {
-	if sn.Status.VLANID != 0 {
-		s.vlans.release(sn.Spec.Zone, sn.Status.VLANID)
-	}
+	s.alloc.release(sn.Status.Allocations)
 }
 
 func (s *Service) releaseNetworkInterface(n NetworkInterface) {
 	if n.Status.IPAddress != "" {
-		s.ips.release(n.Spec.SubnetID, n.Status.IPAddress)
+		s.ips.release(n.SubnetID(), n.Status.IPAddress)
 	}
 }
 
@@ -372,11 +409,7 @@ func (s *Service) watchPendingNetworkInterfaces(ctx context.Context) {
 			return
 		}
 		n := e.Object
-		subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID)
-		if err != nil || subnet.Status.Phase != SubnetPhaseReady {
-			return // retryPendingNetworkInterfaces' sweep retries once the Subnet is Ready
-		}
-		s.tryAllocateIP(ctx, &n, subnet.Spec.CIDR, subnet.Spec.GatewayIP, subnet.Spec.AllocatableIPRanges)
+		s.tryAllocateIP(ctx, &n)
 	})
 }
 
@@ -422,7 +455,7 @@ func (s *Service) retryPendingSubnets(ctx context.Context) {
 	}
 	for i := range subnets {
 		if subnets[i].Status.Phase == SubnetPhasePending {
-			s.tryAllocateVLAN(ctx, &subnets[i])
+			s.tryAllocateSubnet(ctx, &subnets[i])
 		}
 	}
 }
@@ -436,11 +469,7 @@ func (s *Service) retryPendingNetworkInterfaces(ctx context.Context) {
 		if ifaces[i].Status.Phase != NetworkInterfacePhasePending {
 			continue
 		}
-		subnet, err := s.getSubnetForInterface(ctx, ifaces[i].Meta.TenantID, ifaces[i].Spec.SubnetID)
-		if err != nil || subnet.Status.Phase != SubnetPhaseReady {
-			continue
-		}
-		s.tryAllocateIP(ctx, &ifaces[i], subnet.Spec.CIDR, subnet.Spec.GatewayIP, subnet.Spec.AllocatableIPRanges)
+		s.tryAllocateIP(ctx, &ifaces[i])
 	}
 }
 
@@ -467,25 +496,11 @@ func (s *Service) CreateSubnetWithMetadata(ctx context.Context, tenantID, name s
 	if tenantID == "" {
 		return nil, fmt.Errorf("%w: tenant_id is required", ErrValidation)
 	}
-	if spec.Zone == "" {
-		return nil, fmt.Errorf("%w: spec.zone is required", ErrValidation)
+	if existing, ok := s.subnets.LookupByName(ctx, tenantID, name); ok {
+		return &existing, nil // idempotent retry: before validation, or the retry would clash with itself
 	}
-	if _, _, err := net.ParseCIDR(spec.CIDR); err != nil {
-		return nil, fmt.Errorf("%w: spec.cidr is invalid: %v", ErrValidation, err)
-	}
-	if spec.GatewayIP != "" && net.ParseIP(spec.GatewayIP) == nil {
-		return nil, fmt.Errorf("%w: spec.gateway_ip is invalid", ErrValidation)
-	}
-	if err := validateAllocatableIPRanges(spec.CIDR, spec.AllocatableIPRanges); err != nil {
-		return nil, fmt.Errorf("%w: spec.allocatable_ip_ranges: %v", ErrValidation, err)
-	}
-	if spec.UniqueCidr {
-		if err := s.validateUniqueCIDR(ctx, "", spec.CIDR); err != nil {
-			return nil, err
-		}
-	}
-	if spec.Visibility == SubnetVisibilityPublic && !spec.UniqueCidr {
-		return nil, fmt.Errorf("%w: spec.visibility=PUBLIC requires spec.unique_cidr=true (open, unvetted cross-tenant attach is only allowed on Public IP address space; a purposeful, owner-vetted grant to specific tenants should use spec.shared_with_tenant_ids instead, on any Subnet)", ErrValidation)
+	if err := s.validateSubnetRequest(ctx, tenantID, spec); err != nil {
+		return nil, err
 	}
 
 	s.usageMu.Lock()
@@ -508,12 +523,11 @@ func (s *Service) CreateSubnetWithMetadata(ctx context.Context, tenantID, name s
 		return nil, fmt.Errorf("%w: tenant %q", ErrQuotaExceeded, tenantID)
 	}
 
-	// Always created Pending -- the actual vlan_id allocation attempt
-	// happens only in cmd/network-reconciler (see
-	// watchPendingSubnets/retryPendingSubnets), never here. See
-	// docs/architecture.md "コントロールプレーンサービス自体の可用性":
-	// vlanPool is process-local state, so this API handler must never touch
-	// it directly -- doing so would make it unsafe to run more than one
+	// Always created Pending -- the actual allocation attempt happens only
+	// in cmd/network-reconciler (see watchPendingSubnets/
+	// retryPendingSubnets), never here. See docs/architecture.md
+	// "コントロールプレーンサービス自体の可用性": the allocator is
+	// process-local state, so this API handler must never touch it directly -- doing so would make it unsafe to run more than one
 	// replica of this binary (each replica's own pool would drift from the
 	// others' the moment either one allocates).
 	if err := s.admit(ctx, admissionwebhook.Request{
@@ -537,44 +551,19 @@ func (s *Service) CreateSubnetWithMetadata(ctx context.Context, tenantID, name s
 	return &out, nil
 }
 
-// tryAllocateVLAN attempts to allocate sn's VLAN ID from its zone's pool
-// and persist the result, mutating sn in place either way: Ready+VlanID on
-// success, still Pending with a VlanPoolExhausted condition on failure
-// (retried later by Run's sweep). A store Update failure after a
-// successful allocation rolls the allocation back, so it isn't leaked on a
-// resource nobody ever sees as Ready.
-func (s *Service) tryAllocateVLAN(ctx context.Context, sn *Subnet) {
-	if sn.Meta.DeletedAt != nil {
-		return // being deleted (held by a Finalizer): never give it a VLAN ID now
-	}
-	id, ok := s.vlans.allocate(sn.Spec.Zone)
-	if !ok {
-		sn.Status.Conditions = upsertCondition(sn.Status.Conditions, resource.Condition{
-			Type: "VlanPoolExhausted", Status: resource.ConditionTrue, LastTransitionAt: time.Now(),
-		})
-		if updated, err := s.subnets.Update(ctx, *sn); err == nil {
-			*sn = updated
-		}
-		return
-	}
-
-	sn.Status.Phase = SubnetPhaseReady
-	sn.Status.VLANID = id
-	sn.Status.Conditions = upsertCondition(sn.Status.Conditions, resource.Condition{
-		Type: "VlanPoolExhausted", Status: resource.ConditionFalse, LastTransitionAt: time.Now(),
-	})
-	updated, err := s.subnets.Update(ctx, *sn)
-	if err != nil {
-		s.vlans.release(sn.Spec.Zone, id)
-		return
-	}
-	*sn = updated
-}
-
+// GetSubnet returns tenantID's own Subnet, or a Subnet of a Network shared
+// with tenantID (or PUBLIC) -- the Subnets that tenant's NICs can land on.
+// An empty tenantID (cross-tenant roles) reads any.
 func (s *Service) GetSubnet(ctx context.Context, tenantID, id string) (*Subnet, error) {
-	out, err := s.subnets.Get(ctx, tenantID, id)
+	out, err := s.getSubnetForInterface(ctx, tenantID, id)
 	if err != nil {
 		return nil, err
+	}
+	if tenantID != "" && out.Meta.TenantID != tenantID {
+		network, err := s.getNetworkAnyTenant(ctx, out.Meta.TenantID, out.Spec.NetworkID)
+		if err != nil || !network.UsableBy(tenantID) {
+			return nil, ErrSubnetNotFound
+		}
 	}
 	return &out, nil
 }
@@ -587,14 +576,6 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 	if err := resource.ValidateMetadata(resource.Metadata{Labels: subnet.Meta.Labels, Annotations: subnet.Meta.Annotations}); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
-	if subnet.Spec.UniqueCidr {
-		if err := s.validateUniqueCIDR(ctx, subnet.Meta.ID, subnet.Spec.CIDR); err != nil {
-			return nil, err
-		}
-	}
-	if subnet.Spec.Visibility == SubnetVisibilityPublic && !subnet.Spec.UniqueCidr {
-		return nil, fmt.Errorf("%w: spec.visibility=PUBLIC requires spec.unique_cidr=true (open, unvetted cross-tenant attach is only allowed on Public IP address space; a purposeful, owner-vetted grant to specific tenants should use spec.shared_with_tenant_ids instead, on any Subnet)", ErrValidation)
-	}
 	current, err := s.subnets.Get(ctx, subnet.Meta.TenantID, subnet.Meta.ID)
 	if err != nil {
 		return nil, err
@@ -604,17 +585,24 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 	subnet.Meta.Finalizers = finalizers
-	// zone/cidr/gateway_ip are fixed at Create: the VLAN ID was allocated
-	// from zone's pool, every NetworkInterface's IP from cidr, and every
-	// running guest and host bridge is configured with gateway_ip --
-	// changing any of them under existing allocations would leave
-	// addresses outside the CIDR, a VLAN ID from the wrong zone's pool, or
-	// a gateway colliding with an already-allocated IP.
-	if subnet.Spec.Zone != current.Spec.Zone || subnet.Spec.CIDR != current.Spec.CIDR || subnet.Spec.GatewayIP != current.Spec.GatewayIP {
-		return nil, fmt.Errorf("%w: spec.zone/cidr/gateway_ip cannot be changed after Create", ErrValidation)
+	// network_id/zone/requested_addresses are fixed at Create: every
+	// allocated value came from them, and every NetworkInterface's IP and
+	// every guest's and host bridge's gateway from the resulting
+	// addresses -- changing them under existing allocations would leave
+	// addresses outside the CIDR or values from the wrong pools.
+	if subnet.Spec.NetworkID != current.Spec.NetworkID || subnet.Spec.Zone != current.Spec.Zone || !slices.Equal(subnet.Spec.RequestedAddresses, current.Spec.RequestedAddresses) {
+		return nil, fmt.Errorf("%w: spec.network_id/zone/requested_addresses cannot be changed after Create", ErrValidation)
 	}
-	// status is server-owned (vlan_id above all: a caller-chosen vlan_id
-	// would wire this tenant's VMs into another tenant's VLAN). This method
+	if cidr, _ := current.Status.IPv4(); cidr != "" {
+		if err := validateAllocatableIPRanges(cidr, subnet.Spec.AllocatableIPRanges); err != nil {
+			return nil, fmt.Errorf("%w: spec.allocatable_ip_ranges: %v", ErrValidation, err)
+		}
+	}
+	if err := validateIPs("spec.dns_servers", subnet.Spec.DNSServers); err != nil {
+		return nil, err
+	}
+	// status is server-owned (allocated values above all: a caller-chosen
+	// vlan_id would wire this tenant's VMs into another tenant's VLAN). This method
 	// only serves the Update RPC; internal writers go through s.subnets.
 	subnet.Status = current.Status
 	if err := s.admit(ctx, admissionwebhook.Request{
@@ -695,8 +683,8 @@ func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenant
 	if spec.VMID == "" {
 		return nil, fmt.Errorf("%w: spec.vm_id is required", ErrValidation)
 	}
-	if spec.SubnetID == "" {
-		return nil, fmt.Errorf("%w: spec.subnet_id is required", ErrValidation)
+	if spec.SubnetID == "" && (spec.NetworkID == "" || spec.Zone == "") {
+		return nil, fmt.Errorf("%w: spec.subnet_id, or spec.network_id and spec.zone, are required", ErrValidation)
 	}
 	if err := validateFirewallRules(spec.IngressRules); err != nil {
 		return nil, err
@@ -712,24 +700,42 @@ func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenant
 		return &existing, nil
 	}
 
-	subnet, err := s.getSubnetForInterface(ctx, tenantID, spec.SubnetID)
+	// A pinned Subnet decides network_id/zone; otherwise a Subnet is picked
+	// at allocation time (tryAllocateIP), and none need exist yet -- the
+	// interface just waits Pending for one, same as for a free address.
+	if spec.SubnetID != "" {
+		subnet, err := s.getSubnetForInterface(ctx, tenantID, spec.SubnetID)
+		if err != nil {
+			if errors.Is(err, ErrSubnetNotFound) {
+				return nil, fmt.Errorf("%w: subnet_id %q does not exist", ErrValidation, spec.SubnetID)
+			}
+			return nil, err
+		}
+		if spec.NetworkID != "" && spec.NetworkID != subnet.Spec.NetworkID || spec.Zone != "" && spec.Zone != subnet.Spec.Zone {
+			return nil, fmt.Errorf("%w: subnet %q is in network %q zone %q, not the requested network/zone", ErrValidation, spec.SubnetID, subnet.Spec.NetworkID, subnet.Spec.Zone)
+		}
+		if subnet.Status.Phase != SubnetPhaseReady {
+			return nil, fmt.Errorf("%w: subnet %q is not Ready (phase=%s)", ErrValidation, spec.SubnetID, subnet.Status.Phase)
+		}
+		if subnet.Meta.DeletedAt != nil {
+			return nil, fmt.Errorf("%w: subnet %q is being deleted", ErrValidation, spec.SubnetID)
+		}
+		spec.NetworkID, spec.Zone = subnet.Spec.NetworkID, subnet.Spec.Zone
+	}
+	// Network.UsableBy is only ever checked here, at attach time -- see
+	// getSubnetForInterface's doc comment for why it doesn't gate on it.
+	network, err := s.getNetworkAnyTenant(ctx, tenantID, spec.NetworkID)
 	if err != nil {
-		if errors.Is(err, ErrSubnetNotFound) {
-			return nil, fmt.Errorf("%w: subnet_id %q does not exist", ErrValidation, spec.SubnetID)
+		if errors.Is(err, ErrNetworkNotFound) {
+			return nil, fmt.Errorf("%w: network_id %q does not exist", ErrValidation, spec.NetworkID)
 		}
 		return nil, err
 	}
-	// subnetUsableBy is only ever checked here, at attach time -- see its
-	// own doc comment for why getSubnetForInterface itself doesn't gate on
-	// it.
-	if !subnetUsableBy(subnet, tenantID) {
-		return nil, fmt.Errorf("%w: subnet_id %q is not usable by tenant %q", ErrValidation, spec.SubnetID, tenantID)
+	if !network.UsableBy(tenantID) {
+		return nil, fmt.Errorf("%w: network %q is not usable by tenant %q", ErrValidation, network.Meta.ID, tenantID)
 	}
-	if subnet.Status.Phase != SubnetPhaseReady {
-		return nil, fmt.Errorf("%w: subnet %q is not Ready (phase=%s)", ErrValidation, spec.SubnetID, subnet.Status.Phase)
-	}
-	if subnet.Meta.DeletedAt != nil {
-		return nil, fmt.Errorf("%w: subnet %q is being deleted", ErrValidation, spec.SubnetID)
+	if network.Meta.DeletedAt != nil {
+		return nil, fmt.Errorf("%w: network %q is being deleted", ErrValidation, network.Meta.ID)
 	}
 
 	limit, err := lookupQuota(ctx, s.identityClient, tenantID)
@@ -771,46 +777,88 @@ func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenant
 	return &out, nil
 }
 
-// tryAllocateIP mirrors tryAllocateVLAN: mutates n in place, Ready+IPAddress
-// on success, still Pending with an IPPoolExhausted condition (retried
-// later) if the Subnet's CIDR (or allocatableRanges, if set) has no free
-// address left. Also assigns n's mac_address the first time it runs for n
-// (a no-op on a later retry, once already set) -- CreateNetworkInterface
-// itself never does this (see its doc comment): unlike vlan_id/ip_address,
-// mac_address allocation can't fail/exhaust, but nextMACOct is exactly as
-// process-local as vlanPool/ipPool, so it still has to happen only here,
-// in cmd/network-reconciler, not in the (possibly multi-replica) API
-// handler.
-func (s *Service) tryAllocateIP(ctx context.Context, n *NetworkInterface, cidr, gatewayIP string, allocatableRanges []string) {
+// tryAllocateIP gives n an address -- from its pinned Subnet, or else from
+// the first Ready Subnet of n's Network in n's zone that has one free
+// (picking the Subnet inside the same step as the IP is what keeps "chose
+// a Subnet that then ran out" from ever happening: ipPool lives in this
+// process alone) -- and marks it Ready with status.subnet_id set. With no
+// address anywhere it stays Pending with a NoFreeAddress condition: the
+// cue to add a Subnet. Also assigns n's mac_address the first time it runs
+// for n -- like every allocation, only ever here in cmd/network-
+// reconciler, never in the (possibly multi-replica) API handler.
+func (s *Service) tryAllocateIP(ctx context.Context, n *NetworkInterface) {
 	if n.Meta.DeletedAt != nil {
 		return // being deleted (held by a Finalizer): never give it an IP now
+	}
+	candidates, err := s.candidateSubnets(ctx, n)
+	if err != nil {
+		return // transient; the sweep retries
 	}
 	if n.Status.MACAddress == "" {
 		n.Status.MACAddress = s.allocateMAC()
 	}
-
-	ip, ok := s.ips.allocate(n.Spec.SubnetID, cidr, gatewayIP, allocatableRanges)
-	if !ok {
-		n.Status.Conditions = upsertCondition(n.Status.Conditions, resource.Condition{
-			Type: "IPPoolExhausted", Status: resource.ConditionTrue, LastTransitionAt: time.Now(),
-		})
-		if updated, err := s.interfaces.Update(ctx, *n); err == nil {
-			*n = updated
+	for _, sn := range candidates {
+		cidr, gw := sn.Status.IPv4()
+		ip, ok := s.ips.allocate(sn.Meta.ID, cidr, gw, sn.Spec.AllocatableIPRanges)
+		if !ok {
+			continue
 		}
+		n.Status.Phase = NetworkInterfacePhaseReady
+		n.Status.IPAddress = ip
+		n.Status.SubnetID = sn.Meta.ID
+		n.Status.Conditions = upsertCondition(n.Status.Conditions, resource.Condition{
+			Type: "NoFreeAddress", Status: resource.ConditionFalse, LastTransitionAt: time.Now(),
+		})
+		updated, err := s.interfaces.Update(ctx, *n)
+		if err != nil {
+			s.ips.release(sn.Meta.ID, ip)
+			return
+		}
+		*n = updated
 		return
 	}
-
-	n.Status.Phase = NetworkInterfacePhaseReady
-	n.Status.IPAddress = ip
+	msg := fmt.Sprintf("no Ready Subnet of network %q in zone %q has a free address", n.Spec.NetworkID, n.Spec.Zone)
+	if n.Spec.SubnetID != "" {
+		msg = fmt.Sprintf("subnet %q has no free address (or isn't Ready)", n.Spec.SubnetID)
+	}
 	n.Status.Conditions = upsertCondition(n.Status.Conditions, resource.Condition{
-		Type: "IPPoolExhausted", Status: resource.ConditionFalse, LastTransitionAt: time.Now(),
+		Type: "NoFreeAddress", Status: resource.ConditionTrue, Message: msg, LastTransitionAt: time.Now(),
 	})
-	updated, err := s.interfaces.Update(ctx, *n)
-	if err != nil {
-		s.ips.release(n.Spec.SubnetID, ip)
-		return
+	if updated, err := s.interfaces.Update(ctx, *n); err == nil {
+		*n = updated
 	}
-	*n = updated
+}
+
+// candidateSubnets lists where n's address may come from, in the order to
+// try: just the pinned Subnet, or every Ready, not-being-deleted Subnet of
+// n's Network in n's zone, oldest first.
+func (s *Service) candidateSubnets(ctx context.Context, n *NetworkInterface) ([]Subnet, error) {
+	if n.Spec.SubnetID != "" {
+		sn, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID)
+		if err != nil {
+			return nil, err
+		}
+		if sn.Status.Phase != SubnetPhaseReady {
+			return nil, nil
+		}
+		return []Subnet{sn}, nil
+	}
+	network, err := s.getNetworkAnyTenant(ctx, n.Meta.TenantID, n.Spec.NetworkID)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.subnets.List(ctx, network.Meta.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	var out []Subnet
+	for _, sn := range all {
+		if sn.Spec.NetworkID == network.Meta.ID && sn.Spec.Zone == n.Spec.Zone && sn.Status.Phase == SubnetPhaseReady && sn.Meta.DeletedAt == nil {
+			out = append(out, sn)
+		}
+	}
+	slices.SortFunc(out, func(a, b Subnet) int { return a.Meta.CreatedAt.Compare(b.Meta.CreatedAt) })
+	return out, nil
 }
 
 func (s *Service) GetNetworkInterface(ctx context.Context, tenantID, id string) (*NetworkInterface, error) {
@@ -855,8 +903,8 @@ func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInte
 	// is server-owned (a caller-chosen ip_address/mac_address would
 	// defeat SNAP's anti-spoofing, which trusts them). This method only
 	// serves the Update RPC; internal writers go through s.interfaces.
-	if iface.Spec.VMID != current.Spec.VMID || iface.Spec.SubnetID != current.Spec.SubnetID {
-		return nil, fmt.Errorf("%w: spec.vm_id/subnet_id cannot be changed", ErrValidation)
+	if iface.Spec.VMID != current.Spec.VMID || iface.Spec.SubnetID != current.Spec.SubnetID || iface.Spec.NetworkID != current.Spec.NetworkID || iface.Spec.Zone != current.Spec.Zone {
+		return nil, fmt.Errorf("%w: spec.vm_id/subnet_id/network_id/zone cannot be changed", ErrValidation)
 	}
 	iface.Spec = current.Spec
 	iface.Status = current.Status
@@ -918,7 +966,7 @@ func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, 
 		return nil, err
 	}
 
-	s.publishUpdateACL(ctx, out)
+	s.publishUpdateACL(ctx, out, out.Meta.ResourceVersion)
 	return &out, nil
 }
 
@@ -930,7 +978,12 @@ func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, 
 // js, or a publish failure all just log-and-return, never propagate to the
 // caller -- the etcd write already succeeded, and this is host-state
 // convergence, not correctness of the API call itself.
-func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
+//
+// version must exceed whatever this interface's last update_acl carried
+// (compute-agent drops anything not newer): n's own resource_version for
+// a change to n itself, or the revision of whatever else triggered the
+// re-send (republishNetworkACLs) when n is unchanged.
+func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface, version int64) {
 	if n.Spec.VMID == "" || s.computeClient == nil || s.js == nil {
 		return
 	}
@@ -946,10 +999,11 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
 
 	var subnetCIDR, gatewayIP string
 	var subnetLabels map[string]string
-	if subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID); err == nil {
-		subnetCIDR = subnet.Spec.CIDR
-		gatewayIP = subnet.Spec.GatewayIP
+	var attach AttachContext
+	if subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.SubnetID()); err == nil {
+		subnetCIDR, gatewayIP = subnet.Status.IPv4()
 		subnetLabels = subnet.Meta.Labels
+		attach = s.attachContext(ctx, subnet)
 	}
 
 	ingress, egress, err := s.EffectiveFirewallRules(ctx, &n)
@@ -962,15 +1016,16 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface) {
 		IfaceID:         n.Meta.ID,
 		VMID:            n.Spec.VMID,
 		TenantID:        n.Meta.TenantID,
-		SubnetID:        n.Spec.SubnetID,
+		SubnetID:        n.SubnetID(),
 		SubnetLabels:    subnetLabels,
 		SubnetCIDR:      subnetCIDR,
 		IPAddress:       n.Status.IPAddress,
 		MACAddress:      n.Status.MACAddress,
 		GatewayIP:       gatewayIP,
+		Attach:          attach,
 		IngressRules:    toFirewallRuleInfos(ingress),
 		EgressRules:     toFirewallRuleInfos(egress),
-		ResourceVersion: n.Meta.ResourceVersion,
+		ResourceVersion: max(version, n.Meta.ResourceVersion),
 	}
 	payload, err := json.Marshal(cmd)
 	if err != nil {

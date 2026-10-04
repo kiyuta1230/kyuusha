@@ -195,7 +195,8 @@ type VolumeAttachInfo struct {
 
 // NetworkInterfaceInfo is one VM network attachment, already resolved to
 // concrete wiring inputs: IPAddress/MACAddress come from the
-// NetworkInterface itself, CIDR/GatewayIP/VLANID from its Subnet. IPAddress
+// NetworkInterface itself, CIDR/GatewayIP and Attach from its Subnet,
+// Network and NetworkClass. IPAddress
 // and CIDR are both empty if that NetworkInterface's own IP allocation
 // hadn't succeeded yet by the time the VM was scheduled (its Subnet's pool
 // was exhausted -- see docs/specs/network.md's IPAM section); compute-agent
@@ -214,7 +215,9 @@ type NetworkInterfaceInfo struct {
 	MACAddress   string            `json:"mac_address,omitempty"`
 	CIDR         string            `json:"cidr,omitempty"`
 	GatewayIP    string            `json:"gateway_ip,omitempty"`
-	VLANID       int32             `json:"vlan_id,omitempty"`
+	// Attach is the interface's Network/NetworkClass context and its
+	// Subnet's allocated values, handed through to VNAP/SNAP plugins.
+	Attach AttachInfo `json:"attach"`
 	// Primary mirrors the originating NetworkAttachment.Primary: only the
 	// primary interface gets a default route in the guest (see
 	// docker/fc-guest-init.sh) -- a VM with several NICs would otherwise
@@ -229,6 +232,20 @@ type NetworkInterfaceInfo struct {
 	// of Boot time, not kept in sync afterward.
 	IngressRules []FirewallRuleInfo `json:"ingress_rules,omitempty"`
 	EgressRules  []FirewallRuleInfo `json:"egress_rules,omitempty"`
+}
+
+// AttachInfo mirrors network.AttachContext (same JSON) -- see
+// docs/specs/vnap.md for what each field is.
+type AttachInfo struct {
+	NetworkID              string            `json:"network_id,omitempty"`
+	NetworkLabels          map[string]string `json:"network_labels,omitempty"`
+	NetworkClass           string            `json:"network_class,omitempty"`
+	NetworkClassAttributes map[string]string `json:"network_class_attributes,omitempty"`
+	NetworkValues          map[string]int64  `json:"network_values,omitempty"`
+	NetworkAttributes      map[string]string `json:"network_attributes,omitempty"`
+	SubnetValues           map[string]int64  `json:"subnet_values,omitempty"`
+	SubnetAttributes       map[string]string `json:"subnet_attributes,omitempty"`
+	MTU                    int32             `json:"mtu,omitempty"`
 }
 
 // FirewallRuleInfo mirrors network.FirewallRule/network.FirewallRuleInfo --

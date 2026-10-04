@@ -179,7 +179,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 		// could have changed (or been deleted) in the meantime, and this is
 		// the same validation Create already ran, just re-run immediately
 		// before scheduling so the zone constraint is always fresh.
-		zone, err := validateNetworkInterfaces(ctx, r.svc.subnetClient, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+		zone, err := r.svc.validateNetworkInterfaces(ctx, vm.Meta.TenantID, vm.Spec.Zone, vm.Spec.NetworkInterfaces)
 		if err != nil {
 			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 				Type:             "Unschedulable",
@@ -279,7 +279,7 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 // has, so its IP/MAC and Volume data carry over unchanged onto the new
 // Hypervisor.
 func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
-	zone, err := validateNetworkInterfaces(ctx, r.svc.subnetClient, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+	zone, err := r.svc.validateNetworkInterfaces(ctx, vm.Meta.TenantID, vm.Spec.Zone, vm.Spec.NetworkInterfaces)
 	if err != nil {
 		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 			Type:             "Unmigratable",
@@ -473,7 +473,7 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 		}
 	}
 
-	zone, err := validateNetworkInterfaces(ctx, r.svc.subnetClient, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+	zone, err := r.svc.validateNetworkInterfaces(ctx, vm.Meta.TenantID, vm.Spec.Zone, vm.Spec.NetworkInterfaces)
 	if err != nil {
 		return nil, err
 	}
@@ -567,7 +567,7 @@ func (r *Reconciler) provisionAndPublish(ctx context.Context, vm VirtualMachine)
 	// iface-<vm-id>-<index> convention (docs/architecture.md), so a
 	// retry of this same reconcile (e.g. after the Update below fails)
 	// re-creates nothing -- network's Create is idempotent by name.
-	netifs, err := createNetworkInterfaces(ctx, r.svc.subnetClient, r.svc.netifClient, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.NetworkInterfaces)
+	netifs, err := r.svc.createNetworkInterfaces(ctx, vm.Meta.TenantID, vm.Meta.ID, vm.Spec.Zone, vm.Spec.NetworkInterfaces)
 	if err != nil {
 		slog.Error("provision: create network interfaces failed", "vm_id", vm.Meta.ID, "err", err)
 		return

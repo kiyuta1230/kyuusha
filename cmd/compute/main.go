@@ -194,6 +194,8 @@ func main() {
 		slog.Error("new compute service", "err", err)
 		os.Exit(1)
 	}
+	svc.NetworkClient = networkv1.NewNetworkServiceClient(networkConn)
+	svc.NetworkClassClient = networkv1.NewNetworkClassServiceClient(networkConn)
 	if *admissionWebhookURLs != "" {
 		svc.AdmissionGate = admissionwebhook.Gate{
 			URLs:     strings.Split(*admissionWebhookURLs, ","),

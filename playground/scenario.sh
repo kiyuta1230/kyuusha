@@ -206,15 +206,43 @@ else
   echo "!! could not confirm a real guest boot for vm-ch (no /dev/kvm on this host, or cloud-hypervisor missing? try: kyuusha vm console -tenant=$tenant -id=$ch_vm_id)" >&2
 fi
 
-echo "==> creating Subnet for tenant $tenant (zone-a; real IPAM -- see docs/specs/network.md)"
-subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-subnet -zone=zone-a -cidr=10.0.1.0/24 -gateway-ip=10.0.1.1)"
+echo "==> admin: AllocationPools (a vlan_id integer pool, a user-specified CIDR pool) and a NetworkClass drawing from them (see docs/specs/network.md)"
+vlan_pool="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha pool create -addr=localhost:8080 -name=scenario-vlan \
+  -spec='{"integer":{"ranges":[{"lo":100,"hi":199}]}}' | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+cidr_pool="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha pool create -addr=localhost:8080 -name=scenario-user-cidr \
+  -spec='{"cidr":{"mode":"USER_ANY"}}' | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+class_line="$(KYUUSHA_TOKEN="$admin_token" go run ./cmd/kyuusha netclass create -addr=localhost:8080 -name=scenario-std \
+  -spec="{\"subnet\":{\"*\":{\"refs\":[{\"poolId\":\"$cidr_pool\"},{\"poolId\":\"$vlan_pool\",\"name\":\"vlan_id\"}]}},\"visibility\":\"VISIBILITY_PUBLIC\"}")"
+echo "$class_line"
+netclass="$(echo "$class_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+if [ -z "$vlan_pool" ] || [ -z "$cidr_pool" ] || [ -z "$netclass" ]; then
+  echo "!! could not create pools/class: vlan=$vlan_pool cidr=$cidr_pool class=$netclass" >&2
+  exit 1
+fi
+
+echo "==> creating a Network for tenant $tenant (routing domain; spans zones)"
+network_line="$(go run ./cmd/kyuusha network create -addr=localhost:8080 -tenant="$tenant" -name=scenario-net -class="$netclass")"
+network="$(echo "$network_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+for _ in $(seq 1 20); do
+  network_line="$(go run ./cmd/kyuusha network get -addr=localhost:8080 -tenant="$tenant" -id="$network")"
+  echo "$network_line" | grep -q 'phase=Ready' && break
+  sleep 1
+done
+echo "$network_line"
+if ! echo "$network_line" | grep -q 'phase=Ready'; then
+  echo "!! network did not become Ready: $network_line" >&2
+  exit 1
+fi
+
+echo "==> creating Subnet for tenant $tenant (zone-a; values allocated from the class's pools)"
+subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-subnet -network="$network" -zone=zone-a -cidr=10.0.1.0/24 -gateway-ip=10.0.1.1)"
 echo "$subnet_line"
 subnet="$(echo "$subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 if [ -z "$subnet" ]; then
   echo "!! could not parse subnet id from: $subnet_line" >&2
   exit 1
 fi
-# CreateSubnet itself always returns Pending (vlan_id allocation is
+# CreateSubnet itself always returns Pending (allocation is
 # network-reconciler's own async job -- see Service.CreateSubnet's doc
 # comment); poll subnet get for Ready instead of expecting the Create
 # response itself to already show it, same pattern as wait_for_volume_ready
@@ -224,15 +252,15 @@ for _ in $(seq 1 20); do
   echo "$subnet_line" | grep -q 'phase=Ready' && break
   sleep 1
 done
-vlan_id="$(echo "$subnet_line" | grep -o 'vlan_id=[^ ]*' | cut -d= -f2)"
-if ! echo "$subnet_line" | grep -q 'phase=Ready' || [ -z "$vlan_id" ] || [ "$vlan_id" = "0" ]; then
-  echo "!! subnet was not created Ready with a real vlan_id: $subnet_line" >&2
+vlan_id="$(echo "$subnet_line" | grep -o 'vlan_id=[0-9]*' | cut -d= -f2)"
+if ! echo "$subnet_line" | grep -q 'phase=Ready' || [ -z "$vlan_id" ] || ! echo "$subnet_line" | grep -q 'addresses=10.0.1.0/24@10.0.1.1'; then
+  echo "!! subnet was not created Ready with an allocated vlan_id and its CIDR: $subnet_line" >&2
   exit 1
 fi
 
-echo "==> creating a VM with -subnets=$subnet (compute-network integration: compute validates the Subnet at Create time and the Reconciler creates the NetworkInterface itself once Scheduled -- see docs/specs/network.md 'compute側の統合')"
+echo "==> creating a VM with -networks=$network -zone=zone-a (compute validates the Network at Create time, the Reconciler creates the NetworkInterface once Scheduled, and network picks the Subnet -- see docs/specs/network.md 'compute側の統合')"
 netvm_line="$(go run ./cmd/kyuusha vm create -addr=localhost:8080 -tenant="$tenant" -name=vm-netif \
-  -image="$image" -vcpu=1 -memory-mb=128 -subnets="$subnet" -wait)"
+  -image="$image" -vcpu=1 -memory-mb=128 -networks="$network" -zone=zone-a -wait)"
 echo "$netvm_line"
 netvm_id="$(echo "$netvm_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
 netvm_iface="$(echo "$netvm_line" | grep 'phase=Running' | grep -o 'interfaces=[^ ]*' | tail -1 | cut -d= -f2)"
@@ -296,8 +324,12 @@ fi
 grep -q InvalidArgument /tmp/kyuusha-netif-validation-check.log && echo "    rejected as expected"
 
 echo "==> confirming IP pool exhaustion leaves a NetworkInterface Pending instead of rejecting Create (/30 has 2 usable addresses)"
-small_subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-subnet -zone=zone-a -cidr=10.0.9.0/30)"
+small_subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-subnet -network="$network" -zone=zone-a -cidr=10.0.9.0/30)"
 small_subnet="$(echo "$small_subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
+for _ in $(seq 1 20); do
+  go run ./cmd/kyuusha subnet get -addr=localhost:8080 -tenant="$tenant" -id="$small_subnet" | grep -q 'phase=Ready' && break
+  sleep 1
+done
 go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-1 -vm="$vm1_id" -subnet="$small_subnet" >/dev/null
 go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-2 -vm="$vm1_id" -subnet="$small_subnet" >/dev/null
 exhausted_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-small-3 -vm="$vm1_id" -subnet="$small_subnet")"
@@ -308,15 +340,15 @@ if ! echo "$exhausted_line" | grep -q 'phase=Pending'; then
 fi
 echo "    confirmed: created Pending rather than rejected, as expected"
 
-echo "==> confirming allocatable_ip_ranges restricts IPAM to a narrow range (and mesh_group round-trips)"
+echo "==> confirming allocatable_ip_ranges restricts IPAM to a narrow range"
 ranged_subnet_line="$(go run ./cmd/kyuusha subnet create -addr=localhost:8080 -tenant="$tenant" -name=scenario-ranged-subnet \
-  -zone=zone-a -cidr=10.0.6.0/24 -mesh-group=scenario-mesh -allocatable-ip-ranges=10.0.6.10-10.0.6.11)"
+  -network="$network" -zone=zone-a -cidr=10.0.6.0/24 -allocatable-ip-ranges=10.0.6.10-10.0.6.11)"
 echo "$ranged_subnet_line"
 ranged_subnet="$(echo "$ranged_subnet_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
-if ! echo "$ranged_subnet_line" | grep -q 'mesh_group=scenario-mesh'; then
-  echo "!! mesh_group did not round-trip: $ranged_subnet_line" >&2
-  exit 1
-fi
+for _ in $(seq 1 20); do
+  go run ./cmd/kyuusha subnet get -addr=localhost:8080 -tenant="$tenant" -id="$ranged_subnet" | grep -q 'phase=Ready' && break
+  sleep 1
+done
 ranged_netif_line="$(go run ./cmd/kyuusha netif create -addr=localhost:8080 -tenant="$tenant" -name=scenario-ranged-netif -vm="$vm1_id" -subnet="$ranged_subnet")"
 echo "$ranged_netif_line"
 ranged_netif="$(echo "$ranged_netif_line" | grep -o 'id=[^ ]*' | head -1 | cut -d= -f2)"
@@ -333,6 +365,11 @@ if [ "$ranged_ip" != "10.0.6.10" ] && [ "$ranged_ip" != "10.0.6.11" ]; then
   exit 1
 fi
 echo "    confirmed: ip_address stayed inside the configured allocatable_ip_ranges"
+if ! echo "$ranged_netif_line" | grep -q 'effective_ingress_rules=[^ ]*10.0.1.0/24'; then
+  echo "!! expected the same-Network Subnet 10.0.1.0/24 among the implicit allows: $ranged_netif_line" >&2
+  exit 1
+fi
+echo "    confirmed: Subnets of the same Network default-allow each other"
 
 # wait_for_volume_ready polls until a Volume reaches Ready -- CreateVolume
 # itself only returns Pending now (see docs/open-questions.md「Hypervisor↔

@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -24,7 +25,7 @@ func TestCreateNetworkInterfacesResolvesFullWiringInfo(t *testing.T) {
 	subnetClient := &FakeSubnetClient{Labels: map[string]string{"vpc.example.com/id": "vpc-1"}}
 	netifClient := &FakeNetworkInterfaceClient{}
 
-	infos, err := createNetworkInterfaces(ctx, subnetClient, netifClient, "tenant-a", "vm-1", []NetworkAttachment{
+	infos, err := (&Service{subnetClient: subnetClient, netifClient: netifClient}).createNetworkInterfaces(ctx, "tenant-a", "vm-1", "zone-a", []NetworkAttachment{
 		{SubnetID: "subnet-1", Primary: true},
 	})
 	if err != nil {
@@ -40,8 +41,8 @@ func TestCreateNetworkInterfacesResolvesFullWiringInfo(t *testing.T) {
 	if info.IPAddress != "10.0.0.5" || info.MACAddress != "02:00:00:00:00:01" {
 		t.Fatalf("IPAddress/MACAddress not resolved from the NetworkInterface: %+v", info)
 	}
-	if info.CIDR != "10.0.0.0/24" || info.GatewayIP != "10.0.0.1" || info.VLANID != 1 {
-		t.Fatalf("CIDR/GatewayIP/VLANID not resolved from the Subnet: %+v", info)
+	if info.CIDR != "10.0.0.0/24" || info.GatewayIP != "10.0.0.1" || info.Attach.SubnetValues["vlan_id"] != 1 || info.Attach.NetworkID != "network-1" {
+		t.Fatalf("CIDR/GatewayIP/allocated values not resolved from the Subnet: %+v", info)
 	}
 	if info.SubnetID != "subnet-1" || info.Zone != "zone-a" || info.SubnetLabels["vpc.example.com/id"] != "vpc-1" {
 		t.Fatalf("SubnetID/Zone/SubnetLabels not resolved: %+v", info)
@@ -53,7 +54,7 @@ func TestCreateNetworkInterfacesResolvesFullWiringInfo(t *testing.T) {
 
 // A NetworkInterface whose IP allocation hasn't succeeded yet (Subnet pool
 // exhausted) must still be returned -- for VirtualMachineStatus.
-// InterfaceRefs -- just without CIDR/GatewayIP/VLANID, which compute-agent
+// InterfaceRefs -- just without CIDR/GatewayIP/Attach, which compute-agent
 // uses to decide whether it can wire a real tap device for it at all (see
 // buildNetIfaces in internal/compute-agent/agent.go).
 func TestCreateNetworkInterfacesLeavesUnallocatedInterfaceUnwired(t *testing.T) {
@@ -62,7 +63,7 @@ func TestCreateNetworkInterfacesLeavesUnallocatedInterfaceUnwired(t *testing.T) 
 	subnetClient := &FakeSubnetClient{}
 	netifClient := &FakeNetworkInterfaceClient{Pending: true}
 
-	infos, err := createNetworkInterfaces(ctx, subnetClient, netifClient, "tenant-a", "vm-1", []NetworkAttachment{
+	infos, err := (&Service{subnetClient: subnetClient, netifClient: netifClient}).createNetworkInterfaces(ctx, "tenant-a", "vm-1", "zone-a", []NetworkAttachment{
 		{SubnetID: "subnet-1"},
 	})
 	if err != nil {
@@ -97,7 +98,7 @@ func TestCreateNetworkInterfacesWaitsForAsyncAllocation(t *testing.T) {
 	subnetClient := &FakeSubnetClient{}
 	netifClient := &FakeNetworkInterfaceClient{ReadyAfterGets: 2}
 
-	infos, err := createNetworkInterfaces(ctx, subnetClient, netifClient, "tenant-a", "vm-1", []NetworkAttachment{
+	infos, err := (&Service{subnetClient: subnetClient, netifClient: netifClient}).createNetworkInterfaces(ctx, "tenant-a", "vm-1", "zone-a", []NetworkAttachment{
 		{SubnetID: "subnet-1", Primary: true},
 	})
 	if err != nil {
@@ -112,5 +113,44 @@ func TestCreateNetworkInterfacesWaitsForAsyncAllocation(t *testing.T) {
 	}
 	if info.CIDR == "" || info.GatewayIP == "" {
 		t.Fatalf("Subnet wiring info must be resolved once IPAddress is known: %+v", info)
+	}
+}
+
+func TestValidateNetworkInterfaces_ZoneRules(t *testing.T) {
+	ctx := t.Context()
+	s := &Service{subnetClient: &FakeSubnetClient{}, NetworkClient: &FakeNetworkClient{}}
+
+	if _, err := s.validateNetworkInterfaces(ctx, "tenant-a", "", []NetworkAttachment{{NetworkID: "network-1"}}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Network-only attachment without a zone: got %v, want ErrValidation", err)
+	}
+	zone, err := s.validateNetworkInterfaces(ctx, "tenant-a", "zone-a", []NetworkAttachment{{NetworkID: "network-1"}})
+	if err != nil || zone != "zone-a" {
+		t.Fatalf("Network-only attachment with zone-a: zone %q, err %v", zone, err)
+	}
+	zone, err = s.validateNetworkInterfaces(ctx, "tenant-a", "", []NetworkAttachment{{SubnetID: "subnet-1"}, {NetworkID: "network-1"}})
+	if err != nil || zone != "zone-a" {
+		t.Fatalf("zone taken from the pinned Subnet: zone %q, err %v", zone, err)
+	}
+	if _, err := s.validateNetworkInterfaces(ctx, "tenant-a", "zone-b", []NetworkAttachment{{SubnetID: "subnet-1"}}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("pinned Subnet in another zone than the VM's: got %v, want ErrValidation", err)
+	}
+	if _, err := s.validateNetworkInterfaces(ctx, "tenant-a", "zone-a", []NetworkAttachment{{NetworkID: "network-missing"}}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("unknown network: got %v, want ErrValidation", err)
+	}
+	if _, err := (&Service{subnetClient: &FakeSubnetClient{}}).validateNetworkInterfaces(ctx, "tenant-a", "zone-a", []NetworkAttachment{{NetworkID: "network-1"}}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("no network client configured: got %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateNetworkInterfaces_AttachInfoFromNetwork(t *testing.T) {
+	ctx := t.Context()
+	s := &Service{subnetClient: &FakeSubnetClient{}, netifClient: &FakeNetworkInterfaceClient{}, NetworkClient: &FakeNetworkClient{}}
+	infos, err := s.createNetworkInterfaces(ctx, "tenant-a", "vm-1", "zone-a", []NetworkAttachment{{NetworkID: "network-1", Primary: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := infos[0].Attach
+	if infos[0].SubnetID != "subnet-1" || a.NetworkValues["route_target"] != 65001 || a.NetworkLabels["k"] != "v" || a.SubnetValues["vlan_id"] != 1 {
+		t.Fatalf("info = %+v", infos[0])
 	}
 }

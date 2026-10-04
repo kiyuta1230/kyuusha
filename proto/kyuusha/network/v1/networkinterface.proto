@@ -19,9 +19,15 @@ message FirewallRule {
 
 message NetworkInterfaceSpec {
   string vm_id = 1;
+  // Optional: pin the interface to this Subnet. Empty: network_id+zone, and
+  // kyuusha picks a Subnet of that Network in that zone with a free address
+  // at allocation time (status.subnet_id). Set: network_id/zone are filled
+  // in from the Subnet.
   string subnet_id = 2;
   repeated FirewallRule ingress_rules = 3; // traffic allowed *into* the VM; default-deny outside the Subnet's own CIDR; no separate SecurityGroup-like resource
   repeated FirewallRule egress_rules = 4;  // traffic allowed *out of* the VM; same default-deny-outside-CIDR baseline
+  string network_id = 5; // required unless subnet_id is set
+  string zone = 6;       // required unless subnet_id is set
 }
 
 message NetworkInterfaceStatus {
@@ -41,6 +47,7 @@ message NetworkInterfaceStatus {
   // deliberate scope decision (see docs/open-questions.md history).
   repeated FirewallRule effective_ingress_rules = 6;
   repeated FirewallRule effective_egress_rules = 7;
+  string subnet_id = 8; // the Subnet the address was allocated from (spec.subnet_id, or the one kyuusha picked)
 }
 
 message NetworkInterface {

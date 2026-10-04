@@ -134,10 +134,14 @@ func (VirtualMachineEvent_Type) EnumDescriptor() ([]byte, []int) {
 	return file_kyuusha_compute_v1_vm_proto_rawDescGZIP(), []int{19, 0}
 }
 
+// NetworkAttachment asks for one NIC on a Network (network_id), in the
+// VM's zone; the network service picks a Subnet with a free address.
+// subnet_id instead pins a specific Subnet (its zone must be the VM's).
 type NetworkAttachment struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SubnetId      string                 `protobuf:"bytes,1,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"`
 	Primary       bool                   `protobuf:"varint,2,opt,name=primary,proto3" json:"primary,omitempty"`
+	NetworkId     string                 `protobuf:"bytes,3,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -184,6 +188,13 @@ func (x *NetworkAttachment) GetPrimary() bool {
 		return x.Primary
 	}
 	return false
+}
+
+func (x *NetworkAttachment) GetNetworkId() string {
+	if x != nil {
+		return x.NetworkId
+	}
+	return ""
 }
 
 type VolumeRequest struct {
@@ -325,7 +336,11 @@ type VirtualMachineSpec struct {
 	// affinity, if the host reports one, is not a hard requirement here --
 	// see NumaNode's doc comment). CLOUD_HYPERVISOR and FIRECRACKER both
 	// support this (unlike pci_devices, not driver-restricted).
-	NumaPinned    bool `protobuf:"varint,11,opt,name=numa_pinned,json=numaPinned,proto3" json:"numa_pinned,omitempty"`
+	NumaPinned bool `protobuf:"varint,11,opt,name=numa_pinned,json=numaPinned,proto3" json:"numa_pinned,omitempty"`
+	// The Availability Zone to run in -- the client's choice (kyuusha never
+	// picks a zone). Required when any network_interfaces entry names only a
+	// Network; otherwise taken from the pinned Subnets (which must agree).
+	Zone          string `protobuf:"bytes,12,opt,name=zone,proto3" json:"zone,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -421,6 +436,13 @@ func (x *VirtualMachineSpec) GetNumaPinned() bool {
 		return x.NumaPinned
 	}
 	return false
+}
+
+func (x *VirtualMachineSpec) GetZone() string {
+	if x != nil {
+		return x.Zone
+	}
+	return ""
 }
 
 type VirtualMachineStatus struct {
@@ -1619,10 +1641,12 @@ var File_kyuusha_compute_v1_vm_proto protoreflect.FileDescriptor
 
 const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\n" +
-	"\x1bkyuusha/compute/v1/vm.proto\x12\x12kyuusha.compute.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"J\n" +
+	"\x1bkyuusha/compute/v1/vm.proto\x12\x12kyuusha.compute.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"i\n" +
 	"\x11NetworkAttachment\x12\x1b\n" +
 	"\tsubnet_id\x18\x01 \x01(\tR\bsubnetId\x12\x18\n" +
-	"\aprimary\x18\x02 \x01(\bR\aprimary\"M\n" +
+	"\aprimary\x18\x02 \x01(\bR\aprimary\x12\x1d\n" +
+	"\n" +
+	"network_id\x18\x03 \x01(\tR\tnetworkId\"M\n" +
 	"\rVolumeRequest\x12\x1b\n" +
 	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12\x1f\n" +
 	"\vdevice_hint\x18\x02 \x01(\tR\n" +
@@ -1630,7 +1654,7 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\x10PciDeviceRequest\x12\x1b\n" +
 	"\tvendor_id\x18\x01 \x01(\tR\bvendorId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\x05R\x05count\"\xb8\x03\n" +
+	"\x05count\x18\x03 \x01(\x05R\x05count\"\xcc\x03\n" +
 	"\x12VirtualMachineSpec\x12\x19\n" +
 	"\bimage_id\x18\x01 \x01(\tR\aimageId\x12\x12\n" +
 	"\x04vcpu\x18\x02 \x01(\x05R\x04vcpu\x12\x1b\n" +
@@ -1644,7 +1668,8 @@ const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	" \x03(\v2$.kyuusha.compute.v1.PciDeviceRequestR\n" +
 	"pciDevices\x12\x1f\n" +
 	"\vnuma_pinned\x18\v \x01(\bR\n" +
-	"numaPinned\"\xcd\x02\n" +
+	"numaPinned\x12\x12\n" +
+	"\x04zone\x18\f \x01(\tR\x04zone\"\xcd\x02\n" +
 	"\x14VirtualMachineStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +

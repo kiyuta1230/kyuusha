@@ -189,6 +189,9 @@ func main() {
 	grpcServer := grpc.NewServer(grpc.Creds(serverCreds), grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	networkv1.RegisterSubnetServiceServer(grpcServer, grpcserver.NewSubnetServer(svc))
 	networkv1.RegisterNetworkInterfaceServiceServer(grpcServer, grpcserver.NewNetworkInterfaceServer(svc))
+	networkv1.RegisterNetworkServiceServer(grpcServer, grpcserver.NewNetworkServer(svc))
+	networkv1.RegisterNetworkClassServiceServer(grpcServer, grpcserver.NewNetworkClassServer(svc))
+	networkv1.RegisterAllocationPoolServiceServer(grpcServer, grpcserver.NewAllocationPoolServer(svc))
 
 	go func() {
 		<-ctx.Done()

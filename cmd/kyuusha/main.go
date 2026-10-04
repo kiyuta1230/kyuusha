@@ -43,6 +43,12 @@ func main() {
 		imageCmd(os.Args[2:])
 	case "subnet":
 		subnetCmd(os.Args[2:])
+	case "pool":
+		poolCmd(os.Args[2:])
+	case "netclass":
+		netclassCmd(os.Args[2:])
+	case "network":
+		networkCmd(os.Args[2:])
 	case "netif":
 		netifCmd(os.Args[2:])
 	case "volume":
@@ -67,6 +73,9 @@ func usage() {
   kyuusha hypervisor bootstrap-token create -zone=... [flags]   (dev-only, local signing; see internal/bootstraptoken)
   kyuusha image <create|build|get|list|watch|share|delete> [flags]
   kyuusha image build -dockerfile=... -context=... -registry=... -repo=... -kernel-url=... [flags]   (builds a KERNEL_ROOTFS Image from a Dockerfile's rootfs; requires docker/tar/mkfs.ext4 locally, see docs/specs/image.md)
+  kyuusha pool <create|get|list|delete> [flags]   (admin-only; -spec is protojson AllocationPoolSpec)
+  kyuusha netclass <create|get|list|delete> [flags]   (create/delete admin-only; -spec is protojson NetworkClassSpec)
+  kyuusha network <create|get|list|delete> [flags]
   kyuusha subnet <create|get|list|watch|delete|add-finalizer|remove-finalizer> [flags]
   kyuusha netif <create|get|list|watch|set-firewall-rules|delete> [flags]
   kyuusha volume <create|get|list|watch|delete> [flags]
@@ -202,7 +211,9 @@ func vmCreate(args []string) {
 	vcpu := fs.Int("vcpu", 1, "vCPU count")
 	memoryMB := fs.Int64("memory-mb", 1024, "memory in MB")
 	driverHint := fs.String("driver-hint", "", "VMM driver: firecracker|cloud-hypervisor (empty: server default, FIRECRACKER). Must match the Image's format -- KERNEL_ROOTFS accepts either, QCOW2 requires cloud-hypervisor; see docs/specs/image.md")
-	subnets := fs.String("subnets", "", "comma-separated subnet IDs to attach network interfaces to (first one is primary); all must be in the same zone")
+	networks := fs.String("networks", "", "comma-separated Network IDs, one NIC each (first one is primary); kyuusha picks each NIC's Subnet in -zone")
+	subnets := fs.String("subnets", "", "comma-separated Subnet IDs to pin NICs to instead (after any -networks NICs); all must be in the VM's zone")
+	zone := fs.String("zone", "", "availability zone (required with -networks; otherwise taken from -subnets)")
 	volumes := fs.String("volumes", "", "comma-separated Volume IDs to attach at boot (see docs/specs/volume.md; attach-before-boot only -- a Volume added after the VM is already Running is not attached)")
 	pciDevices := fs.String("pci-devices", "", "comma-separated PCI passthrough requests, vendor_id:device_id[:count] (count defaults to 1, e.g. 10de:1c03 or 10de:1c03:2) -- requires -driver-hint=cloud-hypervisor; see docs/specs/virtual-machine.md \"PCIデバイスパススルー\"")
 	numaPinned := fs.Bool("numa-pinned", false, "pin this VM's vCPUs/memory to a single host NUMA node the scheduler picks (see docs/architecture.md's NUMA/CPUピニング section); rejected if no Hypervisor has a node with enough spare vcpu/memory_mb")
@@ -218,11 +229,15 @@ func vmCreate(args []string) {
 	}
 
 	var netifs []*computev1.NetworkAttachment
-	for i, subnetID := range strings.Split(*subnets, ",") {
-		if subnetID == "" {
-			continue
+	for _, networkID := range strings.Split(*networks, ",") {
+		if networkID != "" {
+			netifs = append(netifs, &computev1.NetworkAttachment{NetworkId: networkID, Primary: len(netifs) == 0})
 		}
-		netifs = append(netifs, &computev1.NetworkAttachment{SubnetId: subnetID, Primary: i == 0})
+	}
+	for _, subnetID := range strings.Split(*subnets, ",") {
+		if subnetID != "" {
+			netifs = append(netifs, &computev1.NetworkAttachment{SubnetId: subnetID, Primary: len(netifs) == 0})
+		}
 	}
 
 	var volRequests []*computev1.VolumeRequest
@@ -276,6 +291,7 @@ func vmCreate(args []string) {
 			MemoryMb:          *memoryMB,
 			DriverHint:        parseVmmDriver(*driverHint),
 			NetworkInterfaces: netifs,
+			Zone:              *zone,
 			Volumes:           volRequests,
 			PciDevices:        pciDeviceRequests,
 			NumaPinned:        *numaPinned,
@@ -769,6 +785,31 @@ func formatKeyValues(m map[string]string) string {
 		parts[i] = k + "=" + m[k]
 	}
 	return strings.Join(parts, ",")
+}
+
+// formatIntValues renders allocated named values ("vlan_id=100,vni=5").
+func formatIntValues(m map[string]int64) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%s=%d", k, m[k])
+	}
+	return strings.Join(parts, ",")
+}
+
+// pendingReason appends a still-true AllocationPending/NoFreeAddress
+// condition's message, so a stuck resource says why.
+func pendingReason(conds []*resourcev1.Condition) string {
+	for _, c := range conds {
+		if (c.GetType() == "AllocationPending" || c.GetType() == "NoFreeAddress") && c.GetStatus() == "True" && c.GetMessage() != "" {
+			return fmt.Sprintf(" pending_reason=%q", c.GetMessage())
+		}
+	}
+	return ""
 }
 
 func deletedAtString(t *timestamppb.Timestamp) string {

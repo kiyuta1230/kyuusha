@@ -60,14 +60,17 @@ json() { printf '%s' "$req" | jq -r ".$1 // empty"; }
 : "${VNAP_UPLINK_IFACE:?vlan-trunk.sh: VNAP_UPLINK_IFACE must be set to this host's VLAN-trunked uplink interface name}"
 
 tap="$(json tap_name)"
-vlan_id="$(json vlan_id)"
+# The VLAN ID is whatever the Subnet's NetworkClass allocated under the
+# name "vlan_id" (an integer pool, or a static entries pool tuple -- see
+# docs/specs/network.md); kyuusha itself attaches no meaning to it.
+vlan_id="$(json subnet_values.vlan_id)"
 bridge="kbr${vlan_id}"
 sub="${VNAP_UPLINK_IFACE}.${vlan_id}"
 
 case "$verb" in
 attach)
 	if [ -z "$vlan_id" ]; then
-		echo "vlan-trunk: attach requires vlan_id" >&2
+		echo "vlan-trunk: attach requires subnet_values.vlan_id (give the NetworkClass a pool named vlan_id)" >&2
 		exit 1
 	fi
 	out="$(ip link add "$bridge" type bridge 2>&1)" || case "$out" in

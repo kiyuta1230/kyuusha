@@ -20,12 +20,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SubnetService_Create_FullMethodName = "/kyuusha.network.v1.SubnetService/Create"
-	SubnetService_Get_FullMethodName    = "/kyuusha.network.v1.SubnetService/Get"
-	SubnetService_List_FullMethodName   = "/kyuusha.network.v1.SubnetService/List"
-	SubnetService_Update_FullMethodName = "/kyuusha.network.v1.SubnetService/Update"
-	SubnetService_Delete_FullMethodName = "/kyuusha.network.v1.SubnetService/Delete"
-	SubnetService_Watch_FullMethodName  = "/kyuusha.network.v1.SubnetService/Watch"
+	SubnetService_Create_FullMethodName          = "/kyuusha.network.v1.SubnetService/Create"
+	SubnetService_Get_FullMethodName             = "/kyuusha.network.v1.SubnetService/Get"
+	SubnetService_List_FullMethodName            = "/kyuusha.network.v1.SubnetService/List"
+	SubnetService_Update_FullMethodName          = "/kyuusha.network.v1.SubnetService/Update"
+	SubnetService_Delete_FullMethodName          = "/kyuusha.network.v1.SubnetService/Delete"
+	SubnetService_Watch_FullMethodName           = "/kyuusha.network.v1.SubnetService/Watch"
+	SubnetService_SetStatusValues_FullMethodName = "/kyuusha.network.v1.SubnetService/SetStatusValues"
 )
 
 // SubnetServiceClient is the client API for SubnetService service.
@@ -38,6 +39,7 @@ type SubnetServiceClient interface {
 	Update(ctx context.Context, in *UpdateSubnetRequest, opts ...grpc.CallOption) (*Subnet, error)
 	Delete(ctx context.Context, in *DeleteSubnetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Watch(ctx context.Context, in *WatchSubnetsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubnetEvent], error)
+	SetStatusValues(ctx context.Context, in *SetSubnetStatusValuesRequest, opts ...grpc.CallOption) (*Subnet, error)
 }
 
 type subnetServiceClient struct {
@@ -117,6 +119,16 @@ func (c *subnetServiceClient) Watch(ctx context.Context, in *WatchSubnetsRequest
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type SubnetService_WatchClient = grpc.ServerStreamingClient[SubnetEvent]
 
+func (c *subnetServiceClient) SetStatusValues(ctx context.Context, in *SetSubnetStatusValuesRequest, opts ...grpc.CallOption) (*Subnet, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Subnet)
+	err := c.cc.Invoke(ctx, SubnetService_SetStatusValues_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SubnetServiceServer is the server API for SubnetService service.
 // All implementations must embed UnimplementedSubnetServiceServer
 // for forward compatibility.
@@ -127,6 +139,7 @@ type SubnetServiceServer interface {
 	Update(context.Context, *UpdateSubnetRequest) (*Subnet, error)
 	Delete(context.Context, *DeleteSubnetRequest) (*emptypb.Empty, error)
 	Watch(*WatchSubnetsRequest, grpc.ServerStreamingServer[SubnetEvent]) error
+	SetStatusValues(context.Context, *SetSubnetStatusValuesRequest) (*Subnet, error)
 	mustEmbedUnimplementedSubnetServiceServer()
 }
 
@@ -154,6 +167,9 @@ func (UnimplementedSubnetServiceServer) Delete(context.Context, *DeleteSubnetReq
 }
 func (UnimplementedSubnetServiceServer) Watch(*WatchSubnetsRequest, grpc.ServerStreamingServer[SubnetEvent]) error {
 	return status.Error(codes.Unimplemented, "method Watch not implemented")
+}
+func (UnimplementedSubnetServiceServer) SetStatusValues(context.Context, *SetSubnetStatusValuesRequest) (*Subnet, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetStatusValues not implemented")
 }
 func (UnimplementedSubnetServiceServer) mustEmbedUnimplementedSubnetServiceServer() {}
 func (UnimplementedSubnetServiceServer) testEmbeddedByValue()                       {}
@@ -277,6 +293,24 @@ func _SubnetService_Watch_Handler(srv interface{}, stream grpc.ServerStream) err
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type SubnetService_WatchServer = grpc.ServerStreamingServer[SubnetEvent]
 
+func _SubnetService_SetStatusValues_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSubnetStatusValuesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SubnetServiceServer).SetStatusValues(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SubnetService_SetStatusValues_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SubnetServiceServer).SetStatusValues(ctx, req.(*SetSubnetStatusValuesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SubnetService_ServiceDesc is the grpc.ServiceDesc for SubnetService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -303,6 +337,10 @@ var SubnetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _SubnetService_Delete_Handler,
+		},
+		{
+			MethodName: "SetStatusValues",
+			Handler:    _SubnetService_SetStatusValues_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

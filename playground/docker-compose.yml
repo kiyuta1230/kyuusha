@@ -271,7 +271,7 @@ services:
     # warning" (see internal/network/service.go), same reasoning as
     # network-reconciler's own identical -compute-addr note below.
 
-  # network's actual reconcile loop (vlan_id/ip_address/mac_address
+  # network's actual reconcile loop (pool/ip_address/mac_address
   # allocation, orphan-GC), split into its own process from the gRPC API
   # above -- see cmd/network-reconciler's package doc comment. Exactly one
   # replica: no ports exposed, nothing dials this container directly.
@@ -286,10 +286,10 @@ services:
       - "-identity-addr=identity:8082"
       - "-metrics-addr=:9099"
       - "-otlp-endpoint=jaeger:4317"
-      # Empty (the default) = 1-4094 in every zone; e.g.
-      # KYUUSHA_VLAN_RANGES='zone-a=100-2000' -- see docs/specs/network.md.
-      - "-vlan-ranges=${KYUUSHA_VLAN_RANGES:-}"
+      - "-nats-url=nats://nats:4222"
     depends_on:
+      nats:
+        condition: service_healthy
       etcd:
         condition: service_healthy
       identity:

@@ -194,6 +194,12 @@ func main() {
 		os.Exit(1)
 	}
 	var external gateway.ExternalBackends
+	// The rest of network's own package (AllocationPool/NetworkClass/
+	// Network services) rides the same generic forwarding as an external
+	// backend, with descriptors from this binary's own compiled-in protos
+	// -- no hand-written proxy per service. Built-in proxies above still
+	// win for the services they register.
+	external.AddRoute("kyuusha.network.v1.", networkConn, protoregistry.GlobalFiles)
 	for prefix, addr := range externalRoutes {
 		conn, err := grpc.NewClient(addr,
 			grpc.WithTransportCredentials(clientCreds),

@@ -56,7 +56,7 @@ func TestService_AdmissionWebhookGatesNetworkWrites(t *testing.T) {
 
 	// CREATE carries the proposed labels and spec.
 	labels := map[string]string{"vpc.example.com/id": "vpc-1"}
-	sn, err := svc.CreateSubnetWithMetadata(ctx, "tenant-a", "sn", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.1"}, resource.Metadata{Labels: labels})
+	sn, err := svc.CreateSubnetWithMetadata(ctx, "tenant-a", "sn", userSubnet(t, ctx, svc, "tenant-a", "zone-a", "10.0.1.0/24", "10.0.1.1"), resource.Metadata{Labels: labels})
 	if err != nil {
 		t.Fatalf("CreateSubnetWithMetadata: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestService_AdmissionWebhookGatesNetworkWrites(t *testing.T) {
 	}
 
 	// UPDATE carries the new state plus the stored one as old_object.
-	svc.tryAllocateVLAN(ctx, sn)
+	svc.tryAllocateSubnet(ctx, sn)
 	current, _ := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
 	current.Meta.Labels = map[string]string{"vpc.example.com/id": "vpc-2"}
 	if _, err := svc.UpdateSubnet(ctx, current); err != nil {
@@ -107,7 +107,7 @@ func TestService_AdmissionWebhookGatesNetworkWrites(t *testing.T) {
 
 	// A denied CREATE creates nothing.
 	hook.deny["CREATE Subnet"] = true
-	if _, err := svc.CreateSubnet(ctx, "tenant-a", "sn-2", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"}); !errors.Is(err, ErrAdmissionDenied) {
+	if _, err := svc.CreateSubnet(ctx, "tenant-a", "sn-2", userSubnet(t, ctx, svc, "tenant-a", "zone-a", "10.0.2.0/24", "")); !errors.Is(err, ErrAdmissionDenied) {
 		t.Fatalf("CreateSubnet with a denying webhook: got %v, want ErrAdmissionDenied", err)
 	}
 	all, _ := svc.ListSubnets(ctx, "tenant-a")

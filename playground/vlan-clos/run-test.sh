@@ -67,7 +67,7 @@ wire_fake_vm() {
 		ip netns exec ${ns} ip addr add ${ip_addr}/24 dev ${guest_if}
 		ip netns exec ${ns} ip link set ${guest_if} up
 		ip netns exec ${ns} ip route add default via ${GATEWAY}
-		echo '{\"tap_name\":\"'${vm_if}'\",\"vlan_id\":${VLAN_ID},\"gateway_ip\":\"${GATEWAY}\",\"prefix_len\":24}' | VNAP_UPLINK_IFACE=eth1 sh /vlan-trunk.sh attach
+		echo '{\"tap_name\":\"'${vm_if}'\",\"subnet_values\":{\"vlan_id\":${VLAN_ID}},\"gateway_ip\":\"${GATEWAY}\",\"prefix_len\":24}' | VNAP_UPLINK_IFACE=eth1 sh /vlan-trunk.sh attach
 		ip link set ${vm_if} up
 	"
 }

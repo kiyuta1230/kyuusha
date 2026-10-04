@@ -147,11 +147,17 @@ func (x *FirewallRule) GetAction() string {
 }
 
 type NetworkInterfaceSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	SubnetId      string                 `protobuf:"bytes,2,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"`
-	IngressRules  []*FirewallRule        `protobuf:"bytes,3,rep,name=ingress_rules,json=ingressRules,proto3" json:"ingress_rules,omitempty"` // traffic allowed *into* the VM; default-deny outside the Subnet's own CIDR; no separate SecurityGroup-like resource
-	EgressRules   []*FirewallRule        `protobuf:"bytes,4,rep,name=egress_rules,json=egressRules,proto3" json:"egress_rules,omitempty"`    // traffic allowed *out of* the VM; same default-deny-outside-CIDR baseline
+	state protoimpl.MessageState `protogen:"open.v1"`
+	VmId  string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	// Optional: pin the interface to this Subnet. Empty: network_id+zone, and
+	// kyuusha picks a Subnet of that Network in that zone with a free address
+	// at allocation time (status.subnet_id). Set: network_id/zone are filled
+	// in from the Subnet.
+	SubnetId      string          `protobuf:"bytes,2,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"`
+	IngressRules  []*FirewallRule `protobuf:"bytes,3,rep,name=ingress_rules,json=ingressRules,proto3" json:"ingress_rules,omitempty"` // traffic allowed *into* the VM; default-deny outside the Subnet's own CIDR; no separate SecurityGroup-like resource
+	EgressRules   []*FirewallRule `protobuf:"bytes,4,rep,name=egress_rules,json=egressRules,proto3" json:"egress_rules,omitempty"`    // traffic allowed *out of* the VM; same default-deny-outside-CIDR baseline
+	NetworkId     string          `protobuf:"bytes,5,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`          // required unless subnet_id is set
+	Zone          string          `protobuf:"bytes,6,opt,name=zone,proto3" json:"zone,omitempty"`                                     // required unless subnet_id is set
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -214,6 +220,20 @@ func (x *NetworkInterfaceSpec) GetEgressRules() []*FirewallRule {
 	return nil
 }
 
+func (x *NetworkInterfaceSpec) GetNetworkId() string {
+	if x != nil {
+		return x.NetworkId
+	}
+	return ""
+}
+
+func (x *NetworkInterfaceSpec) GetZone() string {
+	if x != nil {
+		return x.Zone
+	}
+	return ""
+}
+
 type NetworkInterfaceStatus struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Phase      string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Binding(IPAM割当+tap配線中) / Ready / Rebinding(SELF_HEAL再バインド中) / Deleting / Error
@@ -232,6 +252,7 @@ type NetworkInterfaceStatus struct {
 	// deliberate scope decision (see docs/open-questions.md history).
 	EffectiveIngressRules []*FirewallRule `protobuf:"bytes,6,rep,name=effective_ingress_rules,json=effectiveIngressRules,proto3" json:"effective_ingress_rules,omitempty"`
 	EffectiveEgressRules  []*FirewallRule `protobuf:"bytes,7,rep,name=effective_egress_rules,json=effectiveEgressRules,proto3" json:"effective_egress_rules,omitempty"`
+	SubnetId              string          `protobuf:"bytes,8,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"` // the Subnet the address was allocated from (spec.subnet_id, or the one kyuusha picked)
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -313,6 +334,13 @@ func (x *NetworkInterfaceStatus) GetEffectiveEgressRules() []*FirewallRule {
 		return x.EffectiveEgressRules
 	}
 	return nil
+}
+
+func (x *NetworkInterfaceStatus) GetSubnetId() string {
+	if x != nil {
+		return x.SubnetId
+	}
+	return ""
 }
 
 type NetworkInterface struct {
@@ -918,12 +946,15 @@ const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"port_range\x18\x02 \x01(\tR\tportRange\x12\x1f\n" +
 	"\vsource_cidr\x18\x03 \x01(\tR\n" +
 	"sourceCidr\x12\x16\n" +
-	"\x06action\x18\x04 \x01(\tR\x06action\"\xd4\x01\n" +
+	"\x06action\x18\x04 \x01(\tR\x06action\"\x87\x02\n" +
 	"\x14NetworkInterfaceSpec\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x1b\n" +
 	"\tsubnet_id\x18\x02 \x01(\tR\bsubnetId\x12E\n" +
 	"\ringress_rules\x18\x03 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\fingressRules\x12C\n" +
-	"\fegress_rules\x18\x04 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\vegressRules\"\x80\x03\n" +
+	"\fegress_rules\x18\x04 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\vegressRules\x12\x1d\n" +
+	"\n" +
+	"network_id\x18\x05 \x01(\tR\tnetworkId\x12\x12\n" +
+	"\x04zone\x18\x06 \x01(\tR\x04zone\"\x9d\x03\n" +
 	"\x16NetworkInterfaceStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -937,7 +968,8 @@ const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"hypervisor\x18\x05 \x01(\tR\n" +
 	"hypervisor\x12X\n" +
 	"\x17effective_ingress_rules\x18\x06 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\x15effectiveIngressRules\x12V\n" +
-	"\x16effective_egress_rules\x18\a \x03(\v2 .kyuusha.network.v1.FirewallRuleR\x14effectiveEgressRules\"\xc9\x01\n" +
+	"\x16effective_egress_rules\x18\a \x03(\v2 .kyuusha.network.v1.FirewallRuleR\x14effectiveEgressRules\x12\x1b\n" +
+	"\tsubnet_id\x18\b \x01(\tR\bsubnetId\"\xc9\x01\n" +
 	"\x10NetworkInterface\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x12<\n" +
 	"\x04spec\x18\x02 \x01(\v2(.kyuusha.network.v1.NetworkInterfaceSpecR\x04spec\x12B\n" +

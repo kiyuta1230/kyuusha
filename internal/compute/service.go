@@ -62,6 +62,13 @@ type Service struct {
 	imageClient            imagev1.ImageServiceClient
 	subnetClient           networkv1.SubnetServiceClient
 	netifClient            networkv1.NetworkInterfaceServiceClient
+	// NetworkClient/NetworkClassClient resolve a NIC's Network and
+	// NetworkClass: attaching by network_id needs NetworkClient, and both
+	// feed the plugin-facing AttachInfo (see createNetworkInterfaces).
+	// Optional (nil in most tests); set by cmd/compute and
+	// cmd/compute-reconciler.
+	NetworkClient      networkv1.NetworkServiceClient
+	NetworkClassClient networkv1.NetworkClassServiceClient
 	volumeClient           blockstoragev1.VolumeServiceClient
 	volumeAttachmentClient blockstoragev1.VolumeAttachmentServiceClient
 	quota                  *quotaChecker
@@ -197,9 +204,11 @@ func (s *Service) CreateWithMetadata(ctx context.Context, tenantID, name string,
 	if err := validateImage(ctx, s.imageClient, tenantID, spec.ImageID, spec.DriverHint); err != nil {
 		return nil, err
 	}
-	if _, err := validateNetworkInterfaces(ctx, s.subnetClient, tenantID, spec.NetworkInterfaces); err != nil {
+	zone, err := s.validateNetworkInterfaces(ctx, tenantID, spec.Zone, spec.NetworkInterfaces)
+	if err != nil {
 		return nil, err
 	}
+	spec.Zone = zone // settled once here; scheduling and NIC creation read it back
 	if _, err := validateVolumes(ctx, s.volumeClient, tenantID, spec.Volumes); err != nil {
 		return nil, err
 	}

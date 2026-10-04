@@ -12,22 +12,55 @@ import (
 // variants) are the snake_case JSON shapes sent to admission webhooks --
 // explicitly tagged mirrors rather than marshaling the Go structs, which
 // have no json tags, same reasoning as compute's admissionVMSpec.
+type admissionAddress struct {
+	CIDR      string `json:"cidr"`
+	GatewayIP string `json:"gateway_ip,omitempty"`
+}
+
 type admissionSubnetSpec struct {
-	Zone                string   `json:"zone"`
-	CIDR                string   `json:"cidr"`
-	GatewayIP           string   `json:"gateway_ip,omitempty"`
-	DNSServers          []string `json:"dns_servers,omitempty"`
+	NetworkID           string             `json:"network_id"`
+	Zone                string             `json:"zone"`
+	RequestedAddresses  []admissionAddress `json:"requested_addresses,omitempty"`
+	DNSServers          []string           `json:"dns_servers,omitempty"`
+	AllocatableIPRanges []string           `json:"allocatable_ip_ranges,omitempty"`
+}
+
+type admissionSubnetStatus struct {
+	Phase      string             `json:"phase"`
+	Addresses  []admissionAddress `json:"addresses,omitempty"`
+	Values     map[string]int64   `json:"values,omitempty"`
+	Attributes map[string]string  `json:"attributes,omitempty"`
+}
+
+type admissionNetworkSpec struct {
+	NetworkClass        string   `json:"network_class"`
 	DNSSuffix           string   `json:"dns_suffix,omitempty"`
-	MeshGroup           string   `json:"mesh_group,omitempty"`
-	AllocatableIPRanges []string `json:"allocatable_ip_ranges,omitempty"`
-	UniqueCidr          bool     `json:"unique_cidr,omitempty"`
 	Visibility          string   `json:"visibility,omitempty"`
 	SharedWithTenantIDs []string `json:"shared_with_tenant_ids,omitempty"`
 }
 
-type admissionSubnetStatus struct {
-	Phase  string `json:"phase"`
-	VLANID int32  `json:"vlan_id,omitempty"`
+type admissionNetworkStatus struct {
+	Phase      string            `json:"phase"`
+	Values     map[string]int64  `json:"values,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+type admissionPoolRef struct {
+	PoolID string `json:"pool_id"`
+	Name   string `json:"name,omitempty"`
+}
+
+type admissionClassSpec struct {
+	Network               []admissionPoolRef            `json:"network,omitempty"`
+	Subnet                map[string][]admissionPoolRef `json:"subnet,omitempty"`
+	Attributes            map[string]string             `json:"attributes,omitempty"`
+	Visibility            string                        `json:"visibility,omitempty"`
+	SharedWithTenantIDs   []string                      `json:"shared_with_tenant_ids,omitempty"`
+	AllowPublicNetworks   bool                          `json:"allow_public_networks,omitempty"`
+	DefaultDNSServers     map[string][]string           `json:"default_dns_servers,omitempty"`
+	MTU                   int32                         `json:"mtu,omitempty"`
+	GatewayPlacement      string                        `json:"gateway_placement,omitempty"`
+	HostAggregateSelector map[string]string             `json:"host_aggregate_selector,omitempty"`
 }
 
 type admissionNetworkInterfaceSpec struct {
@@ -51,12 +84,60 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
+func toAdmissionAddresses(as []SubnetAddress) []admissionAddress {
+	var out []admissionAddress
+	for _, a := range as {
+		out = append(out, admissionAddress{CIDR: a.CIDR, GatewayIP: a.GatewayIP})
+	}
+	return out
+}
+
 func admissionSubnetSpecJSON(s SubnetSpec) json.RawMessage {
 	return mustJSON(admissionSubnetSpec{
-		Zone: s.Zone, CIDR: s.CIDR, GatewayIP: s.GatewayIP, DNSServers: s.DNSServers, DNSSuffix: s.DNSSuffix,
-		MeshGroup: s.MeshGroup, AllocatableIPRanges: s.AllocatableIPRanges, UniqueCidr: s.UniqueCidr,
-		Visibility: string(s.Visibility), SharedWithTenantIDs: s.SharedWithTenantIDs,
+		NetworkID: s.NetworkID, Zone: s.Zone, RequestedAddresses: toAdmissionAddresses(s.RequestedAddresses),
+		DNSServers: s.DNSServers, AllocatableIPRanges: s.AllocatableIPRanges,
 	})
+}
+
+func admissionNetworkSpecJSON(s NetworkSpec) json.RawMessage {
+	return mustJSON(admissionNetworkSpec{NetworkClass: s.NetworkClass, DNSSuffix: s.DNSSuffix, Visibility: string(s.Visibility), SharedWithTenantIDs: s.SharedWithTenantIDs})
+}
+
+func toAdmissionRefs(refs []PoolRef) []admissionPoolRef {
+	var out []admissionPoolRef
+	for _, r := range refs {
+		out = append(out, admissionPoolRef{PoolID: r.PoolID, Name: r.Name})
+	}
+	return out
+}
+
+func admissionClassSpecJSON(c NetworkClassSpec) json.RawMessage {
+	subnet := map[string][]admissionPoolRef{}
+	for z, refs := range c.Subnet {
+		subnet[z] = toAdmissionRefs(refs)
+	}
+	return mustJSON(admissionClassSpec{
+		Network: toAdmissionRefs(c.Network), Subnet: subnet, Attributes: c.Attributes,
+		Visibility: string(c.Visibility), SharedWithTenantIDs: c.SharedWithTenantIDs, AllowPublicNetworks: c.AllowPublicNetworks,
+		DefaultDNSServers: c.DefaultDNSServers, MTU: c.MTU, GatewayPlacement: string(c.GatewayPlacement), HostAggregateSelector: c.HostAggregateSelector,
+	})
+}
+
+func admissionNetworkObject(n Network) *admissionwebhook.Object {
+	return &admissionwebhook.Object{
+		ID: n.Meta.ID, Name: n.Meta.Name, TenantID: n.Meta.TenantID,
+		Labels: n.Meta.Labels, Annotations: n.Meta.Annotations,
+		Spec:   admissionNetworkSpecJSON(n.Spec),
+		Status: mustJSON(admissionNetworkStatus{Phase: string(n.Status.Phase), Values: n.Status.Values, Attributes: n.Status.Attributes}),
+	}
+}
+
+func admissionClassObject(c NetworkClass) *admissionwebhook.Object {
+	return &admissionwebhook.Object{
+		ID: c.Meta.ID, Name: c.Meta.Name,
+		Labels: c.Meta.Labels, Annotations: c.Meta.Annotations,
+		Spec: admissionClassSpecJSON(c.Spec),
+	}
 }
 
 func admissionNetworkInterfaceSpecJSON(s NetworkInterfaceSpec) json.RawMessage {
@@ -71,7 +152,7 @@ func admissionSubnetObject(sn Subnet) *admissionwebhook.Object {
 		ID: sn.Meta.ID, Name: sn.Meta.Name, TenantID: sn.Meta.TenantID,
 		Labels: sn.Meta.Labels, Annotations: sn.Meta.Annotations,
 		Spec:   admissionSubnetSpecJSON(sn.Spec),
-		Status: mustJSON(admissionSubnetStatus{Phase: string(sn.Status.Phase), VLANID: sn.Status.VLANID}),
+		Status: mustJSON(admissionSubnetStatus{Phase: string(sn.Status.Phase), Addresses: toAdmissionAddresses(sn.Status.Addresses), Values: sn.Status.Values, Attributes: sn.Status.Attributes}),
 	}
 }
 

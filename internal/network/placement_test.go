@@ -30,7 +30,7 @@ func TestService_SyncInterfaceHypervisor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
+	sn := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn", userSubnet(t, ctx, svc, "tenant-a", "zone-a", "10.0.1.0/24", ""))
 	mine := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "mine", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, sn)
 	other := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "other", NetworkInterfaceSpec{VMID: "vm-2", SubnetID: sn.Meta.ID}, sn)
 

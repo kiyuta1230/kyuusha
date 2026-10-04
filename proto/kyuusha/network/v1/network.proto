@@ -1,0 +1,321 @@
+syntax = "proto3";
+
+package kyuusha.network.v1;
+
+option go_package = "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// See docs/specs/network.md for the model these three resources form:
+//
+//   AllocationPool (admin)  where values come from
+//     ^ referenced by
+//   NetworkClass   (admin)  which pools a Network/Subnet draws from
+//     ^ referenced by (exactly one, immutable)
+//   Network        (tenant) routing domain and isolation boundary, spans zones
+//     └ Subnet     (tenant asks, kyuusha allocates) one zone, one CIDR per family
+//
+// kyuusha never interprets allocated values or attributes: whether a
+// named integer becomes an 802.1Q tag, a VNI or nothing is the VNAP
+// plugin's business. It only guarantees one value is never handed out
+// twice from the same pool.
+
+// Visibility mirrors kyuusha.image.v1.ImageVisibility's meaning.
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0; // treated as PRIVATE
+  VISIBILITY_PRIVATE = 1;     // the owner plus shared_with_tenant_ids (for a NetworkClass, which has no owner: only shared_with_tenant_ids)
+  VISIBILITY_PUBLIC = 2;      // every tenant
+}
+
+// ---------------------------------------------------------------------------
+// AllocationPool: an admin-only source of values. Tenants can neither create
+// nor read pools; they only ever see the values allocated to their own
+// Network/Subnet.
+
+message AddressBlock {
+  string cidr = 1;       // IPv4 or IPv6
+  string gateway_ip = 2; // optional; derived per the NetworkClass's gateway_placement when empty
+}
+
+// PoolEntry is one indivisible tuple of an entries pool, handed out whole.
+message PoolEntry {
+  string key = 1;                       // unique within the pool, e.g. "vlan-100"
+  map<string, int64> values = 2;        // named integers, e.g. {"vlan_id": 100}
+  repeated AddressBlock addresses = 3;  // at most one per address family
+  map<string, string> attributes = 4;   // opaque, passed to VNAP/SNAP
+}
+
+message EntriesPool {
+  repeated PoolEntry entries = 1;
+}
+
+message IntRange {
+  int64 lo = 1; // inclusive
+  int64 hi = 2; // inclusive
+}
+
+// IntegerPool hands out one integer per allocation; the NetworkClass
+// reference names it (e.g. "vni").
+message IntegerPool {
+  repeated IntRange ranges = 1;
+}
+
+enum AddressFamily {
+  ADDRESS_FAMILY_UNSPECIFIED = 0; // treated as IPV4
+  IPV4 = 1;
+  IPV6 = 2;
+}
+
+enum CidrMode {
+  CIDR_MODE_UNSPECIFIED = 0;
+  // The Subnet's requester writes any CIDR; overlaps across Networks are
+  // fine (VRF-style). Overlap within one Network is always rejected.
+  USER_ANY = 1;
+  // The requester writes the CIDR, which must lie inside blocks and not
+  // overlap anything else allocated from this pool (unique addressing).
+  USER_WITHIN_BLOCKS = 2;
+  // kyuusha carves the next free /prefix_length out of blocks.
+  CARVE = 3;
+}
+
+message CidrPool {
+  AddressFamily family = 1;
+  CidrMode mode = 2;
+  repeated string blocks = 3; // USER_WITHIN_BLOCKS, CARVE
+  int32 prefix_length = 4;    // CARVE
+}
+
+message AllocationPoolSpec {
+  oneof kind {
+    EntriesPool entries = 1;
+    IntegerPool integer = 2;
+    CidrPool cidr = 3;
+  }
+  map<string, string> attributes = 4; // opaque, passed to VNAP/SNAP for every allocation from this pool
+}
+
+message AllocationPoolStatus {
+  int32 allocated = 1; // values currently allocated from this pool
+}
+
+message AllocationPool {
+  kyuusha.resource.v1.ObjectMeta meta = 1; // cluster-scoped: tenant_id is always empty
+  AllocationPoolSpec spec = 2;
+  AllocationPoolStatus status = 3;
+}
+
+message CreateAllocationPoolRequest {
+  string name = 1; // idempotency key
+  AllocationPoolSpec spec = 2;
+  map<string, string> labels = 3;
+  map<string, string> annotations = 4;
+}
+message GetAllocationPoolRequest { string id = 1; }
+message ListAllocationPoolsRequest {}
+message ListAllocationPoolsResponse { repeated AllocationPool items = 1; }
+// Rejected if it would shrink a range, or drop an entry/block, that still
+// has allocations.
+message UpdateAllocationPoolRequest { AllocationPool pool = 1; }
+// Rejected while anything is still allocated from the pool, or a
+// NetworkClass still references it.
+message DeleteAllocationPoolRequest { string id = 1; }
+message WatchAllocationPoolsRequest { int64 since_resource_version = 1; }
+message AllocationPoolEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  AllocationPool pool = 2;
+  int64 resource_version = 3;
+}
+
+service AllocationPoolService {
+  rpc Create(CreateAllocationPoolRequest) returns (AllocationPool);
+  rpc Get(GetAllocationPoolRequest) returns (AllocationPool);
+  rpc List(ListAllocationPoolsRequest) returns (ListAllocationPoolsResponse);
+  rpc Update(UpdateAllocationPoolRequest) returns (AllocationPool);
+  rpc Delete(DeleteAllocationPoolRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchAllocationPoolsRequest) returns (stream AllocationPoolEvent);
+}
+
+// ---------------------------------------------------------------------------
+// NetworkClass: how a Network and its Subnets get their values. Referenced,
+// never copied: changing a class (or a pool) affects later allocations only.
+
+message PoolRef {
+  string pool_id = 1;
+  // Name for the integer an integer pool hands out (required for integer
+  // pools; must be empty for entries/CIDR pools, whose values are named
+  // by the entries themselves or are addresses).
+  string name = 2;
+}
+
+message PoolRefList {
+  repeated PoolRef refs = 1;
+}
+
+message ZoneDNS {
+  repeated string servers = 1;
+}
+
+enum GatewayPlacement {
+  GATEWAY_PLACEMENT_UNSPECIFIED = 0; // treated as FIRST
+  FIRST = 1;                         // first usable address of the CIDR
+  LAST = 2;                          // last usable address
+}
+
+message NetworkClassSpec {
+  // Allocated once per Network (zone-independent), e.g. a route target.
+  repeated PoolRef network = 1;
+  // Allocated per Subnet, keyed by zone; "*" applies to every zone and a
+  // zone's own list adds to it (a same-named value from the zone's list
+  // wins). After merging, each zone may have at most one CIDR source per
+  // address family; a zone with no IPv4 CIDR source can't host Subnets.
+  map<string, PoolRefList> subnet = 2;
+  map<string, string> attributes = 3; // opaque, passed to VNAP/SNAP
+  Visibility visibility = 4;
+  repeated string shared_with_tenant_ids = 5;
+  // Whether Networks of this class may be visibility=PUBLIC (open to every
+  // tenant). CIDR uniqueness for such a class is the admin's job, via the
+  // pools it references.
+  bool allow_public_networks = 6;
+  // Resolvers for a Subnet whose dns_servers is empty, keyed by zone ("*"
+  // for every zone not listed).
+  map<string, ZoneDNS> default_dns_servers = 7;
+  int32 mtu = 8; // guest MTU; 0 leaves the guest default
+  GatewayPlacement gateway_placement = 9;
+  // Only hypervisors in a HostAggregate whose labels match all of these
+  // can host a NIC of this class (see compute's HostAggregateService).
+  // Empty means no restriction.
+  map<string, string> host_aggregate_selector = 10;
+}
+
+message NetworkClass {
+  kyuusha.resource.v1.ObjectMeta meta = 1; // cluster-scoped: tenant_id is always empty
+  NetworkClassSpec spec = 2;
+}
+
+message CreateNetworkClassRequest {
+  string name = 1; // idempotency key
+  NetworkClassSpec spec = 2;
+  map<string, string> labels = 3;
+  map<string, string> annotations = 4;
+}
+// tenant_id empty: any class (cross-tenant roles). tenant_id set: only a
+// class that tenant may use.
+message GetNetworkClassRequest { string tenant_id = 1; string id = 2; }
+message ListNetworkClassesRequest { string tenant_id = 1; }
+message ListNetworkClassesResponse { repeated NetworkClass items = 1; }
+message UpdateNetworkClassRequest { NetworkClass network_class = 1; }
+// Rejected while any Network still references the class.
+message DeleteNetworkClassRequest { string id = 1; }
+message WatchNetworkClassesRequest { int64 since_resource_version = 1; }
+message NetworkClassEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  NetworkClass network_class = 2;
+  int64 resource_version = 3;
+}
+
+service NetworkClassService {
+  rpc Create(CreateNetworkClassRequest) returns (NetworkClass);
+  rpc Get(GetNetworkClassRequest) returns (NetworkClass);
+  rpc List(ListNetworkClassesRequest) returns (ListNetworkClassesResponse);
+  rpc Update(UpdateNetworkClassRequest) returns (NetworkClass);
+  rpc Delete(DeleteNetworkClassRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchNetworkClassesRequest) returns (stream NetworkClassEvent);
+}
+
+// ---------------------------------------------------------------------------
+// Network: a tenant's routing domain and isolation boundary. Spans zones;
+// every Subnet belongs to exactly one. Networks don't reach each other by
+// default; Subnets within one Network do.
+
+// Allocation records one value drawn from a pool, so it can be returned
+// when its owner is really deleted.
+message Allocation {
+  string pool_id = 1;
+  string name = 2;      // integer pools: the value's name
+  int64 integer = 3;    // integer pools
+  string entry_key = 4; // entries pools
+  string cidr = 5;      // CIDR pools
+}
+
+message NetworkSpec {
+  string network_class = 1; // NetworkClass id; required, immutable
+  string dns_suffix = 2;    // name space shared by every Subnet, whatever the zone
+  Visibility visibility = 3;
+  repeated string shared_with_tenant_ids = 4;
+}
+
+message NetworkStatus {
+  string phase = 1; // Pending (allocating) / Ready
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+  map<string, int64> values = 3;      // Network-level allocated values, e.g. {"route_target": 65001}
+  map<string, string> attributes = 4; // merged from the pools/entries they came from
+  repeated Allocation allocations = 5;
+}
+
+message Network {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  NetworkSpec spec = 2;
+  NetworkStatus status = 3;
+}
+
+message CreateNetworkRequest {
+  string tenant_id = 1;
+  string name = 2; // idempotency key
+  NetworkSpec spec = 3;
+  map<string, string> labels = 4;
+  map<string, string> annotations = 5;
+}
+message GetNetworkRequest { string tenant_id = 1; string id = 2; }
+message ListNetworksRequest { string tenant_id = 1; }
+message ListNetworksResponse { repeated Network items = 1; }
+message UpdateNetworkRequest { string tenant_id = 1; Network network = 2; }
+// Rejected while the Network still has Subnets.
+message DeleteNetworkRequest { string tenant_id = 1; string id = 2; }
+message WatchNetworksRequest { string tenant_id = 1; int64 since_resource_version = 2; }
+message NetworkEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  Network network = 2;
+  int64 resource_version = 3;
+}
+
+// Admin-only correction of system-written (status) values, e.g. after an
+// out-of-band change in the fabric. Replaces values/attributes wholesale;
+// allocations bookkeeping is untouched.
+message SetNetworkStatusValuesRequest {
+  string tenant_id = 1;
+  string id = 2;
+  map<string, int64> values = 3;
+  map<string, string> attributes = 4;
+}
+
+service NetworkService {
+  rpc Create(CreateNetworkRequest) returns (Network);
+  rpc Get(GetNetworkRequest) returns (Network);
+  rpc List(ListNetworksRequest) returns (ListNetworksResponse);
+  rpc Update(UpdateNetworkRequest) returns (Network);
+  rpc Delete(DeleteNetworkRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchNetworksRequest) returns (stream NetworkEvent);
+  rpc SetStatusValues(SetNetworkStatusValuesRequest) returns (Network);
+}

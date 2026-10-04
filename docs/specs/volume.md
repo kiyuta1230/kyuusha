@@ -82,7 +82,7 @@ sequenceDiagram
     end
 ```
 
-- network/Subnet・NetworkInterfaceのIPAM枯渇（`VlanPoolExhausted`/`IPPoolExhausted`）と
+- network/Subnet・NetworkInterfaceのIPAM枯渇（`AllocationPending`/`NoFreeAddress`）と
   全く同じ「Createは拒否せずPendingで受理し、`Run`の`pendingSweepInterval`（10秒）ごとの
   スイープで再試行する」設計。旧VolumeAttachmentが単に通常のDetach処理中なだけかもしれず、
   即座に拒否するのは不適切なため。加えて`watchPendingVolumeAttachments`（`Service.Run`

@@ -14,8 +14,12 @@ type FirewallRule struct {
 }
 
 type NetworkInterfaceSpec struct {
-	VMID         string
+	VMID string
+	// SubnetID pins a Subnet; empty means NetworkID+Zone and kyuusha picks
+	// one at allocation time (Status.SubnetID).
 	SubnetID     string
+	NetworkID    string
+	Zone         string
 	IngressRules []FirewallRule // traffic allowed *into* the VM
 	EgressRules  []FirewallRule // traffic allowed *out of* the VM
 }
@@ -37,6 +41,16 @@ type NetworkInterfaceStatus struct {
 	IPAddress  string
 	MACAddress string
 	Hypervisor string
+	SubnetID   string // where the address came from
+}
+
+// SubnetID is the Subnet this interface's address belongs to: the one it
+// was allocated from, or the pinned one before allocation.
+func (n *NetworkInterface) SubnetID() string {
+	if n.Status.SubnetID != "" {
+		return n.Status.SubnetID
+	}
+	return n.Spec.SubnetID
 }
 
 type NetworkInterface struct {

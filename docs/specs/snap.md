@@ -15,7 +15,8 @@ ACL強制プラグイン契約——SNAP（Security Network Attach Protocol）�
   ペイロードの中身もフラグも別（`-network-attach-bin`とは無関係）
 - **attachのpayload**: `tap_name`/`iface_id`/`vm_id`/`tenant_id`/`subnet_id`/
   `subnet_labels`/`subnet_cidr`/`gateway_ip`/`ip_address`/`mac_address`/`ingress_rules`/
-  `egress_rules`——`subnet_labels`はSubnetの`meta.labels`（[VNAP仕様](vnap.md)と同じ。
+  `egress_rules`、およびVNAPと同じNetwork/NetworkClassの文脈（`network_id`/
+  `network_class`/`subnet_values`等、[VNAP仕様](vnap.md)参照）——`subnet_labels`はSubnetの`meta.labels`（[VNAP仕様](vnap.md)と同じ。
   `UpdateFirewallRules`後の再適用ではその時点の値が届く）
   ——`ip_address`/`mac_address`はそのVMに払い出された自身のアドレスで、アンチ
   スプーフィング（後述）の入力。`UpdateFirewallRules`後の再適用でも毎回同じ値が

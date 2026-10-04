@@ -23,7 +23,7 @@
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-driver-hint`(`firecracker`\|`cloud-hypervisor`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`cloud-hypervisor`必須。[Image仕様](image.md)参照) `-subnets`(カンマ区切りSubnet ID。先頭が`primary`、省略時はネットワークなし) `-volumes`(カンマ区切りVolume ID。起動時にattach——attach-before-bootのみ、[Volume仕様](volume.md)参照) `-pci-devices`(カンマ区切り`vendor_id:device_id[:count]`。`cloud-hypervisor`限定、[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照) `-numa-pinned`(スケジューラが選んだ1つの物理NUMAノードへ全vCPU/メモリを固定する。ドライバを問わず使える、[VirtualMachine仕様](virtual-machine.md)「NUMA/CPUピニング」参照) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-driver-hint`(`firecracker`\|`cloud-hypervisor`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`cloud-hypervisor`必須。[Image仕様](image.md)参照) `-networks`(カンマ区切りNetwork ID。NIC1本ずつ、Subnetはnetworkサービスが選ぶ。先頭が`primary`) `-subnets`(カンマ区切りSubnet ID。Subnetに固定したいNIC、`-networks`の後に続く) `-zone`(`-networks`を使うなら必須。`-subnets`だけならそのzone。省略時はネットワークなし) `-volumes`(カンマ区切りVolume ID。起動時にattach——attach-before-bootのみ、[Volume仕様](volume.md)参照) `-pci-devices`(カンマ区切り`vendor_id:device_id[:count]`。`cloud-hypervisor`限定、[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照) `-numa-pinned`(スケジューラが選んだ1つの物理NUMAノードへ全vCPU/メモリを固定する。ドライバを問わず使える、[VirtualMachine仕様](virtual-machine.md)「NUMA/CPUピニング」参照) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` `-finalizer-name`(指定すると`meta.finalizers`にその名前を含むVMだけに絞り込む。[外部システム連携仕様](external-integration.md)「大量Watch対策」参照) |
@@ -106,33 +106,57 @@ image向け。`create`は`-tenant`を持つためadmin-onlyではない（テナ
 `share`が呼ぶ`SetVisibility`は[Image仕様](image.md)「マルチテナント対応（可視性/共有）」
 参照——kernel/rootfs/disk自体を変える汎用`update`は存在しない（意図的に無い）。
 
-## `kyuusha subnet <create|get|list|watch|delete>`
+## `kyuusha pool <create|get|list|delete>` / `kyuusha netclass <create|get|list|delete>`
 
-network向け（[network仕様](network.md)参照）。`create`は`-tenant`を持つためadmin-onlyでは
-ない。`vlan_id`/`ip_address`はIPAMにより実際に払い出される（プール枯渇時はエラーではなく
-`Pending`で受理、[network仕様](network.md)参照）。
+AllocationPool/NetworkClass向け（[network仕様](network.md)「リソース」参照）。仕様が
+入れ子の構造なので、`-spec`（protojsonの`AllocationPoolSpec`/`NetworkClassSpec`）または
+`-spec-file`で渡す。pool・netclassの作成/削除はテナント横断のロール（`admin`等）だけ。
+`netclass get/list`は`-tenant`（既定はトークンのテナント）で、そのテナントが使えるClass
+だけを返す。
+
+```sh
+kyuusha pool create -name=vlan -spec='{"integer":{"ranges":[{"lo":100,"hi":199}]}}'
+kyuusha pool create -name=user-cidr -spec='{"cidr":{"mode":"USER_ANY"}}'
+kyuusha netclass create -name=std -spec='{"subnet":{"*":{"refs":[{"poolId":"allocpool-..."},{"poolId":"allocpool-...","name":"vlan_id"}]}},"visibility":"VISIBILITY_PUBLIC"}'
+```
+
+## `kyuusha network <create|get|list|delete>`
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-zone`(必須) `-cidr`(必須、例`10.0.1.0/24`) `-gateway-ip` `-dns-servers`(カンマ区切り) `-dns-suffix` `-mesh-group`(同じ値を持つSubnet同士の既定許可、実装済み) `-allocatable-ip-ranges`(カンマ区切りの`<開始>-<終了>`範囲。未指定ならCIDR全体) `-unique-cidr`(他のunique_cidrなSubnetとのCIDR重複を全テナット横断で拒否。Public IP用アドレス空間の宣言に使う) `-visibility`(`private`\|`public`、既定`private`) `-shared-with-tenant-ids`(カンマ区切り、`private`時のみ意味を持つ。所有テナント以外に実際にNetworkInterfaceのattachを許可するテナントID、[Image仕様](image.md)の同名フラグと同じ意味) |
+| `create` | `-tenant` `-name`(冪等キー) `-class`(必須) `-dns-suffix` `-visibility`(`private`\|`public`) `-shared-with-tenant-ids` `-labels` |
+| `get` | `-tenant` `-id`(必須) |
+| `list` | `-tenant` または `-all-tenants` |
+| `delete` | `-tenant` `-id`(必須) |
+
+## `kyuusha subnet <create|get|list|watch|delete|add-finalizer|remove-finalizer>`
+
+network向け（[network仕様](network.md)参照）。値（VLAN ID等）・CIDR・IPはNetworkClassに
+従って実際に払い出される（枯渇時はエラーではなく`Pending`で受理し、出力の
+`pending_reason=`に理由が出る）。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-tenant` `-name`(冪等キー) `-network`(必須) `-zone`(必須) `-cidr`/`-gateway-ip`(ClassのCIDRプールが利用者指定の場合だけ) `-dns-servers`(カンマ区切り) `-allocatable-ip-ranges`(カンマ区切りの`<開始>-<終了>`範囲) `-labels` `-annotations` |
 | `get` | `-tenant`(必須) `-id`(必須) |
-| `list` | `-tenant`(必須) |
-| `watch` | `-tenant`(必須) `-since-resource-version` |
+| `list` | `-tenant`(必須) または `-all-tenants` |
+| `watch` | `-tenant`(必須) または `-all-tenants`、`-since-resource-version` |
 | `delete` | `-tenant`(必須) `-id`(必須) |
 
-`update`はgRPC APIとしては存在するがCLIには未実装（CIDR/zone等をCreate後に変える
-実運用上のユースケースが今のところ無いため）。
+`update`はgRPC APIとしては存在するがCLIには未実装（Finalizerの付け外しだけ
+`add-finalizer`/`remove-finalizer`がある）。
 
 ## `kyuusha netif <create|get|list|watch|delete>`
 
 network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`のCLI名は
 `netif`（プロト上のメッセージ名は`NetworkInterface`）。`ip_address`/`mac_address`は
-実IPAMにより実際に払い出される。`hypervisor`は実バックエンド/tap配線報告連携がまだ
-ないため常に空（[network仕様](network.md)参照）。
+実IPAMにより実際に払い出される。`hypervisor`はVMがRunningの間そのHypervisor
+（[network仕様](network.md)参照）。`subnet=`は払い出し元のSubnet（`-network`指定なら
+networkサービスが選んだもの）。
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-vm`(VM ID、必須) `-subnet`(Subnet ID、必須) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-vm`(VM ID、必須) `-subnet`(Subnet ID) または `-network`＋`-zone`(networkサービスがSubnetを選ぶ) `-ingress-rules` `-egress-rules` `-labels` `-annotations` |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |

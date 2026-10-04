@@ -245,6 +245,7 @@ func (m *Manager) ApplyACL(vmID string, u vmm.ACLUpdate) (bool, error) {
 	}
 	err := snap.Attach(snap.Interface{
 		IfaceID: u.IfaceID, VMID: vmID, TenantID: tenantID, TapName: tap,
+		Attach:   u.Attach,
 		SubnetID: u.SubnetID, SubnetLabels: u.SubnetLabels, SubnetCIDR: u.SubnetCIDR, GatewayIP: u.GatewayIP,
 		IPAddress: u.IPAddress, MACAddress: u.MACAddress,
 		IngressRules: toSnapRules(u.IngressRules), EgressRules: toSnapRules(u.EgressRules),
@@ -481,7 +482,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 			SubnetCIDR:   ni.SubnetCIDR,
 			GatewayIP:    ni.GatewayIP,
 			PrefixLen:    ni.PrefixLen,
-			VLANID:       ni.VLANID,
+			Attach:       ni.Attach,
 			Primary:      ni.Primary,
 		}, m.NetworkAttachBin)
 		if err != nil {
@@ -492,6 +493,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 		ifaceIDs = append(ifaceIDs, ni.IfaceID)
 		if err := snap.Attach(snap.Interface{
 			IfaceID: ni.IfaceID, VMID: spec.VMID, TenantID: spec.TenantID, TapName: wired.TapName,
+			Attach:   ni.Attach,
 			SubnetID: ni.SubnetID, SubnetLabels: ni.SubnetLabels, SubnetCIDR: ni.SubnetCIDR, GatewayIP: ni.GatewayIP,
 			IPAddress: ni.IPAddress, MACAddress: wired.MACAddress,
 			IngressRules: toSnapRules(ni.IngressRules), EgressRules: toSnapRules(ni.EgressRules),

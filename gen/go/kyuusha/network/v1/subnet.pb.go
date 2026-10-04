@@ -23,65 +23,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// SubnetVisibility mirrors kyuusha.image.v1.ImageVisibility exactly -- same
-// three-tier access model (owner-only / owner+explicit allowlist / anyone),
-// same meaning, same UNSPECIFIED-defaults-to-PRIVATE convention. See
-// SubnetSpec.visibility/shared_with_tenant_ids and docs/specs/network.md.
-type SubnetVisibility int32
-
-const (
-	SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED SubnetVisibility = 0 // treated as PRIVATE
-	SubnetVisibility_PRIVATE                       SubnetVisibility = 1 // default: only the owning tenant, plus shared_with_tenant_ids
-	// any tenant may attach a NetworkInterface to this Subnet;
-	// shared_with_tenant_ids is then meaningless (ignored). Requires
-	// unique_cidr=true (see below) -- open, unvetted cross-tenant L2 sharing
-	// is only accepted on Public IP address space; an ordinary private
-	// Subnet must use the narrower, owner-vetted shared_with_tenant_ids
-	// instead (see docs/architecture.md「テナント間でのSubnet共有」).
-	SubnetVisibility_PUBLIC SubnetVisibility = 2
-)
-
-// Enum value maps for SubnetVisibility.
-var (
-	SubnetVisibility_name = map[int32]string{
-		0: "SUBNET_VISIBILITY_UNSPECIFIED",
-		1: "PRIVATE",
-		2: "PUBLIC",
-	}
-	SubnetVisibility_value = map[string]int32{
-		"SUBNET_VISIBILITY_UNSPECIFIED": 0,
-		"PRIVATE":                       1,
-		"PUBLIC":                        2,
-	}
-)
-
-func (x SubnetVisibility) Enum() *SubnetVisibility {
-	p := new(SubnetVisibility)
-	*p = x
-	return p
-}
-
-func (x SubnetVisibility) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (SubnetVisibility) Descriptor() protoreflect.EnumDescriptor {
-	return file_kyuusha_network_v1_subnet_proto_enumTypes[0].Descriptor()
-}
-
-func (SubnetVisibility) Type() protoreflect.EnumType {
-	return &file_kyuusha_network_v1_subnet_proto_enumTypes[0]
-}
-
-func (x SubnetVisibility) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use SubnetVisibility.Descriptor instead.
-func (SubnetVisibility) EnumDescriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{0}
-}
-
 type SubnetEvent_Type int32
 
 const (
@@ -121,11 +62,11 @@ func (x SubnetEvent_Type) String() string {
 }
 
 func (SubnetEvent_Type) Descriptor() protoreflect.EnumDescriptor {
-	return file_kyuusha_network_v1_subnet_proto_enumTypes[1].Descriptor()
+	return file_kyuusha_network_v1_subnet_proto_enumTypes[0].Descriptor()
 }
 
 func (SubnetEvent_Type) Type() protoreflect.EnumType {
-	return &file_kyuusha_network_v1_subnet_proto_enumTypes[1]
+	return &file_kyuusha_network_v1_subnet_proto_enumTypes[0]
 }
 
 func (x SubnetEvent_Type) Number() protoreflect.EnumNumber {
@@ -134,48 +75,86 @@ func (x SubnetEvent_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SubnetEvent_Type.Descriptor instead.
 func (SubnetEvent_Type) EnumDescriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{10, 0}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{11, 0}
 }
 
+// SubnetVisibility mirrors kyuusha.image.v1.ImageVisibility exactly -- same
+// three-tier access model (owner-only / owner+explicit allowlist / anyone),
+// same meaning, same UNSPECIFIED-defaults-to-PRIVATE convention. See
+// SubnetSpec.visibility/shared_with_tenant_ids and docs/specs/network.md.
+// SubnetAddress is one address family's CIDR and gateway.
+type SubnetAddress struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cidr          string                 `protobuf:"bytes,1,opt,name=cidr,proto3" json:"cidr,omitempty"`
+	GatewayIp     string                 `protobuf:"bytes,2,opt,name=gateway_ip,json=gatewayIp,proto3" json:"gateway_ip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubnetAddress) Reset() {
+	*x = SubnetAddress{}
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubnetAddress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubnetAddress) ProtoMessage() {}
+
+func (x *SubnetAddress) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubnetAddress.ProtoReflect.Descriptor instead.
+func (*SubnetAddress) Descriptor() ([]byte, []int) {
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *SubnetAddress) GetCidr() string {
+	if x != nil {
+		return x.Cidr
+	}
+	return ""
+}
+
+func (x *SubnetAddress) GetGatewayIp() string {
+	if x != nil {
+		return x.GatewayIp
+	}
+	return ""
+}
+
+// The user-written half: what is being asked for. Everything allocated
+// lives in status (system-written; Update never changes it).
 type SubnetSpec struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Zone                string                 `protobuf:"bytes,1,opt,name=zone,proto3" json:"zone,omitempty"` // required: the Availability Zone this Subnet (VLAN) belongs to
-	Cidr                string                 `protobuf:"bytes,2,opt,name=cidr,proto3" json:"cidr,omitempty"` // required, e.g. "10.0.1.0/24"
-	GatewayIp           string                 `protobuf:"bytes,3,opt,name=gateway_ip,json=gatewayIp,proto3" json:"gateway_ip,omitempty"`
-	DnsServers          []string               `protobuf:"bytes,4,rep,name=dns_servers,json=dnsServers,proto3" json:"dns_servers,omitempty"`                              // if empty and dns_suffix is set, kyuusha's shared resolver IP is implied
-	DnsSuffix           string                 `protobuf:"bytes,6,opt,name=dns_suffix,json=dnsSuffix,proto3" json:"dns_suffix,omitempty"`                                 // empty disables the (extension) name resolution feature
-	MeshGroup           string                 `protobuf:"bytes,7,opt,name=mesh_group,json=meshGroup,proto3" json:"mesh_group,omitempty"`                                 // declares intent: Subnets sharing a non-empty value (same tenant only) are meant to default-allow each other, bypassing the normal cross-Subnet deny -- not enforced yet, no ACL engine exists (see docs/specs/network.md)
-	AllocatableIpRanges []string               `protobuf:"bytes,8,rep,name=allocatable_ip_ranges,json=allocatableIpRanges,proto3" json:"allocatable_ip_ranges,omitempty"` // e.g. ["10.0.1.3-10.0.1.127", "10.0.1.136-10.0.1.254"]; empty means the whole cidr (minus network/broadcast/gateway_ip) is allocatable
-	// unique_cidr declares that this Subnet's CIDR must not overlap any other
-	// Subnet (any tenant) that also has unique_cidr=true -- checked at
-	// Create/Update time. false (the default) keeps today's behavior: CIDR
-	// overlap across different mesh_groups/tenants is fine (different
-	// VRF/VLAN). Independent of visibility -- a Subnet can be Public IP
-	// address space (unique_cidr=true) shared with everyone (visibility=PUBLIC),
-	// shared with a few tenants (visibility=PRIVATE+shared_with_tenant_ids), or
-	// exclusive to its own owner, and separately a plain private Subnet could
-	// set unique_cidr=true for unrelated reasons. See docs/specs/network.md.
-	UniqueCidr bool             `protobuf:"varint,9,opt,name=unique_cidr,json=uniqueCidr,proto3" json:"unique_cidr,omitempty"`
-	Visibility SubnetVisibility `protobuf:"varint,10,opt,name=visibility,proto3,enum=kyuusha.network.v1.SubnetVisibility" json:"visibility,omitempty"` // default PRIVATE, mirrors ImageVisibility
-	// shared_with_tenant_ids is meaningful only when visibility == PRIVATE:
-	// tenants other than the owner who may actually attach a NetworkInterface
-	// to this Subnet -- same field name and meaning as
-	// kyuusha.image.v1.ImageSpec.shared_with_tenant_ids (NOT the old,
-	// removed field 5, which only ever gated firewall-rule ACL references).
-	// This is the *purposeful*, owner-vetted grant (the owning tenant names
-	// each trusted tenant explicitly, e.g. injecting a managed-service
-	// provider's VM directly into its own Subnet) -- unlike visibility=PUBLIC,
-	// this works on any Subnet, not just unique_cidr ones, since the owner's
-	// explicit per-tenant consent is itself the safeguard against the
-	// unvetted L2-sharing risk docs/architecture.md warns about.
-	SharedWithTenantIds []string `protobuf:"bytes,11,rep,name=shared_with_tenant_ids,json=sharedWithTenantIds,proto3" json:"shared_with_tenant_ids,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	NetworkId string                 `protobuf:"bytes,1,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"` // required, immutable: the Network this Subnet belongs to
+	Zone      string                 `protobuf:"bytes,2,opt,name=zone,proto3" json:"zone,omitempty"`                            // required, immutable: the Availability Zone
+	// Only for a NetworkClass whose CIDR pool is user-specified (USER_ANY,
+	// USER_WITHIN_BLOCKS): the requested CIDR (and optionally gateway) per
+	// address family. Must be empty when the class allocates addresses.
+	// Immutable.
+	RequestedAddresses  []*SubnetAddress `protobuf:"bytes,3,rep,name=requested_addresses,json=requestedAddresses,proto3" json:"requested_addresses,omitempty"`
+	DnsServers          []string         `protobuf:"bytes,4,rep,name=dns_servers,json=dnsServers,proto3" json:"dns_servers,omitempty"`                              // empty: the NetworkClass's default resolvers for this zone
+	AllocatableIpRanges []string         `protobuf:"bytes,5,rep,name=allocatable_ip_ranges,json=allocatableIpRanges,proto3" json:"allocatable_ip_ranges,omitempty"` // e.g. ["10.0.1.3-10.0.1.127"]; empty means the whole IPv4 CIDR (minus network/broadcast/gateway)
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
 
 func (x *SubnetSpec) Reset() {
 	*x = SubnetSpec{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[0]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -187,7 +166,7 @@ func (x *SubnetSpec) String() string {
 func (*SubnetSpec) ProtoMessage() {}
 
 func (x *SubnetSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[0]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -200,7 +179,14 @@ func (x *SubnetSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubnetSpec.ProtoReflect.Descriptor instead.
 func (*SubnetSpec) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{0}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SubnetSpec) GetNetworkId() string {
+	if x != nil {
+		return x.NetworkId
+	}
+	return ""
 }
 
 func (x *SubnetSpec) GetZone() string {
@@ -210,18 +196,11 @@ func (x *SubnetSpec) GetZone() string {
 	return ""
 }
 
-func (x *SubnetSpec) GetCidr() string {
+func (x *SubnetSpec) GetRequestedAddresses() []*SubnetAddress {
 	if x != nil {
-		return x.Cidr
+		return x.RequestedAddresses
 	}
-	return ""
-}
-
-func (x *SubnetSpec) GetGatewayIp() string {
-	if x != nil {
-		return x.GatewayIp
-	}
-	return ""
+	return nil
 }
 
 func (x *SubnetSpec) GetDnsServers() []string {
@@ -231,20 +210,6 @@ func (x *SubnetSpec) GetDnsServers() []string {
 	return nil
 }
 
-func (x *SubnetSpec) GetDnsSuffix() string {
-	if x != nil {
-		return x.DnsSuffix
-	}
-	return ""
-}
-
-func (x *SubnetSpec) GetMeshGroup() string {
-	if x != nil {
-		return x.MeshGroup
-	}
-	return ""
-}
-
 func (x *SubnetSpec) GetAllocatableIpRanges() []string {
 	if x != nil {
 		return x.AllocatableIpRanges
@@ -252,39 +217,21 @@ func (x *SubnetSpec) GetAllocatableIpRanges() []string {
 	return nil
 }
 
-func (x *SubnetSpec) GetUniqueCidr() bool {
-	if x != nil {
-		return x.UniqueCidr
-	}
-	return false
-}
-
-func (x *SubnetSpec) GetVisibility() SubnetVisibility {
-	if x != nil {
-		return x.Visibility
-	}
-	return SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED
-}
-
-func (x *SubnetSpec) GetSharedWithTenantIds() []string {
-	if x != nil {
-		return x.SharedWithTenantIds
-	}
-	return nil
-}
-
 type SubnetStatus struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending(VLAN未払い出し) / Ready / Deleting / Error
+	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending (allocating) / Ready
 	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	VlanId        int32                  `protobuf:"varint,3,opt,name=vlan_id,json=vlanId,proto3" json:"vlan_id,omitempty"` // issued VLAN ID
+	Addresses     []*SubnetAddress       `protobuf:"bytes,3,rep,name=addresses,proto3" json:"addresses,omitempty"`                                                                             // effective CIDR/gateway, at most one per address family
+	Values        map[string]int64       `protobuf:"bytes,4,rep,name=values,proto3" json:"values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`        // Subnet-level allocated values, e.g. {"vlan_id": 100}
+	Attributes    map[string]string      `protobuf:"bytes,5,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // merged from the pools/entries they came from
+	Allocations   []*Allocation          `protobuf:"bytes,6,rep,name=allocations,proto3" json:"allocations,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubnetStatus) Reset() {
 	*x = SubnetStatus{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[1]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -296,7 +243,7 @@ func (x *SubnetStatus) String() string {
 func (*SubnetStatus) ProtoMessage() {}
 
 func (x *SubnetStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[1]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -309,7 +256,7 @@ func (x *SubnetStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubnetStatus.ProtoReflect.Descriptor instead.
 func (*SubnetStatus) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{1}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SubnetStatus) GetPhase() string {
@@ -326,11 +273,32 @@ func (x *SubnetStatus) GetConditions() []*v1.Condition {
 	return nil
 }
 
-func (x *SubnetStatus) GetVlanId() int32 {
+func (x *SubnetStatus) GetAddresses() []*SubnetAddress {
 	if x != nil {
-		return x.VlanId
+		return x.Addresses
 	}
-	return 0
+	return nil
+}
+
+func (x *SubnetStatus) GetValues() map[string]int64 {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *SubnetStatus) GetAttributes() map[string]string {
+	if x != nil {
+		return x.Attributes
+	}
+	return nil
+}
+
+func (x *SubnetStatus) GetAllocations() []*Allocation {
+	if x != nil {
+		return x.Allocations
+	}
+	return nil
 }
 
 type Subnet struct {
@@ -344,7 +312,7 @@ type Subnet struct {
 
 func (x *Subnet) Reset() {
 	*x = Subnet{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[2]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -356,7 +324,7 @@ func (x *Subnet) String() string {
 func (*Subnet) ProtoMessage() {}
 
 func (x *Subnet) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[2]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -369,7 +337,7 @@ func (x *Subnet) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subnet.ProtoReflect.Descriptor instead.
 func (*Subnet) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{2}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Subnet) GetMeta() *v1.ObjectMeta {
@@ -408,7 +376,7 @@ type CreateSubnetRequest struct {
 
 func (x *CreateSubnetRequest) Reset() {
 	*x = CreateSubnetRequest{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[3]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -420,7 +388,7 @@ func (x *CreateSubnetRequest) String() string {
 func (*CreateSubnetRequest) ProtoMessage() {}
 
 func (x *CreateSubnetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[3]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -433,7 +401,7 @@ func (x *CreateSubnetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSubnetRequest.ProtoReflect.Descriptor instead.
 func (*CreateSubnetRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{3}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CreateSubnetRequest) GetTenantId() string {
@@ -488,7 +456,7 @@ type GetSubnetRequest struct {
 
 func (x *GetSubnetRequest) Reset() {
 	*x = GetSubnetRequest{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[4]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -500,7 +468,7 @@ func (x *GetSubnetRequest) String() string {
 func (*GetSubnetRequest) ProtoMessage() {}
 
 func (x *GetSubnetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[4]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -513,7 +481,7 @@ func (x *GetSubnetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSubnetRequest.ProtoReflect.Descriptor instead.
 func (*GetSubnetRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{4}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetSubnetRequest) GetTenantId() string {
@@ -539,7 +507,7 @@ type ListSubnetsRequest struct {
 
 func (x *ListSubnetsRequest) Reset() {
 	*x = ListSubnetsRequest{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[5]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -551,7 +519,7 @@ func (x *ListSubnetsRequest) String() string {
 func (*ListSubnetsRequest) ProtoMessage() {}
 
 func (x *ListSubnetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[5]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -564,7 +532,7 @@ func (x *ListSubnetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSubnetsRequest.ProtoReflect.Descriptor instead.
 func (*ListSubnetsRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{5}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListSubnetsRequest) GetTenantId() string {
@@ -583,7 +551,7 @@ type ListSubnetsResponse struct {
 
 func (x *ListSubnetsResponse) Reset() {
 	*x = ListSubnetsResponse{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[6]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -595,7 +563,7 @@ func (x *ListSubnetsResponse) String() string {
 func (*ListSubnetsResponse) ProtoMessage() {}
 
 func (x *ListSubnetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[6]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -608,7 +576,7 @@ func (x *ListSubnetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSubnetsResponse.ProtoReflect.Descriptor instead.
 func (*ListSubnetsResponse) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{6}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListSubnetsResponse) GetItems() []*Subnet {
@@ -629,7 +597,7 @@ type UpdateSubnetRequest struct {
 
 func (x *UpdateSubnetRequest) Reset() {
 	*x = UpdateSubnetRequest{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[7]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -641,7 +609,7 @@ func (x *UpdateSubnetRequest) String() string {
 func (*UpdateSubnetRequest) ProtoMessage() {}
 
 func (x *UpdateSubnetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[7]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -654,7 +622,7 @@ func (x *UpdateSubnetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSubnetRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSubnetRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{7}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *UpdateSubnetRequest) GetSubnet() *Subnet {
@@ -689,7 +657,7 @@ type DeleteSubnetRequest struct {
 
 func (x *DeleteSubnetRequest) Reset() {
 	*x = DeleteSubnetRequest{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[8]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -701,7 +669,7 @@ func (x *DeleteSubnetRequest) String() string {
 func (*DeleteSubnetRequest) ProtoMessage() {}
 
 func (x *DeleteSubnetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[8]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -714,7 +682,7 @@ func (x *DeleteSubnetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSubnetRequest.ProtoReflect.Descriptor instead.
 func (*DeleteSubnetRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{8}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DeleteSubnetRequest) GetTenantId() string {
@@ -748,7 +716,7 @@ type WatchSubnetsRequest struct {
 
 func (x *WatchSubnetsRequest) Reset() {
 	*x = WatchSubnetsRequest{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[9]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -760,7 +728,7 @@ func (x *WatchSubnetsRequest) String() string {
 func (*WatchSubnetsRequest) ProtoMessage() {}
 
 func (x *WatchSubnetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[9]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -773,7 +741,7 @@ func (x *WatchSubnetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchSubnetsRequest.ProtoReflect.Descriptor instead.
 func (*WatchSubnetsRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{9}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *WatchSubnetsRequest) GetTenantId() string {
@@ -801,7 +769,7 @@ type SubnetEvent struct {
 
 func (x *SubnetEvent) Reset() {
 	*x = SubnetEvent{}
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[10]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -813,7 +781,7 @@ func (x *SubnetEvent) String() string {
 func (*SubnetEvent) ProtoMessage() {}
 
 func (x *SubnetEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[10]
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -826,7 +794,7 @@ func (x *SubnetEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubnetEvent.ProtoReflect.Descriptor instead.
 func (*SubnetEvent) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{10}
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SubnetEvent) GetType() SubnetEvent_Type {
@@ -850,37 +818,111 @@ func (x *SubnetEvent) GetResourceVersion() int64 {
 	return 0
 }
 
+// Admin-only correction of system-written values (see
+// SetNetworkStatusValuesRequest).
+type SetSubnetStatusValuesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Id            string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	Values        map[string]int64       `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	Attributes    map[string]string      `protobuf:"bytes,4,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetSubnetStatusValuesRequest) Reset() {
+	*x = SetSubnetStatusValuesRequest{}
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSubnetStatusValuesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSubnetStatusValuesRequest) ProtoMessage() {}
+
+func (x *SetSubnetStatusValuesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_network_v1_subnet_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSubnetStatusValuesRequest.ProtoReflect.Descriptor instead.
+func (*SetSubnetStatusValuesRequest) Descriptor() ([]byte, []int) {
+	return file_kyuusha_network_v1_subnet_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SetSubnetStatusValuesRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *SetSubnetStatusValuesRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SetSubnetStatusValuesRequest) GetValues() map[string]int64 {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+func (x *SetSubnetStatusValuesRequest) GetAttributes() map[string]string {
+	if x != nil {
+		return x.Attributes
+	}
+	return nil
+}
+
 var File_kyuusha_network_v1_subnet_proto protoreflect.FileDescriptor
 
 const file_kyuusha_network_v1_subnet_proto_rawDesc = "" +
 	"\n" +
-	"\x1fkyuusha/network/v1/subnet.proto\x12\x12kyuusha.network.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\x88\x03\n" +
+	"\x1fkyuusha/network/v1/subnet.proto\x12\x12kyuusha.network.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\x1a kyuusha/network/v1/network.proto\"B\n" +
+	"\rSubnetAddress\x12\x12\n" +
+	"\x04cidr\x18\x01 \x01(\tR\x04cidr\x12\x1d\n" +
 	"\n" +
-	"SubnetSpec\x12\x12\n" +
-	"\x04zone\x18\x01 \x01(\tR\x04zone\x12\x12\n" +
-	"\x04cidr\x18\x02 \x01(\tR\x04cidr\x12\x1d\n" +
+	"gateway_ip\x18\x02 \x01(\tR\tgatewayIp\"\xe8\x01\n" +
 	"\n" +
-	"gateway_ip\x18\x03 \x01(\tR\tgatewayIp\x12\x1f\n" +
+	"SubnetSpec\x12\x1d\n" +
+	"\n" +
+	"network_id\x18\x01 \x01(\tR\tnetworkId\x12\x12\n" +
+	"\x04zone\x18\x02 \x01(\tR\x04zone\x12R\n" +
+	"\x13requested_addresses\x18\x03 \x03(\v2!.kyuusha.network.v1.SubnetAddressR\x12requestedAddresses\x12\x1f\n" +
 	"\vdns_servers\x18\x04 \x03(\tR\n" +
-	"dnsServers\x12\x1d\n" +
-	"\n" +
-	"dns_suffix\x18\x06 \x01(\tR\tdnsSuffix\x12\x1d\n" +
-	"\n" +
-	"mesh_group\x18\a \x01(\tR\tmeshGroup\x122\n" +
-	"\x15allocatable_ip_ranges\x18\b \x03(\tR\x13allocatableIpRanges\x12\x1f\n" +
-	"\vunique_cidr\x18\t \x01(\bR\n" +
-	"uniqueCidr\x12D\n" +
-	"\n" +
-	"visibility\x18\n" +
-	" \x01(\x0e2$.kyuusha.network.v1.SubnetVisibilityR\n" +
-	"visibility\x123\n" +
-	"\x16shared_with_tenant_ids\x18\v \x03(\tR\x13sharedWithTenantIdsJ\x04\b\x05\x10\x06\"}\n" +
+	"dnsServers\x122\n" +
+	"\x15allocatable_ip_ranges\x18\x05 \x03(\tR\x13allocatableIpRanges\"\xf9\x03\n" +
 	"\fSubnetStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
 	"conditions\x18\x02 \x03(\v2\x1e.kyuusha.resource.v1.ConditionR\n" +
-	"conditions\x12\x17\n" +
-	"\avlan_id\x18\x03 \x01(\x05R\x06vlanId\"\xab\x01\n" +
+	"conditions\x12?\n" +
+	"\taddresses\x18\x03 \x03(\v2!.kyuusha.network.v1.SubnetAddressR\taddresses\x12D\n" +
+	"\x06values\x18\x04 \x03(\v2,.kyuusha.network.v1.SubnetStatus.ValuesEntryR\x06values\x12P\n" +
+	"\n" +
+	"attributes\x18\x05 \x03(\v20.kyuusha.network.v1.SubnetStatus.AttributesEntryR\n" +
+	"attributes\x12@\n" +
+	"\vallocations\x18\x06 \x03(\v2\x1e.kyuusha.network.v1.AllocationR\vallocations\x1a9\n" +
+	"\vValuesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\x1a=\n" +
+	"\x0fAttributesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xab\x01\n" +
 	"\x06Subnet\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x122\n" +
 	"\x04spec\x18\x02 \x01(\v2\x1e.kyuusha.network.v1.SubnetSpecR\x04spec\x128\n" +
@@ -925,19 +967,28 @@ const file_kyuusha_network_v1_subnet_proto_rawDesc = "" +
 	"\x05ADDED\x10\x01\x12\f\n" +
 	"\bMODIFIED\x10\x02\x12\v\n" +
 	"\aDELETED\x10\x03\x12\f\n" +
-	"\bBOOKMARK\x10\x04*N\n" +
-	"\x10SubnetVisibility\x12!\n" +
-	"\x1dSUBNET_VISIBILITY_UNSPECIFIED\x10\x00\x12\v\n" +
-	"\aPRIVATE\x10\x01\x12\n" +
+	"\bBOOKMARK\x10\x04\"\xfd\x02\n" +
+	"\x1cSetSubnetStatusValuesRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12T\n" +
+	"\x06values\x18\x03 \x03(\v2<.kyuusha.network.v1.SetSubnetStatusValuesRequest.ValuesEntryR\x06values\x12`\n" +
 	"\n" +
-	"\x06PUBLIC\x10\x022\xef\x03\n" +
+	"attributes\x18\x04 \x03(\v2@.kyuusha.network.v1.SetSubnetStatusValuesRequest.AttributesEntryR\n" +
+	"attributes\x1a9\n" +
+	"\vValuesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\x1a=\n" +
+	"\x0fAttributesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012\xd0\x04\n" +
 	"\rSubnetService\x12M\n" +
 	"\x06Create\x12'.kyuusha.network.v1.CreateSubnetRequest\x1a\x1a.kyuusha.network.v1.Subnet\x12G\n" +
 	"\x03Get\x12$.kyuusha.network.v1.GetSubnetRequest\x1a\x1a.kyuusha.network.v1.Subnet\x12W\n" +
 	"\x04List\x12&.kyuusha.network.v1.ListSubnetsRequest\x1a'.kyuusha.network.v1.ListSubnetsResponse\x12M\n" +
 	"\x06Update\x12'.kyuusha.network.v1.UpdateSubnetRequest\x1a\x1a.kyuusha.network.v1.Subnet\x12I\n" +
 	"\x06Delete\x12'.kyuusha.network.v1.DeleteSubnetRequest\x1a\x16.google.protobuf.Empty\x12S\n" +
-	"\x05Watch\x12'.kyuusha.network.v1.WatchSubnetsRequest\x1a\x1f.kyuusha.network.v1.SubnetEvent0\x01BCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1b\x06proto3"
+	"\x05Watch\x12'.kyuusha.network.v1.WatchSubnetsRequest\x1a\x1f.kyuusha.network.v1.SubnetEvent0\x01\x12_\n" +
+	"\x0fSetStatusValues\x120.kyuusha.network.v1.SetSubnetStatusValuesRequest\x1a\x1a.kyuusha.network.v1.SubnetBCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1b\x06proto3"
 
 var (
 	file_kyuusha_network_v1_subnet_proto_rawDescOnce sync.Once
@@ -951,58 +1002,72 @@ func file_kyuusha_network_v1_subnet_proto_rawDescGZIP() []byte {
 	return file_kyuusha_network_v1_subnet_proto_rawDescData
 }
 
-var file_kyuusha_network_v1_subnet_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kyuusha_network_v1_subnet_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_kyuusha_network_v1_subnet_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_kyuusha_network_v1_subnet_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_kyuusha_network_v1_subnet_proto_goTypes = []any{
-	(SubnetVisibility)(0),       // 0: kyuusha.network.v1.SubnetVisibility
-	(SubnetEvent_Type)(0),       // 1: kyuusha.network.v1.SubnetEvent.Type
-	(*SubnetSpec)(nil),          // 2: kyuusha.network.v1.SubnetSpec
-	(*SubnetStatus)(nil),        // 3: kyuusha.network.v1.SubnetStatus
-	(*Subnet)(nil),              // 4: kyuusha.network.v1.Subnet
-	(*CreateSubnetRequest)(nil), // 5: kyuusha.network.v1.CreateSubnetRequest
-	(*GetSubnetRequest)(nil),    // 6: kyuusha.network.v1.GetSubnetRequest
-	(*ListSubnetsRequest)(nil),  // 7: kyuusha.network.v1.ListSubnetsRequest
-	(*ListSubnetsResponse)(nil), // 8: kyuusha.network.v1.ListSubnetsResponse
-	(*UpdateSubnetRequest)(nil), // 9: kyuusha.network.v1.UpdateSubnetRequest
-	(*DeleteSubnetRequest)(nil), // 10: kyuusha.network.v1.DeleteSubnetRequest
-	(*WatchSubnetsRequest)(nil), // 11: kyuusha.network.v1.WatchSubnetsRequest
-	(*SubnetEvent)(nil),         // 12: kyuusha.network.v1.SubnetEvent
-	nil,                         // 13: kyuusha.network.v1.CreateSubnetRequest.LabelsEntry
-	nil,                         // 14: kyuusha.network.v1.CreateSubnetRequest.AnnotationsEntry
-	(*v1.Condition)(nil),        // 15: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),       // 16: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),       // 17: google.protobuf.Empty
+	(SubnetEvent_Type)(0),                // 0: kyuusha.network.v1.SubnetEvent.Type
+	(*SubnetAddress)(nil),                // 1: kyuusha.network.v1.SubnetAddress
+	(*SubnetSpec)(nil),                   // 2: kyuusha.network.v1.SubnetSpec
+	(*SubnetStatus)(nil),                 // 3: kyuusha.network.v1.SubnetStatus
+	(*Subnet)(nil),                       // 4: kyuusha.network.v1.Subnet
+	(*CreateSubnetRequest)(nil),          // 5: kyuusha.network.v1.CreateSubnetRequest
+	(*GetSubnetRequest)(nil),             // 6: kyuusha.network.v1.GetSubnetRequest
+	(*ListSubnetsRequest)(nil),           // 7: kyuusha.network.v1.ListSubnetsRequest
+	(*ListSubnetsResponse)(nil),          // 8: kyuusha.network.v1.ListSubnetsResponse
+	(*UpdateSubnetRequest)(nil),          // 9: kyuusha.network.v1.UpdateSubnetRequest
+	(*DeleteSubnetRequest)(nil),          // 10: kyuusha.network.v1.DeleteSubnetRequest
+	(*WatchSubnetsRequest)(nil),          // 11: kyuusha.network.v1.WatchSubnetsRequest
+	(*SubnetEvent)(nil),                  // 12: kyuusha.network.v1.SubnetEvent
+	(*SetSubnetStatusValuesRequest)(nil), // 13: kyuusha.network.v1.SetSubnetStatusValuesRequest
+	nil,                                  // 14: kyuusha.network.v1.SubnetStatus.ValuesEntry
+	nil,                                  // 15: kyuusha.network.v1.SubnetStatus.AttributesEntry
+	nil,                                  // 16: kyuusha.network.v1.CreateSubnetRequest.LabelsEntry
+	nil,                                  // 17: kyuusha.network.v1.CreateSubnetRequest.AnnotationsEntry
+	nil,                                  // 18: kyuusha.network.v1.SetSubnetStatusValuesRequest.ValuesEntry
+	nil,                                  // 19: kyuusha.network.v1.SetSubnetStatusValuesRequest.AttributesEntry
+	(*v1.Condition)(nil),                 // 20: kyuusha.resource.v1.Condition
+	(*Allocation)(nil),                   // 21: kyuusha.network.v1.Allocation
+	(*v1.ObjectMeta)(nil),                // 22: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),                // 23: google.protobuf.Empty
 }
 var file_kyuusha_network_v1_subnet_proto_depIdxs = []int32{
-	0,  // 0: kyuusha.network.v1.SubnetSpec.visibility:type_name -> kyuusha.network.v1.SubnetVisibility
-	15, // 1: kyuusha.network.v1.SubnetStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	16, // 2: kyuusha.network.v1.Subnet.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	2,  // 3: kyuusha.network.v1.Subnet.spec:type_name -> kyuusha.network.v1.SubnetSpec
-	3,  // 4: kyuusha.network.v1.Subnet.status:type_name -> kyuusha.network.v1.SubnetStatus
-	2,  // 5: kyuusha.network.v1.CreateSubnetRequest.spec:type_name -> kyuusha.network.v1.SubnetSpec
-	13, // 6: kyuusha.network.v1.CreateSubnetRequest.labels:type_name -> kyuusha.network.v1.CreateSubnetRequest.LabelsEntry
-	14, // 7: kyuusha.network.v1.CreateSubnetRequest.annotations:type_name -> kyuusha.network.v1.CreateSubnetRequest.AnnotationsEntry
-	4,  // 8: kyuusha.network.v1.ListSubnetsResponse.items:type_name -> kyuusha.network.v1.Subnet
-	4,  // 9: kyuusha.network.v1.UpdateSubnetRequest.subnet:type_name -> kyuusha.network.v1.Subnet
-	1,  // 10: kyuusha.network.v1.SubnetEvent.type:type_name -> kyuusha.network.v1.SubnetEvent.Type
-	4,  // 11: kyuusha.network.v1.SubnetEvent.subnet:type_name -> kyuusha.network.v1.Subnet
-	5,  // 12: kyuusha.network.v1.SubnetService.Create:input_type -> kyuusha.network.v1.CreateSubnetRequest
-	6,  // 13: kyuusha.network.v1.SubnetService.Get:input_type -> kyuusha.network.v1.GetSubnetRequest
-	7,  // 14: kyuusha.network.v1.SubnetService.List:input_type -> kyuusha.network.v1.ListSubnetsRequest
-	9,  // 15: kyuusha.network.v1.SubnetService.Update:input_type -> kyuusha.network.v1.UpdateSubnetRequest
-	10, // 16: kyuusha.network.v1.SubnetService.Delete:input_type -> kyuusha.network.v1.DeleteSubnetRequest
-	11, // 17: kyuusha.network.v1.SubnetService.Watch:input_type -> kyuusha.network.v1.WatchSubnetsRequest
-	4,  // 18: kyuusha.network.v1.SubnetService.Create:output_type -> kyuusha.network.v1.Subnet
-	4,  // 19: kyuusha.network.v1.SubnetService.Get:output_type -> kyuusha.network.v1.Subnet
-	8,  // 20: kyuusha.network.v1.SubnetService.List:output_type -> kyuusha.network.v1.ListSubnetsResponse
-	4,  // 21: kyuusha.network.v1.SubnetService.Update:output_type -> kyuusha.network.v1.Subnet
-	17, // 22: kyuusha.network.v1.SubnetService.Delete:output_type -> google.protobuf.Empty
-	12, // 23: kyuusha.network.v1.SubnetService.Watch:output_type -> kyuusha.network.v1.SubnetEvent
-	18, // [18:24] is the sub-list for method output_type
-	12, // [12:18] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	1,  // 0: kyuusha.network.v1.SubnetSpec.requested_addresses:type_name -> kyuusha.network.v1.SubnetAddress
+	20, // 1: kyuusha.network.v1.SubnetStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	1,  // 2: kyuusha.network.v1.SubnetStatus.addresses:type_name -> kyuusha.network.v1.SubnetAddress
+	14, // 3: kyuusha.network.v1.SubnetStatus.values:type_name -> kyuusha.network.v1.SubnetStatus.ValuesEntry
+	15, // 4: kyuusha.network.v1.SubnetStatus.attributes:type_name -> kyuusha.network.v1.SubnetStatus.AttributesEntry
+	21, // 5: kyuusha.network.v1.SubnetStatus.allocations:type_name -> kyuusha.network.v1.Allocation
+	22, // 6: kyuusha.network.v1.Subnet.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	2,  // 7: kyuusha.network.v1.Subnet.spec:type_name -> kyuusha.network.v1.SubnetSpec
+	3,  // 8: kyuusha.network.v1.Subnet.status:type_name -> kyuusha.network.v1.SubnetStatus
+	2,  // 9: kyuusha.network.v1.CreateSubnetRequest.spec:type_name -> kyuusha.network.v1.SubnetSpec
+	16, // 10: kyuusha.network.v1.CreateSubnetRequest.labels:type_name -> kyuusha.network.v1.CreateSubnetRequest.LabelsEntry
+	17, // 11: kyuusha.network.v1.CreateSubnetRequest.annotations:type_name -> kyuusha.network.v1.CreateSubnetRequest.AnnotationsEntry
+	4,  // 12: kyuusha.network.v1.ListSubnetsResponse.items:type_name -> kyuusha.network.v1.Subnet
+	4,  // 13: kyuusha.network.v1.UpdateSubnetRequest.subnet:type_name -> kyuusha.network.v1.Subnet
+	0,  // 14: kyuusha.network.v1.SubnetEvent.type:type_name -> kyuusha.network.v1.SubnetEvent.Type
+	4,  // 15: kyuusha.network.v1.SubnetEvent.subnet:type_name -> kyuusha.network.v1.Subnet
+	18, // 16: kyuusha.network.v1.SetSubnetStatusValuesRequest.values:type_name -> kyuusha.network.v1.SetSubnetStatusValuesRequest.ValuesEntry
+	19, // 17: kyuusha.network.v1.SetSubnetStatusValuesRequest.attributes:type_name -> kyuusha.network.v1.SetSubnetStatusValuesRequest.AttributesEntry
+	5,  // 18: kyuusha.network.v1.SubnetService.Create:input_type -> kyuusha.network.v1.CreateSubnetRequest
+	6,  // 19: kyuusha.network.v1.SubnetService.Get:input_type -> kyuusha.network.v1.GetSubnetRequest
+	7,  // 20: kyuusha.network.v1.SubnetService.List:input_type -> kyuusha.network.v1.ListSubnetsRequest
+	9,  // 21: kyuusha.network.v1.SubnetService.Update:input_type -> kyuusha.network.v1.UpdateSubnetRequest
+	10, // 22: kyuusha.network.v1.SubnetService.Delete:input_type -> kyuusha.network.v1.DeleteSubnetRequest
+	11, // 23: kyuusha.network.v1.SubnetService.Watch:input_type -> kyuusha.network.v1.WatchSubnetsRequest
+	13, // 24: kyuusha.network.v1.SubnetService.SetStatusValues:input_type -> kyuusha.network.v1.SetSubnetStatusValuesRequest
+	4,  // 25: kyuusha.network.v1.SubnetService.Create:output_type -> kyuusha.network.v1.Subnet
+	4,  // 26: kyuusha.network.v1.SubnetService.Get:output_type -> kyuusha.network.v1.Subnet
+	8,  // 27: kyuusha.network.v1.SubnetService.List:output_type -> kyuusha.network.v1.ListSubnetsResponse
+	4,  // 28: kyuusha.network.v1.SubnetService.Update:output_type -> kyuusha.network.v1.Subnet
+	23, // 29: kyuusha.network.v1.SubnetService.Delete:output_type -> google.protobuf.Empty
+	12, // 30: kyuusha.network.v1.SubnetService.Watch:output_type -> kyuusha.network.v1.SubnetEvent
+	4,  // 31: kyuusha.network.v1.SubnetService.SetStatusValues:output_type -> kyuusha.network.v1.Subnet
+	25, // [25:32] is the sub-list for method output_type
+	18, // [18:25] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_network_v1_subnet_proto_init() }
@@ -1010,13 +1075,14 @@ func file_kyuusha_network_v1_subnet_proto_init() {
 	if File_kyuusha_network_v1_subnet_proto != nil {
 		return
 	}
+	file_kyuusha_network_v1_network_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_network_v1_subnet_proto_rawDesc), len(file_kyuusha_network_v1_subnet_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   13,
+			NumEnums:      1,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

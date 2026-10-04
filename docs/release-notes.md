@@ -5,6 +5,44 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-10-05
+
+- **Subnetの上位概念`Network`と、払い出しの仕組み`NetworkClass`/`AllocationPool`を導入した**
+  （kyuusha-vpcからの変更依頼A9のうち、実装順序の1〜3: リソースとSubnetの払い出し、VMからの
+  Network＋AZ指定、Network単位の払い出しとルーティングドメインに関する設計の書き直し）。
+  - `AllocationPool`（管理者専用、組の一覧／整数／CIDR（利用者指定・ブロック内の利用者指定・
+    自動切り出し））、`NetworkClass`（Network単位・zoneごとのSubnet単位のプール参照、属性、
+    可視性、`allow_public_networks`等）、`Network`（テナント所有、ルーティングドメイン兼分離の
+    境界、AZをまたぐ）を追加。Subnetは必ずNetworkに属し、値（VLAN ID等の名前付きの整数、
+    CIDR/gateway、属性）はClassに従ってnetwork-reconcilerが全部か無しかで払い出す。
+    払い出し結果はSubnet/Networkの`status`に置き、管理者だけが`SetStatusValues`で直せる
+  - VMの`network_interfaces`はNetworkを指定し（`spec.zone`でAZを指定）、networkサービスが
+    IPの払い出しと同じ処理の中でSubnetを選ぶ。Subnetの固定も引き続き可能
+  - 同じNetwork内のSubnet同士は既定で疎通し、Networkの配下が変わる（Subnetが増える・消える）と
+    配下の全NICへ`update_acl`を配り直す（kyuusha-vpcからの変更依頼B4もこれで解消）
+  - VNAP/SNAPのpayloadに`network_id`・Networkのラベル・Classの名前と属性・Network/Subnet単位の
+    払い出された値と属性・MTUを追加し、`vlan_id`を廃止（`vlan-trunk.sh`は
+    `subnet_values.vlan_id`を読む）。組み込みのブリッジはSubnet単位の名前になった
+  - 廃止: `mesh_group`、`unique_cidr`、Subnetの`visibility`/`shared_with_tenant_ids`（Networkへ
+    移動）、network-reconcilerの`-vlan-ranges`、`status.vlan_id`、Condition`VlanPoolExhausted`/
+    `IPPoolExhausted`（`AllocationPending`/`NoFreeAddress`へ）。既存データの移行手段は無い
+  - api-gatewayは`kyuusha.network.v1`の新しいサービスを、外部バックエンドと同じ汎用転送で
+    （自分のバイナリに組み込まれたprotoの定義を使って）転送する
+  - CLIに`pool`/`netclass`/`network`、`subnet create -network`、`vm create -networks -zone`、
+    `netif create -network -zone`を追加
+  - 作業中に見つけた不具合（いずれも新コード内、マージ前に修正）: Classの`"*"`のSubnet参照を
+    自分自身と合成して二重に数えていた、zone個別の参照リスト内の重複名を検出できていなかった、
+    名前による冪等な再Createが検証で自分自身と衝突していた
+  - 確認: `internal/network`に払い出し（整数・切り出し・組の一覧・zone個別の合成・全部か無しかの
+    巻き戻し・削除後の再利用）、プール/Classの使用中保護、Networkの可視性と共有、Subnetの自動選択、
+    同じNetwork内の既定の疎通、配下の変更時の`update_acl`の配り直しのテストを追加。
+    playgroundで`scenario.sh`を全て通し、管理者のプール/Class作成→テナントのNetwork・Subnet
+    作成（VLAN ID＋CIDRの払い出し）→Network＋AZ指定のVM作成（networkサービスがSubnetを選択）→
+    ゲストが実tap越しにgatewayへ到達、までを実VMで確認
+  - `docs/architecture.md`の「NetworkとSubnetを分けない」「テナント＝ルーティングドメイン」
+    「VLANによるテナント分離」の記述を、現在の設計（Network＝ルーティングドメイン、
+    1 Network = 1 VRF、NetworkごとのRoute Target）として書き直した
+
 ## 2026-10-04
 
 - **api-gatewayに外部バックエンドの登録を追加した**（kyuusha-vpcからの変更依頼A7）。

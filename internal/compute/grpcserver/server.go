@@ -261,11 +261,13 @@ func fromSpec(s *computev1.VirtualMachineSpec) compute.VirtualMachineSpec {
 		UserData:   s.GetUserData(),
 		DriverHint: fromDriver(s.GetDriverHint()),
 		NumaPinned: s.GetNumaPinned(),
+		Zone:       s.GetZone(),
 	}
 	for _, n := range s.GetNetworkInterfaces() {
 		spec.NetworkInterfaces = append(spec.NetworkInterfaces, compute.NetworkAttachment{
-			SubnetID: n.GetSubnetId(),
-			Primary:  n.GetPrimary(),
+			SubnetID:  n.GetSubnetId(),
+			NetworkID: n.GetNetworkId(),
+			Primary:   n.GetPrimary(),
 		})
 	}
 	for _, v := range s.GetVolumes() {
@@ -292,11 +294,13 @@ func toSpec(s compute.VirtualMachineSpec) *computev1.VirtualMachineSpec {
 		UserData:   s.UserData,
 		DriverHint: toDriver(s.DriverHint),
 		NumaPinned: s.NumaPinned,
+		Zone:       s.Zone,
 	}
 	for _, n := range s.NetworkInterfaces {
 		out.NetworkInterfaces = append(out.NetworkInterfaces, &computev1.NetworkAttachment{
-			SubnetId: n.SubnetID,
-			Primary:  n.Primary,
+			SubnetId:  n.SubnetID,
+			NetworkId: n.NetworkID,
+			Primary:   n.Primary,
 		})
 	}
 	for _, v := range s.Volumes {

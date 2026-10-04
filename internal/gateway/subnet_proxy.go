@@ -41,6 +41,10 @@ func (p *SubnetProxy) Delete(ctx context.Context, req *networkv1.DeleteSubnetReq
 	return p.backend.Delete(ctx, req)
 }
 
+func (p *SubnetProxy) SetStatusValues(ctx context.Context, req *networkv1.SetSubnetStatusValuesRequest) (*networkv1.Subnet, error) {
+	return p.backend.SetStatusValues(ctx, req)
+}
+
 func (p *SubnetProxy) Watch(req *networkv1.WatchSubnetsRequest, stream networkv1.SubnetService_WatchServer) error {
 	backendStream, err := p.backend.Watch(stream.Context(), req)
 	if err != nil {

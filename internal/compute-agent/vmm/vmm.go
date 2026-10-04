@@ -301,8 +301,10 @@ type NetIface struct {
 	IPAddress    string
 	PrefixLen    int
 	GatewayIP    string
-	VLANID       int32
-	Primary      bool
+	// Attach is the Network/NetworkClass context and the Subnet's
+	// allocated values, handed to VNAP/SNAP plugins as-is.
+	Attach  AttachInfo
+	Primary bool
 	// SubnetCIDR is this interface's Subnet's own CIDR (compute.
 	// NetworkInterfaceInfo.CIDR verbatim) -- used by snap's default
 	// nftacl implementation to build the "allow within own Subnet"
@@ -315,9 +317,27 @@ type NetIface struct {
 	EgressRules  []FirewallRule
 }
 
+// AttachInfo is the part of a VNAP/SNAP plugin payload describing the
+// interface's Network, NetworkClass and Subnet allocation -- embedded
+// as-is into both plugin requests (see docs/specs/vnap.md). kyuusha never
+// interprets any of it; e.g. whether subnet_values["vlan_id"] is an 802.1Q
+// tag is the plugin's call.
+type AttachInfo struct {
+	NetworkID              string            `json:"network_id,omitempty"`
+	NetworkLabels          map[string]string `json:"network_labels,omitempty"`
+	NetworkClass           string            `json:"network_class,omitempty"`
+	NetworkClassAttributes map[string]string `json:"network_class_attributes,omitempty"`
+	NetworkValues          map[string]int64  `json:"network_values,omitempty"`
+	NetworkAttributes      map[string]string `json:"network_attributes,omitempty"`
+	SubnetValues           map[string]int64  `json:"subnet_values,omitempty"`
+	SubnetAttributes       map[string]string `json:"subnet_attributes,omitempty"`
+	MTU                    int32             `json:"mtu,omitempty"`
+}
+
 // ACLUpdate is ApplyACL's input: one NetworkInterface's complete current
 // SNAP inputs, mirroring network.UpdateACLCommand.
 type ACLUpdate struct {
+	Attach       AttachInfo
 	IfaceID      string
 	SubnetID     string
 	SubnetLabels map[string]string

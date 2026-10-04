@@ -24,9 +24,10 @@ func TestService_SubnetFinalizerHoldsVLAN(t *testing.T) {
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go svc.watchPendingSubnets(watchCtx)
+	netID := carveNetwork(t, ctx, svc, "tenant-a")
 
-	sn := createAndWaitReady(t, ctx, svc, "tenant-a", "held", SubnetSpec{Zone: "zone-f", CIDR: "10.0.1.0/24"})
-	heldVLAN := sn.Status.VLANID
+	sn := createAndWaitReady(t, ctx, svc, "tenant-a", "held", SubnetSpec{NetworkID: netID, Zone: "zone-f"})
+	heldVLAN := sn.Status.Values["vlan_id"]
 	if heldVLAN == 0 {
 		t.Fatal("Subnet got no VLAN ID")
 	}
@@ -48,13 +49,13 @@ func TestService_SubnetFinalizerHoldsVLAN(t *testing.T) {
 		t.Fatalf("SubnetCount after two Deletes = %d, want %d", got, usageBefore-1)
 	}
 	lingering, err := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
-	if err != nil || lingering.Meta.DeletedAt == nil || lingering.Status.VLANID != heldVLAN {
+	if err != nil || lingering.Meta.DeletedAt == nil || lingering.Status.Values["vlan_id"] != heldVLAN {
 		t.Fatalf("held Subnet = %+v, %v; want it still present, deleted_at set, VLAN %d kept", lingering, err, heldVLAN)
 	}
 
 	// While held, its VLAN ID is not handed to anyone else.
-	other := createAndWaitReady(t, ctx, svc, "tenant-a", "other", SubnetSpec{Zone: "zone-f", CIDR: "10.0.2.0/24"})
-	if other.Status.VLANID == heldVLAN {
+	other := createAndWaitReady(t, ctx, svc, "tenant-a", "other", SubnetSpec{NetworkID: netID, Zone: "zone-f"})
+	if other.Status.Values["vlan_id"] == heldVLAN {
 		t.Fatalf("a new Subnet got VLAN %d while the held Subnet still exists", heldVLAN)
 	}
 
@@ -75,8 +76,8 @@ func TestService_SubnetFinalizerHoldsVLAN(t *testing.T) {
 
 	// Now (once the watch sees the Deleted event) its VLAN ID is reusable.
 	for deadline := time.Now().Add(2 * time.Second); ; {
-		probe := createAndWaitReady(t, ctx, svc, "tenant-a", "probe-"+time.Now().Format("150405.000000"), SubnetSpec{Zone: "zone-f", CIDR: "10.0.3.0/24"})
-		if probe.Status.VLANID == heldVLAN {
+		probe := createAndWaitReady(t, ctx, svc, "tenant-a", "probe-"+time.Now().Format("150405.000000"), SubnetSpec{NetworkID: netID, Zone: "zone-f"})
+		if probe.Status.Values["vlan_id"] == heldVLAN {
 			return
 		}
 		if err := svc.DeleteSubnet(ctx, "tenant-a", probe.Meta.ID); err != nil {

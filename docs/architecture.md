@@ -37,7 +37,7 @@ AZごとのVLANプール(4094)といった、これまでの設計判断はそ�
 |---|---|---|---|
 | ライブマイグレーション | Novaの主要機能 | **不要** | ハイパーバイザー障害時の復旧はKaaS層(Pod再スケジュール)が担う。ハイパーバイザーはcattle。ただし運用者が明示的に起動するコールドマイグレーション（`Stopped`のVMを別Hypervisorへ、IPとVolumeデータのみ引き継いで再配置——計画メンテナンス/退役用）は実装済み。障害時の自動フェイルオーバーではない点でこの判断と矛盾しない（[VirtualMachine仕様](specs/virtual-machine.md)「マイグレーション」参照） |
 | ディスク永続化 | Cinderがフル機能(スナップショット/レプリケーション等) | **最小限**。ルートディスクはイメージからのephemeral/copy-on-write。永続化が要る場合のみブロックデバイスをattach | VM自体の長期状態保持を前提にしない |
-| テナントネットワーク | Neutronがフル機能(overlay per-tenant, router, floating IP, per-tenant security policy) | **最小限**。テナント＝KaaSクラスタ単位の**L2/L3分離のみ**担保。Pod間のマルチテナント分離はCNI/NetworkPolicy層(KaaS側)の責務。Public IP Attach(floating IP相当)は`Subnet.spec.unique_cidr`/`visibility`/`shared_with_tenant_ids`で表現——新しいリソース種別を増やさず、Subnet/NetworkInterfaceの既存機構をそのまま流用する（後述「networkサービスのリソース」節参照）。router/LBのような複数バックエンドを束ねる共有サービスは引き続きスコープ外 | KaaSクラスタ間が疎通しなければ良く、クラスタ内のテナント性はKaaS側の仕事。ただしPublic IPはVMのライフサイクルに紐づく1:1の外部参照で、Volumeと同じ「参照するだけ、プロビジョニングはしない」性質を持つため、Subnetの一種として扱える |
+| テナントネットワーク | Neutronがフル機能(overlay per-tenant, router, floating IP, per-tenant security policy) | **最小限**。テナント（KaaSクラスタ）が持つNetwork単位の**L2/L3分離のみ**担保。Pod間のマルチテナント分離はCNI/NetworkPolicy層(KaaS側)の責務。Public IP Attach(floating IP相当)は公開IP用のNetwork（`PUBLIC`にしてよいNetworkClassのもの）への2本目のNICで表現——専用のリソース種別を増やさず、Network/NetworkInterfaceの機構をそのまま流用する（後述「networkサービスのリソース」節参照）。router/LBのような複数バックエンドを束ねる共有サービスは引き続きスコープ外 | KaaSクラスタ間が疎通しなければ良く、クラスタ内のテナント性はKaaS側の仕事。ただしPublic IPはVMのライフサイクルに紐づく1:1の外部参照で、Volumeと同じ「参照するだけ、プロビジョニングはしない」性質を持つため、Networkの一種として扱える |
 | 外部API設計 | REST、命令的CRUD+ポーリング、プロジェクトごとに規約バラバラ | **宣言的API**。spec/status分離、watch(ストリーミング)、resourceVersionによる楽観的並行性制御。ただしKubernetes CRD/Aggregated API Serverそのものにはしない——理由は「リソースモデル / API規約」節参照 | 利用者は人間ではなくKaaSのコントローラー。ポーリングではなくwatchで駆動したい |
 
 ## 設計原則: KubeVirtを反面教師にする
@@ -375,91 +375,116 @@ message HypervisorStatus {
 }
 ```
 
-### networkサービスのリソース: Subnet / NetworkInterface
+### networkサービスのリソース: AllocationPool / NetworkClass / Network / Subnet / NetworkInterface
 
-「Network」と「Subnet」を分けない。テナント(KaaSクラスタ)は1つ以上の`Subnet`を持て、
-それぞれが独立してVLAN IDを1つ払い出される（bastionのような多足構成は複数Subnetの作成で表現する）。
-
-```protobuf
-enum SubnetVisibility {
-  SUBNET_VISIBILITY_UNSPECIFIED = 0; // PRIVATE扱い
-  PRIVATE = 1; // 既定: 所有テナントのみ、+shared_with_tenant_idsで列挙したテナント
-  PUBLIC = 2;  // 全テナントがNetworkInterfaceをattach可能
-}
-
-message SubnetSpec {
-  string zone = 1;         // 必須。このSubnet(VLAN)が属するAvailability Zone
-  string cidr = 2;         // 例: "10.0.1.0/24"
-  string gateway_ip = 3;
-  repeated string dns_servers = 4; // 未指定かつdns_suffix設定時はkyuushaの共有リゾルバIPを補完
-  string dns_suffix = 6;   // 空なら名前解決は拡張機能として無効。値を設定すると<vm名>.<dns_suffix>で解決可能になる
-  string mesh_group = 7;   // 同じ値を持つSubnet同士（同一テナント限定）はデフォルト許可、という意図の宣言（実装済み。docs/specs/network.md参照）
-  repeated string allocatable_ip_ranges = 8; // 例: ["10.0.1.10-10.0.1.20"]。空ならcidr全体（ネットワーク/ブロードキャスト/gateway_ip除く）
-  bool unique_cidr = 9;    // trueなら、他のunique_cidr=trueなSubnetとのCIDR重複を全テナット横断で拒否する。Public IP用アドレス空間の宣言に使う
-  SubnetVisibility visibility = 10; // 既定PRIVATE
-  repeated string shared_with_tenant_ids = 11; // visibility==PRIVATEの時だけ意味を持つ。このSubnetへ実際にNetworkInterfaceをattachしてよい、所有テナント以外のテナントID(kyuusha.image.v1.ImageSpecの同名フィールドと全く同じ意味)
-}
-
-message SubnetStatus {
-  string phase = 1;    // Pending(VLAN未払い出し) / Ready / Deleting / Error
-  repeated Condition conditions = 2;
-  int32  vlan_id = 3;  // 払い出し済みVLAN ID
-}
-
-message FirewallRule {
-  string protocol = 1;    // tcp/udp/icmp
-  string port_range = 2;  // 例: "22", "2379-2380"
-  string source_cidr = 3;
-  string action = 4;      // allow/deny
-}
-
-message NetworkInterfaceSpec {
-  string vm_id = 1;
-  string subnet_id = 2;
-  repeated FirewallRule ingress_rules = 3; // VMへの着信許可。自Subnet CIDR外からはデフォルト拒否。SecurityGroupのような別リソースは介さない
-  repeated FirewallRule egress_rules = 4;  // VM発の送信許可。同じくデフォルト拒否
-}
-
-message NetworkInterfaceStatus {
-  string phase = 1;    // Pending / Binding(IPAM割当+tap配線中) / Ready / Rebinding(SELF_HEAL再バインド中) / Deleting / Error
-  repeated Condition conditions = 2;
-  string ip_address = 3;
-  string mac_address = 4;
-  string hypervisor = 5;     // 現在tapが配線されているハイパーバイザー
-}
+```
+AllocationPool（管理者） 払い出し元。組の一覧（静的）／整数・CIDR（動的）
+  ▲ 参照
+NetworkClass（管理者）   「どのプールから、どの単位で払い出すか」の定義（StorageClass相当）
+  ▲ 参照（1つ・変更不可）
+Network（テナント）      ルーティングドメイン兼分離の境界。AZをまたぐ
+  └─ Subnet（テナントが依頼、kyuushaが払い出す）   AZに閉じる。CIDR 1つ＝gateway 1つ（アドレスファミリごと）
+       └─ NetworkInterface（VMのNIC）
 ```
 
-`shared_with_tenant_ids`はかつて（field 5）「他テナントが自分のingress_rules/egress_rules
-の中でこのSubnetのCIDRをallow宛先として名指ししてよいか」というACL参照専用の同意
-フィールドだったが、削除した。これと同等以上の制御（例: 外部の申請システムと連携した
-事前承認済みACLルールかのチェック）が必要になった場合は、専用フィールドを増やすのではなく
-`internal/admissionwebhook`（[external-integration.md](specs/external-integration.md)
-「ゲート系(作成側): Admission Webhook」参照。`network`サービスのSubnet Create/Update/Delete、
-NetworkInterface Create/Update/`UpdateFirewallRules`に配線済み）で外部から検証する
+現状の仕様（フィールド、払い出しの手順、検証）は[network仕様](specs/network.md)。ここでは
+なぜこの形なのかを記録する。
+
+**Subnetの上位概念`Network`を持つ**: Subnetだけだと、Subnetが枯渇して足すたびに、設定
+（DNS、共有範囲、ラベル等）の手作業のコピー、旧SubnetのCIDRを名指ししたACLルールの
+全NICでの書き換え（NIC数に比例する作業）、KaaS側での「新しいVMは新しいSubnetへ」の
+切り替え、既存VMのホスト側ACLへの反映、が必要になる。Networkを入れ、VMは「Network＋AZ」
+を指定しSubnetはnetworkサービスが選ぶ形にすると、Subnetを1つ足すコストは設定作業だけに
+なり、ゲストやKaaSからはSubnetが増えたことが見えない。名前はGCP/Azureで「Network」が
+指す「ルーティングドメイン/分離の境界」と同じ意味なので`Network`にした。
+
+- **必須の概念**: 全てのSubnetは作成時にちょうど1つのNetworkを指定し、後から変えられない。
+  「Networkに属さないSubnet」という特別扱いを残すと、両方の流儀を全ての機能で面倒を
+  見ることになるため
+- **ルーティングドメインはテナントではなくNetwork**: 1つのKaaSクラスタの中に、互いに分離
+  されたネットワークを複数持てる（例: サービス用とストレージ用）。Route TargetやL3 VNIの
+  ようなルーティングドメインの値はNetworkごとに1つ払い出す。Network同士は既定で疎通せず、
+  同じNetwork内のSubnet同士は既定で疎通する（「この範囲は互いに許可」を別の宣言フィールドで
+  表すのではなく、Networkという実体のある境界そのもので表す）。Networkの配下が
+  変わったら配下の全NICのホスト側ACLを配り直す
+- **項目はNetworkかSubnetの片方だけが持つ**: 親の値を子が上書きできる継承は作らない
+  （どの値が効いているか分かりにくくなるため）。`dns_suffix`（名前空間はAZに関係なく
+  同じであるべき）、共有範囲、Network単位の値はNetwork、`zone`・CIDR/gateway・
+  `dns_servers`（リゾルバはAZごとに分けうる）・Subnet単位の値はSubnet
+- **Subnetは「CIDR 1つ＝gateway 1つ」（アドレスファミリごと）**: Subnetに同じファミリの
+  CIDRを複数持たせる形（Neutronの複数Subnet、Azureの複数アドレスプレフィックス）は採らない。
+  Networkがあれば、Subnetを足す方が単純でゲストからも見えないため。デュアルスタックを前提に、
+  項目とプールはアドレスファミリごとに持てる形にしてある（IPv6のIPAM自体は未実装）
+- **Subnetは「ユーザーが依頼し、システムが作る」**: Subnetリソースは1つのまま、`spec`
+  （利用者の依頼）と`status`（システムの払い出し結果）に分ける。依頼と実体を別リソースに
+  分ける形（KubernetesのPVC/PV）は、リソースが倍になるわりに得るものが少ないので採らない。
+  払い出された値は分離に直結するので、テナントが書けるラベルには置かず、Updateでも変えられ
+  ない`status`に置く（管理者だけが`SetStatusValues`で直せる）。前例はNeutronの
+  `segmentation_id`
+
+**払い出し方は管理者が`NetworkClass`で定義する**: 値の払い出しはkyuushaが内蔵の汎用ロジック
+（「Classに書かれたプールから払う」）で行い、外部の払い出しプラグインは設けない。
+「VLANかどうか」のようなデータプレーンの知識はClassとプールの中身（管理者の判断）に移る。
+名前はKubernetesのStorageClass/IngressClass/RuntimeClassにならった——作成時に値を写す雛形
+ではなく、払い出しのたびに参照される定義であることを表すため（`Template`はコピーと誤解
+されやすい）。
+
+- **Networkは1つのClassを参照し、配下のSubnetは全てそれに従う**。Network内で方式が混ざると
+  疎通の前提が崩れるため。Subnetを足すときは「どのNetworkの、どのAZに」だけを指定する
+- **既定のClassは持たない**: 既定があると、管理者が既定を変えたとたん以降のNetworkの
+  データプレーンが黙って変わるため。手軽さはCLIの側で補う
+- **利用許可は作成時だけ判定する**: 許可を外したとたんSubnetを足せなくなると、枯渇時に
+  既存のクラスタが詰むため
+- **データプレーンの意味は検証しない**: VLAN/VRF/SRv6/pure L3等のあらゆる方式に備えた検証は
+  現実的でない。kyuushaが保証するのは「プールの中で同じ値を二重に払い出さない」ことだけで、
+  それは検証ではなくプールの構造で守る。検証するのは構造（zoneごとにCIDRの出どころが
+  ファミリあたり1つ、同じ名前の値が複数のプールから来ない）だけ
+
+**プールは払い出し方の形で分け、データプレーンの種類では分けない**: `VlanPool`/`VrfPool`の
+ように方式ごとにリソースを定義すると、方式が増えるたびにkyuusha本体へリソースを足すことに
+なり、Neutronの`network_type`とtype driverが増え続けた構図（[why-kyuusha.md](why-kyuusha.md)
+「ベンダープラグインの氾濫」）を繰り返す。代わりにKubernetesのPVの静的/動的プロビジョニング
+と同じ大枠で、**組の一覧（静的）**・**整数（動的）**・**CIDR（動的）**の3つの形を1つの
+リソースの`oneof`で表し、データプレーン固有の情報は管理者が書く属性（kyuushaは解釈せず
+VNAPへ渡す）に置く。新しいデータプレーンが来ても、本体にリソースを足さずプールの中身と
+VNAPだけで対応できる。
+
+- **動的なプールは1つの次元だけを払い出し、組み合わせはClassで行う**: 整数とCIDRを1つの
+  プールに同居させると、片方の次元だけを複数のClass・AZ・アドレスファミリで共有できず、
+  番号空間を前もって分け合う（断片化する）しかなくなる。例: VNIは共有しCIDRブロックは
+  Classごとに分けたい、社内のアドレス計画（CIDR）は共有しIDの要否はClassごとに違う、
+  IPv4は全社共通でIPv6はClassごと、VLANはAZごとに使い回しCIDRは全AZ共通のブロックから
+  切り出す、等。代償は単純な構成でもプールの数が増えること
+- **組の一覧は切り離せない組を丸ごと払い出す**: VLAN方式のように、ネットワーク管理者が
+  CIDRとVLAN IDを事前に決めてスイッチに設定してから登録する運用に合わせる
+- **プールはzoneに縛らない**: 一意でなければならない範囲（ある物理ファブリックの番号空間）
+  はzoneより狭いこともある（host aggregateごとにL2が分かれていれば同じ番号を使い回せる）。
+  どのプールを使うかで管理者が表す
+- **値はNetwork/Subnetが実際に消えるまで保持する**: Finalizerで削除が止まっている間に
+  同じ値を別のNetwork/Subnetへ渡さないため（[Finalizer](#finalizer-外部システムによる削除ブロック)）
+
+**届く範囲**: 特定のラックやホスト群にしか届かない構成（オーバーレイの無いCLOSのVLAN等）の
+ために、AZの中でホストをグループ化する概念（host aggregate相当）とNetworkClassの条件を
+ラベルで合わせ、VMの配置先を絞る。
+
+**`NetworkInterface`**: VirtualMachineとSubnetの結びつきそのものをリソースにする
+（`VolumeAttachment`と同じパターン）。NICの単位のACL（`ingress_rules`/`egress_rules`）を
+持つ。Network＋AZを指定されたNICのSubnetを、networkサービスがIPの払い出しと同じ処理の
+中で原子的に選ぶ——IPAMの持ち主がnetworkなので、選んだ直後に枯渇する競合を避けられる。
+
+**AZはクライアントが決める**: VMの`spec.zone`はKaaS側が選ぶ（kyuushaはAZを選ばない）。
+マルチAZ冗長性が欲しいテナントは、AZごとにVMを作り分ける。1台のVirtualMachineは物理的に
+1ハイパーバイザー上でしか動かないため、**マルチAZにまたがるVirtualMachineは作れない**
+（VMが参照するSubnetのzoneは全てVMのzoneと一致しなければならない）。
+
+**Public IP Attach**は新しいリソース種別を増やさず、公開IP用のNetwork（AZごとのSubnetを
+束ねたもの）への2本目のNICとして表す。`NetworkInterface.status.ip_address`がそのまま
+公開IPになる。
+
+外部の申請システムと連携した事前承認済みACLのような追加の検証が必要になった場合は、
+専用フィールドを増やすのではなく`internal/admissionwebhook`（[external-integration.md](specs/external-integration.md)
+「ゲート系(作成側): Admission Webhook」）で外部から検証する
 ——resource-agnosticなゲートとして最初からその用途を想定して設計されている。
-
-`tenant_id`(`ObjectMeta`)は`Subnet`単位で持つが、実際に`NetworkInterface`をattachできる
-テナントは所有テナントだけとは限らない——`spec.visibility`/`spec.shared_with_tenant_ids`
-（`kyuusha.image.v1.ImageVisibility`と同じ意味）で、所有テナント以外にも許可できる
-（`PUBLIC`なら任意のテナント、`PRIVATE`なら`shared_with_tenant_ids`列挙分のみ）。
-**Public IP Attach**はこの仕組みの上に成り立つ: 管理者が`unique_cidr=true`の
-Public IP用アドレス空間をSubnetとして1つ作り、実際に使わせたいテナントを
-`shared_with_tenant_ids`（または`visibility=PUBLIC`）で許可する運用を想定する——
-`NetworkInterface.status.ip_address`がそのまま公開IPになり、新しいリソース種別は
-増やさない。異なるテナントのSubnet間の非疎通性は、VLANタグそのものではなく
-**ゲートウェイ側のVRF分離とルートリーク禁止**によって担保する（詳細は
-「ネットワーク分離の実現方式」節）。
-
-**VLAN IDの払い出し**: VLAN IDプールはzoneごとに独立して持つ（同じVLAN番号を別zoneで再利用できる。
-副産物として4094の上限もzone数倍まで実質緩和される）。`Subnet`作成時、networkサービス内でDB操作のみで
-該当zoneのプールから空きIDを排他的に払い出す（ハイパーバイザーagent不関与、同期で完結）。プール枯渇時は
-`Subnet`が`Pending`のまま`Condition{type: VlanPoolExhausted}`を報告する。
-
-**マルチAZにまたがるVirtualMachineは作れない**: `VirtualMachineSpec.network_interfaces`が参照する全`Subnet`の
-`zone`は一致していなければならない（Create時にバリデーションし、異なれば拒否）。1台のVirtualMachineは
-物理的に1ハイパーバイザー上でしか動かないため当然の制約。マルチAZ冗長性が欲しいテナントは、AZごとに別々の
-`Subnet`を作り（`tenant_id`は同じ）、VirtualMachineごとにどちらのzoneに置くかをKaaS側が選ぶ形で表現する。
-これによりkyuusha側に新しい仕組みは不要。
 
 ### block-storageサービスのリソース: Volume / VolumeAttachment
 
@@ -1533,7 +1558,12 @@ SCSI Persistent Reservation（SCSI-3 PR）というストレージ側のフェ�
 
 ## ネットワーク分離の実現方式（KaaSクラスタ間）
 
-テナント＝KaaSクラスタ単位のL2/L3分離を、**VLAN(802.1Q)をデフォルト方式**として実現する。
+分離の単位は**Network**（ルーティングドメイン兼分離の境界、「networkサービスのリソース」節）。
+テナント（KaaSクラスタ）は互いに分離されたNetworkを複数持てる。Type-2デプロイ（本ガイドの
+既定）では**VLAN(802.1Q)をデフォルト方式**とし、SubnetごとのVLAN IDはNetworkClassが指す
+プール（ネットワーク管理者が事前に決めて登録した組の一覧、またはAZごとの整数プール）から
+払い出す。どの方式を採るかはNetworkClassとVNAPの組み合わせで決まり、kyuusha本体は
+方式を知らない。
 
 ### なぜVXLANではなくVLANか: 二重オーバーレイ問題
 
@@ -1559,36 +1589,45 @@ VLANはtap→ブリッジの層でタグを打つだけの**タギング**であ
 なお**Regionはスコープ外**とする。1つのkyuushaデプロイ＝1リージョン相当とし、マルチリージョンは
 別デプロイを立てて連携する話であり、kyuusha内部の構造としては扱わない。
 
-### テナント間の非疎通性はVRFで保証する
+### Network間の非疎通性はVRFで保証する
 
 VLANはL2のブロードキャストドメインを分けるだけで、VLAN間が疎通するかどうかは完全に
-L3側（ゲートウェイのルーティング/ACL設定）次第である。`SubnetSpec.gateway_ip`を持たせている
-時点で各Subnetにゲートウェイ(ルーター)の存在を前提としており、そのルーターが別テナントの
-Subnetへのルートを持っていれば普通に届いてしまう——VLANによる分離だけではテナント間の
+L3側（ゲートウェイのルーティング/ACL設定）次第である。各Subnetにgatewayを持たせている
+時点でゲートウェイ(ルーター)の存在を前提としており、そのルーターが別のNetworkの
+Subnetへのルートを持っていれば普通に届いてしまう——VLANによる分離だけではNetwork間の
 非疎通性は保証できない。
 
-そこで、各テナントのSubnet(VLAN)をゲートウェイ側で**別々のVRF (Virtual Routing and
-Forwarding)** にマッピングする。VRFはルーティングテーブルそのものを分離するため、
-明示的なルートリークを設定しない限りテナント間に経路自体が存在しない（L3VPN/マルチテナント
+そこで、各NetworkのSubnet(VLAN)をゲートウェイ側で**Networkごとに別々のVRF (Virtual Routing
+and Forwarding)** にマッピングする。VRFはルーティングテーブルそのものを分離するため、
+明示的なルートリークを設定しない限りNetwork間に経路自体が存在しない（L3VPN/マルチテナント
 ネットワーク仮想化の標準的な手法）。
 
 これもEVPN-VXLANのファブリックストレッチと同様、**物理ファブリック側の責務・デプロイ前提**として
-明文化する（kyuushaは自前でVRF設定をオーケストレーションしない）: 「1 AZ内のSubnetごとに
-VRFインスタンスを払い出し、テナント間のデフォルトルートリークは行わない。共有の外向きNATゲートウェイ
-のみ、制御された形で全VRFへリークする」。AZを跨いだ同一テナントの疎通については
-「AZ間ルーティング」節で扱う。
+明文化する（kyuushaは自前でVRF設定をオーケストレーションしない）: 「Networkごとに
+VRFインスタンスを用意し、Network間のデフォルトルートリークは行わない。共有の外向きNATゲートウェイ
+のみ、制御された形で全VRFへリークする」。kyuushaの役割は、そのために要る値（Route Target、
+L3 VNI等）をNetwork単位で払い出してVNAPへ渡すところまで。VRFを持たないIP一意のpure L3では
+全てが1つの経路表に載るため経路では分けられず、ACLの既定拒否で分ける（SNAPの責務）。
+Network同士をつなぐのは、ファブリック側で実現されている構成ならネットワークチームの
+ルートリーク、pure L3ならACLの許可、ホスト上で動的に作るVRF/VTEPならkyuusha-vpcのような
+上位のソフトウェアの責務（両方のNetworkにNICを持つbastion型の多足構成はどの構成でも使える）。
 
-**防御層としてのNetworkInterface ACL**: 前節で設計した`NetworkInterfaceSpec.ingress_rules`の
-デフォルト姿勢を「自Subnetの CIDR外からのトラフィックはデフォルト拒否」にしておくことで、
+**防御層としてのNetworkInterface ACL**: `NetworkInterfaceSpec.ingress_rules`/`egress_rules`
+の既定姿勢を「同じNetworkの外からのトラフィックは既定で拒否」にしておくことで、
 万が一ファブリック側のVRF設定ミスでルートがリークしても、tap deviceのnftablesルールで
-実際には弾かれる。物理ファブリックの設定ミスに対する二重の防御になる。
+実際には弾かれる。物理ファブリックの設定ミスに対する二重の防御になる。同じNetwork内の
+Subnet同士の既定の許可は、NICのACLへ暗黙のallowとして合成する（[network仕様](specs/network.md)
+「同じNetwork内の既定の疎通」）。
 
-### テナント間でのSubnet共有: 無目的な共有は禁止、所有テナントが個別に許可した相手だけL2を共有できる
+### テナント間でのNetwork共有: 無目的な共有は禁止、所有テナントが個別に許可した相手だけが参加できる
 
-`Subnet.tenant_id`による単一所有は変えないが、`NetworkInterface`が同一テナントのVirtualMachineだけに
-限定されるわけではない——所有テナント以外にも、`SubnetSpec.visibility`/`shared_with_tenant_ids`
-（`kyuusha.image.v1.ImageVisibility`と同じ意味、[network仕様](specs/network.md)参照）で
-明示的に許可した相手だけがこのSubnet（＝同一VLAN）へ`NetworkInterface`を直接attachできる。
+Networkの単一所有（`tenant_id`）は変えないが、`NetworkInterface`が所有テナントのVirtualMachine
+だけに限定されるわけではない——所有テナント以外にも、`NetworkSpec.visibility`/
+`shared_with_tenant_ids`（`kyuusha.image.v1.ImageVisibility`と同じ意味、
+[network仕様](specs/network.md)参照）で明示的に許可した相手だけがこのNetworkへ`NetworkInterface`を
+直接attachできる。共有はNetwork単位で、一部のSubnetだけを共有することはできない
+（必要なら別のNetworkを作る）——共有された相手のNICはそのNetworkに参加し、同じNetwork内の
+既定の疎通に加わる（マネージドサービスをVMごと注入する用途の意図どおり）。
 
 同一VLANに複数テナントのVirtualMachineを混在させると、ARP spoofingやbroadcast/multicastの盗聴
 といったL2レベルの攻撃面がテナント間で共有されてしまう。危険なのは**所有テナントが意図せず/
@@ -1603,25 +1642,28 @@ L2共有そのものの攻撃面は残る——そのため共有の可否の区
 
 - **`SharedWithTenantIDs`（所有テナントが個別に名指しする、目的のある許可）**: 所有テナントが
   信頼する相手を1テナントずつ明示的に列挙する。所有テナント自身の判断による同意そのものが
-  安全装置なので、`unique_cidr`（下記）を問わずどのSubnetでも使える
+  安全装置なので、どのNetworkでも使える
 - **`Visibility = PUBLIC`（誰でも可、無目的な公開）**: 所有テナントが個別の相手を検証しない、
-  無条件のオープン共有。これは`unique_cidr = true`（Public IP用アドレス空間）なSubnetにしか
-  許可しない（`CreateSubnet`/`UpdateSubnet`がバリデーションで強制、`ErrValidation`）——
-  通常のプライベートSubnetでこれを許すと、ARP spoofing等の攻撃面を無条件に共有する、
-  まさに避けたかったケースそのものになってしまうため
+  無条件のオープン共有。これは「`PUBLIC`にしてよい」という性質（`allow_public_networks`）を
+  持つNetworkClassのNetworkにしか許可しない——公開IPのように共有するためのアドレス空間を
+  管理者が用意したClassに限る。通常のプライベートなNetworkでこれを許すと、L2の攻撃面を
+  無条件に共有する、まさに避けたかったケースそのものになってしまうため。CIDRが重ならない
+  ことはClassが参照するプールの構造（自動で切り出すCIDRプール、組の一覧）で管理者が保証し、
+  kyuushaが改めてCIDRの一意性を検証することはしない
 
 共有インフラサービス（共有DNS、パッケージミラー、運用bastion等）で、VMを直接同居させたいほど
-密結合ではない場合は、上記の直接attachではなく、専用のSubnetを持たせた上で経路だけを狭く共有する
-という手段も引き続き使える——ただし現在kyuusha側にはその意図を記録する専用フィールドは無く
-（旧`shared_with_tenant_ids`のACL参照専用の意味は削除済み）、必要になれば
+密結合ではない場合は、上記の直接attachではなく、専用のNetworkを持たせた上で経路だけを狭く共有する
+という手段も使える——kyuusha側にはその意図を記録する専用フィールドは無く、必要になれば
 `network`サービスに配線済みの`internal/admissionwebhook`で外部から検証する形で実現する
 （前節「networkサービスのリソース」参照）。
 
 ### 制約: VLANの4094上限はType-2デプロイの宿命として受け入れる
 
-VLANはAZごとに4094個までという上限と、物理スイッチ側のトランクポート設定との協調が必要という
-制約を持つ（AZ単位で独立したプールを持つため、実質的な上限はAZ数倍まで緩和される）。
-「小さいIaaS」という前提であれば通常この上限に収まる。
+VLANは1つのL2ファブリックで4094個までという上限と、物理スイッチ側のトランクポート設定との
+協調が必要という制約を持つ（AZごとに別のプールをClassに割り当てれば、実質的な上限はAZ数倍まで
+緩和される）。VLAN方式ではSubnetを足すたびにVLANを1つ消費するので、緩和策はSubnetの初期
+サイズを大きめにすること、大規模なAZはL3方式にすること。「小さいIaaS」という前提であれば
+通常この上限に収まる。
 
 この上限に収まらないAZが出てきた場合、**kyuusha自身がVXLAN(またはVLAN+VXLANハイブリッド)の
 エスケープパスを実装する必要は無い**と判断した——理由は、VNAP（tap配線プラグイン契約、
@@ -1640,29 +1682,30 @@ kyuusha側に新しい機能を足すのではなく、**そのAZをPure L3デ�
 
 ## AZ間ルーティング
 
-**同一テナント自身のAZ間疎通は自動的にサポートする**——非ゴールなのはもっと狭い範囲
-（RTに関係なく任意のAZ同士を無条件にメッシュ接続すること）だけである。「マルチAZ冗長性が
-欲しいテナントは、AZごとに別々のSubnetを作ることで表現する」という設計は、そもそも
-同一テナント自身のAZ間疎通が無いと機能しない（AZ-A側のSubnetとAZ-B側のSubnetが一切
-疎通しなければ、1つのKaaSクラスタとして成立しない）ため。
+**同じNetwork内のAZ間疎通は自動的にサポートする**——非ゴールなのはもっと狭い範囲
+（RTに関係なく任意のAZ同士を無条件にメッシュ接続すること）だけである。NetworkはAZをまたぎ、
+AZに閉じるSubnetを束ねるので、同じNetworkのAZ-A側のSubnetとAZ-B側のSubnetが疎通しなければ
+1つのKaaSクラスタとして成立しない。
 
-### 設計: テナントごとのRoute Targetで自動的にAZを跨がせる
+### 設計: NetworkごとのRoute Targetで自動的にAZを跨がせる
 
 BGP/EVPN L3VPNの標準的な仕組みである**Route Target (RT)**をそのまま使う。新しい発明はしない。
 
-- 各テナントに**グローバルに一意なRoute Targetを1つ**割り当てる
-- そのテナントが持つ全AZのVRFインスタンス（AZごとに物理的には別インスタンス。「1 AZ内の
-  Subnetごとに1 VRF」という前節の設計は変えない）が、共通してこのRTをimport/exportする
-- **同じRTを持つVRF同士はBGP/EVPNの標準動作としてルートを自動交換する**。テナントごとに
+- 各Networkに**グローバルに一意なRoute Targetを1つ**割り当てる——NetworkClassのNetwork単位の
+  参照（例: `route_target`という名前の整数プール）からkyuushaが払い出し、VNAPへ渡す。
+  人手やハッシュに頼らず、プールの構造で一意性を守る
+- そのNetworkの全AZのVRFインスタンス（AZごとに物理的には別インスタンス）が、共通してこのRTを
+  import/exportする
+- **同じRTを持つVRF同士はBGP/EVPNの標準動作としてルートを自動交換する**。Networkごとに
   個別のルートリーク設定を人手で組む必要がない
-- 異なるテナントは異なるRTを持つため、デフォルトでは引き続き疎通しない（分離は保たれる）
-- クロステナント共有（`SubnetSpec.shared_with_tenant_ids`）がAZを跨ぐ場合も、同じ仕組みの上で
-  「そのRTへの限定的なルートリーク」として自然に拡張できる。新しい概念は増えない
+- 異なるNetworkは異なるRTを持つため、デフォルトでは疎通しない（同じテナントの別のNetwork同士も）
+- Networkの共有（`shared_with_tenant_ids`）は、共有された相手のNICがそのNetworkに参加する
+  だけなので、RTの仕組みには何も足さない
 
 ### 障害分離は保たれる
 
 各AZのVRFインスタンスは独立して動作する。AZ間の中継経路（spine層でのRT間ルート交換）が
-落ちても、そのテナントの**AZ内トラフィックはそのAZのVRF内で問題なく動き続ける**。失われるのは
+落ちても、そのNetworkの**AZ内トラフィックはそのAZのVRF内で問題なく動き続ける**。失われるのは
 AZ間到達性だけで、AZの独立性という当初の設計意図は壊れない（AWSのVPC/AZ間ルーティングと
 同様の考え方: マルチAZを選ぶテナント自身がAZ間依存を受け入れる、という前提であり、
 AZ間依存が他のテナントや同一テナントのAZ内トラフィックへ波及しないことが重要）。
@@ -1670,7 +1713,7 @@ AZ間依存が他のテナントや同一テナントのAZ内トラフィック�
 ### 本当の非ゴール
 
 RTに関係なく任意のAZ同士を無条件でメッシュ接続することは、引き続きスコープ外とする。
-ファブリックが必要なのは「登録されたテナントのRTについてのみ選択的にVRF間ルートを
+ファブリックが必要なのは「払い出されたNetworkのRTについてのみ選択的にVRF間ルートを
 交換する」機能であり、AZ間のフルメッシュ相互接続ではない。
 
 ## Compute内部のVMM抽象化

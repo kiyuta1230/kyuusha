@@ -19,8 +19,8 @@ func TestService_EmptyTenantListAndWatchSpanAllTenants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	a := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn-a", SubnetSpec{Zone: "zone-a", CIDR: "10.0.1.0/24"})
-	mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-b", "sn-b", SubnetSpec{Zone: "zone-a", CIDR: "10.0.2.0/24"})
+	a := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "sn-a", userSubnet(t, ctx, svc, "tenant-a", "zone-a", "10.0.1.0/24", ""))
+	mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-b", "sn-b", userSubnet(t, ctx, svc, "tenant-b", "zone-a", "10.0.2.0/24", ""))
 
 	all, err := svc.ListSubnets(ctx, "")
 	if err != nil {
@@ -44,7 +44,7 @@ func TestService_EmptyTenantListAndWatchSpanAllTenants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchSubnets(\"\"): %v", err)
 	}
-	mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-c", "sn-c", SubnetSpec{Zone: "zone-a", CIDR: "10.0.3.0/24"})
+	mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-c", "sn-c", userSubnet(t, ctx, svc, "tenant-c", "zone-a", "10.0.3.0/24", ""))
 	deadline := time.After(2 * time.Second)
 	for {
 		select {

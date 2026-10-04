@@ -508,6 +508,7 @@ func (a *Agent) handleUpdateACL(msg jetstream.Msg) {
 	}
 
 	update := vmm.ACLUpdate{
+		Attach:  vmm.AttachInfo(cmd.Attach),
 		IfaceID: cmd.IfaceID, SubnetID: cmd.SubnetID, SubnetLabels: cmd.SubnetLabels, SubnetCIDR: cmd.SubnetCIDR, GatewayIP: cmd.GatewayIP,
 		IPAddress: cmd.IPAddress, MACAddress: cmd.MACAddress,
 		IngressRules: toVMMFirewallRulesFromNetwork(cmd.IngressRules),
@@ -620,7 +621,7 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.Net
 			IPAddress:    ni.IPAddress,
 			PrefixLen:    prefixLen,
 			GatewayIP:    ni.GatewayIP,
-			VLANID:       ni.VLANID,
+			Attach:       vmm.AttachInfo(ni.Attach),
 			Primary:      ni.Primary,
 			SubnetCIDR:   ni.CIDR,
 			IngressRules: toVMMFirewallRules(ni.IngressRules),

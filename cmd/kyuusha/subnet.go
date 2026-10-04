@@ -57,42 +57,30 @@ func subnetCreate(args []string) {
 	name := fs.String("name", "", "subnet name (idempotency key)")
 	labels := fs.String("labels", "", "comma-separated key=value meta.labels (see docs/specs/external-integration.md)")
 	annotations := fs.String("annotations", "", "comma-separated key=value meta.annotations (values can't contain commas here; use the API for that)")
+	network := fs.String("network", "", "Network ID this Subnet belongs to (required)")
 	zone := fs.String("zone", "", "availability zone (required)")
-	cidr := fs.String("cidr", "", "e.g. 10.0.1.0/24 (required)")
-	gatewayIP := fs.String("gateway-ip", "", "gateway IP")
-	dnsServers := fs.String("dns-servers", "", "comma-separated DNS server IPs")
-	dnsSuffix := fs.String("dns-suffix", "", "DNS suffix; empty disables name resolution")
-	meshGroup := fs.String("mesh-group", "", "declares intent to default-allow other Subnets sharing this value (same tenant only) -- enforced via NetworkInterface.status.effective_ingress_rules/effective_egress_rules, see docs/specs/network.md")
-	allocatableIPRanges := fs.String("allocatable-ip-ranges", "", "comma-separated \"<start-ip>-<end-ip>\" ranges IPAM may draw from; empty means the whole cidr (minus network/broadcast/gateway-ip)")
-	uniqueCidr := fs.Bool("unique-cidr", false, "reject this cidr if it overlaps any other Subnet (any tenant) that also has -unique-cidr set; use for Public IP address space")
-	visibility := fs.String("visibility", "private", "private|public (default private) -- who besides the owning tenant may attach a NetworkInterface to this Subnet")
-	sharedWithTenantIDs := fs.String("shared-with-tenant-ids", "", "comma-separated tenant IDs (besides the owner) allowed to attach a NetworkInterface to this Subnet (private only)")
+	cidr := fs.String("cidr", "", "requested CIDR, only when the Network's class expects the requester to choose it (user-specified CIDR pool), e.g. 10.0.1.0/24")
+	gatewayIP := fs.String("gateway-ip", "", "requested gateway for -cidr (default: per the class's gateway placement)")
+	dnsServers := fs.String("dns-servers", "", "comma-separated DNS server IPs (default: the class's resolvers for this zone)")
+	allocatableIPRanges := fs.String("allocatable-ip-ranges", "", "comma-separated \"<start-ip>-<end-ip>\" ranges IPAM may draw from; empty means the whole CIDR (minus network/broadcast/gateway)")
 	fs.Parse(args)
 	if *tenant == "" {
 		*tenant = resolveTenant(*token)
 	}
 
-	if *tenant == "" || *zone == "" || *cidr == "" {
-		fatal("-tenant, -zone, and -cidr are required")
+	if *tenant == "" || *network == "" || *zone == "" {
+		fatal("-tenant, -network, and -zone are required")
 	}
 
 	client := dialSubnets(*addr)
 	ctx := authedContext(context.Background(), *token)
 
-	spec := &networkv1.SubnetSpec{
-		Zone:       *zone,
-		Cidr:       *cidr,
-		GatewayIp:  *gatewayIP,
-		DnsSuffix:  *dnsSuffix,
-		MeshGroup:  *meshGroup,
-		UniqueCidr: *uniqueCidr,
-		Visibility: parseSubnetVisibility(*visibility),
+	spec := &networkv1.SubnetSpec{NetworkId: *network, Zone: *zone}
+	if *cidr != "" {
+		spec.RequestedAddresses = []*networkv1.SubnetAddress{{Cidr: *cidr, GatewayIp: *gatewayIP}}
 	}
 	if *dnsServers != "" {
 		spec.DnsServers = strings.Split(*dnsServers, ",")
-	}
-	if *sharedWithTenantIDs != "" {
-		spec.SharedWithTenantIds = strings.Split(*sharedWithTenantIDs, ",")
 	}
 	if *allocatableIPRanges != "" {
 		spec.AllocatableIpRanges = strings.Split(*allocatableIPRanges, ",")
@@ -202,8 +190,8 @@ func subnetWatch(args []string) {
 			continue
 		}
 		sn := ev.GetSubnet()
-		fmt.Printf("%-10s %-24s phase=%-10s vlan_id=%d rv=%d\n",
-			ev.GetType(), sn.GetMeta().GetId(), sn.GetStatus().GetPhase(), sn.GetStatus().GetVlanId(), ev.GetResourceVersion())
+		fmt.Printf("%-10s %-24s phase=%-10s values=%s rv=%d\n",
+			ev.GetType(), sn.GetMeta().GetId(), sn.GetStatus().GetPhase(), formatIntValues(sn.GetStatus().GetValues()), ev.GetResourceVersion())
 	}
 }
 
@@ -286,23 +274,14 @@ func printSubnet(sn *networkv1.Subnet) {
 	for i, f := range sn.GetMeta().GetFinalizers() {
 		finalizerNames[i] = f.GetName()
 	}
-	fmt.Printf("id=%s name=%s tenant=%s labels=%s zone=%s cidr=%s mesh_group=%s unique_cidr=%t visibility=%s shared_with=%s phase=%s vlan_id=%d finalizers=%s deleted_at=%s rv=%d\n",
-		sn.GetMeta().GetId(), sn.GetMeta().GetName(), sn.GetMeta().GetTenantId(), formatKeyValues(sn.GetMeta().GetLabels()),
-		sn.GetSpec().GetZone(), sn.GetSpec().GetCidr(), sn.GetSpec().GetMeshGroup(),
-		sn.GetSpec().GetUniqueCidr(), sn.GetSpec().GetVisibility(),
-		strings.Join(sn.GetSpec().GetSharedWithTenantIds(), ","),
-		sn.GetStatus().GetPhase(), sn.GetStatus().GetVlanId(),
-		strings.Join(finalizerNames, ","), deletedAtString(sn.GetMeta().GetDeletedAt()), sn.GetMeta().GetResourceVersion())
-}
-
-func parseSubnetVisibility(s string) networkv1.SubnetVisibility {
-	switch s {
-	case "private", "":
-		return networkv1.SubnetVisibility_PRIVATE
-	case "public":
-		return networkv1.SubnetVisibility_PUBLIC
-	default:
-		fatal("-visibility must be private or public, got %q", s)
-		return networkv1.SubnetVisibility_SUBNET_VISIBILITY_UNSPECIFIED
+	var addrs []string
+	for _, a := range sn.GetStatus().GetAddresses() {
+		addrs = append(addrs, a.GetCidr()+"@"+a.GetGatewayIp())
 	}
+	fmt.Printf("id=%s name=%s tenant=%s labels=%s network=%s zone=%s phase=%s addresses=%s values=%s finalizers=%s deleted_at=%s rv=%d%s\n",
+		sn.GetMeta().GetId(), sn.GetMeta().GetName(), sn.GetMeta().GetTenantId(), formatKeyValues(sn.GetMeta().GetLabels()),
+		sn.GetSpec().GetNetworkId(), sn.GetSpec().GetZone(), sn.GetStatus().GetPhase(),
+		strings.Join(addrs, ","), formatIntValues(sn.GetStatus().GetValues()),
+		strings.Join(finalizerNames, ","), deletedAtString(sn.GetMeta().GetDeletedAt()), sn.GetMeta().GetResourceVersion(),
+		pendingReason(sn.GetStatus().GetConditions()))
 }

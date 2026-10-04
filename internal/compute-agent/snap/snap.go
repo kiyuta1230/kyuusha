@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/nftacl"
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 )
 
 // FirewallRule mirrors network.FirewallRule/vmm.FirewallRule -- its own
@@ -38,6 +39,7 @@ type FirewallRule struct {
 // Interface is everything Attach/Detach need for one VM network
 // attachment's ACL enforcement, mirroring netsetup.Interface's own shape.
 type Interface struct {
+	Attach       vmm.AttachInfo
 	IfaceID      string
 	VMID         string
 	TenantID     string
@@ -77,7 +79,7 @@ func Attach(iface Interface, securityBackendBin string) error {
 	return runPlugin(securityBackendBin, "attach", PluginRequest{
 		TapName: iface.TapName, IfaceID: iface.IfaceID, VMID: iface.VMID, TenantID: iface.TenantID,
 		SubnetID: iface.SubnetID, SubnetLabels: iface.SubnetLabels, SubnetCIDR: iface.SubnetCIDR, GatewayIP: iface.GatewayIP,
-		IPAddress: iface.IPAddress, MACAddress: iface.MACAddress,
+		IPAddress: iface.IPAddress, MACAddress: iface.MACAddress, AttachInfo: iface.Attach,
 		IngressRules: toPluginRules(iface.IngressRules), EgressRules: toPluginRules(iface.EgressRules),
 	})
 }
@@ -122,6 +124,10 @@ type PluginRequest struct {
 
 	IngressRules []PluginFirewallRule `json:"ingress_rules,omitempty"`
 	EgressRules  []PluginFirewallRule `json:"egress_rules,omitempty"`
+
+	// Network/NetworkClass context and allocated values, flattened into
+	// the payload (network_id, subnet_values, ...), same as VNAP's.
+	vmm.AttachInfo
 }
 
 type PluginFirewallRule struct {

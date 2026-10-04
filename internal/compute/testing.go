@@ -165,10 +165,13 @@ func (f *FakeSubnetClient) Get(ctx context.Context, req *networkv1.GetSubnetRequ
 		Meta: &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId(), Labels: f.Labels},
 		Spec: &networkv1.SubnetSpec{
 			Zone:      f.zone(),
-			Cidr:      "10.0.0.0/24",
-			GatewayIp: "10.0.0.1",
+			NetworkId: "network-1",
 		},
-		Status: &networkv1.SubnetStatus{Phase: f.phase(), VlanId: 1},
+		Status: &networkv1.SubnetStatus{
+			Phase:     f.phase(),
+			Addresses: []*networkv1.SubnetAddress{{Cidr: "10.0.0.0/24", GatewayIp: "10.0.0.1"}},
+			Values:    map[string]int64{"vlan_id": 1},
+		},
 	}, nil
 }
 
@@ -178,6 +181,10 @@ func (f *FakeSubnetClient) Create(context.Context, *networkv1.CreateSubnetReques
 
 func (f *FakeSubnetClient) List(context.Context, *networkv1.ListSubnetsRequest, ...grpc.CallOption) (*networkv1.ListSubnetsResponse, error) {
 	panic("FakeSubnetClient: List not implemented; compute.Service never calls it")
+}
+
+func (f *FakeSubnetClient) SetStatusValues(context.Context, *networkv1.SetSubnetStatusValuesRequest, ...grpc.CallOption) (*networkv1.Subnet, error) {
+	panic("FakeSubnetClient: SetStatusValues not implemented; compute.Service never calls it")
 }
 
 func (f *FakeSubnetClient) Update(context.Context, *networkv1.UpdateSubnetRequest, ...grpc.CallOption) (*networkv1.Subnet, error) {
@@ -236,6 +243,7 @@ func (f *FakeNetworkInterfaceClient) Get(ctx context.Context, req *networkv1.Get
 			Phase:      "Ready",
 			IpAddress:  "10.0.0.5",
 			MacAddress: "02:00:00:00:00:01",
+			SubnetId:   "subnet-1",
 		},
 	}, nil
 }
@@ -388,4 +396,22 @@ func (f *FakeVolumeAttachmentClient) Delete(ctx context.Context, req *blockstora
 
 func (f *FakeVolumeAttachmentClient) Watch(context.Context, *blockstoragev1.WatchVolumeAttachmentsRequest, ...grpc.CallOption) (blockstoragev1.VolumeAttachmentService_WatchClient, error) {
 	panic("FakeVolumeAttachmentClient: Watch not implemented; compute.Service never calls it")
+}
+
+// FakeNetworkClient is a minimal networkv1.NetworkServiceClient: Get
+// returns a Ready Network for any id but "network-missing" (NotFound);
+// every other method panics since compute.Service never calls them.
+type FakeNetworkClient struct {
+	networkv1.NetworkServiceClient
+}
+
+func (f *FakeNetworkClient) Get(ctx context.Context, req *networkv1.GetNetworkRequest, opts ...grpc.CallOption) (*networkv1.Network, error) {
+	if req.GetId() == "network-missing" {
+		return nil, status.Error(codes.NotFound, "network: not found")
+	}
+	return &networkv1.Network{
+		Meta:   &resourcev1.ObjectMeta{Id: req.GetId(), TenantId: req.GetTenantId(), Labels: map[string]string{"k": "v"}},
+		Spec:   &networkv1.NetworkSpec{NetworkClass: "netclass-1"},
+		Status: &networkv1.NetworkStatus{Phase: "Ready", Values: map[string]int64{"route_target": 65001}},
+	}, nil
 }

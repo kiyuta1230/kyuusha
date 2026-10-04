@@ -21,7 +21,7 @@ kyuushaは「薄い制御プレーンに徹し、物理ネットワークのオ�
                                      │
         ┌────────────────────────────┼────────────────────────────┐
         │ AZ-A                       │                    AZ-B     │
-   ┌────┴─────┐                 ┌────┴─────┐    （L2は非接続。同一テナントのRTのみBGP/EVPNで
+   ┌────┴─────┐                 ┌────┴─────┐    （L2は非接続。同一NetworkのRTのみBGP/EVPNで
    │ leaf/ToR │  EVPN-VXLAN      │ leaf/ToR │     Type-5ルート交換、詳細は2.5節）
    │ (VTEP)   │← L2ストレッチ →  │ (VTEP)   │
    └────┬─────┘  (AZ内のみ)      └────┬─────┘
@@ -34,7 +34,7 @@ kyuushaは「薄い制御プレーンに徹し、物理ネットワークのオ�
 
 - EVPN-VXLANによるL2ストレッチは**AZ内のファブリックに限定**する。AZを跨いでは意図的に繋げない
   （AZは電源系統・ネットワークファブリックが独立した障害ドメインという前提のため）
-- ただし**同一テナントのAZ間到達性は必須機能**（後述のRoute Targetによるルーティング）。
+- ただし**同一NetworkのAZ間到達性は必須機能**（後述のRoute Targetによるルーティング）。
   「AZ間ルーティング全般が非ゴール」ではない点に注意（後述）
 - 1つのkyuushaデプロイ＝1リージョン相当。マルチリージョンは別デプロイを立てて連携する話であり、
   このドキュメントのスコープ外
@@ -100,50 +100,63 @@ EVPN-VXLANでLeafがVTEPとしてL2をストレッチするため、あるVLAN(=
 （(b)を採用したい場合は「3.5. Pure L3デプロイの場合」節も参照: そもそもVLANの
 L2ストレッチに頼らない別の実現方式がある）
 
-## 1. VLANプール設計
+## 1. VLANとアドレスの払い出し設計
 
-- VLAN IDプールは**AZごとに独立**して用意する（同じVLAN番号を別AZで再利用してよい）
-- 目安のレンジ例: `100-2000`（1AZあたり最大4094まで使用可能。テナント数がこの上限を大きく
-  超える見込みがあるAZでは、そのAZ自体をPure L3デプロイへ切り替えること
-  （「3.5. Pure L3デプロイの場合」節参照）——Pure L3は「1 VLAN = 1 VRF」の
-  マッピングに依存しないため、この上限自体が問題にならない。kyuusha側にVXLANへの
-  自動エスケープパスのような機能は無い）
-- kyuusha側（networkサービス）はこのプールから、Subnet(テナントのネットワーク単位)作成のたびに
-  未使用のVLAN IDを排他的に払い出す。**VLAN IDの配布そのものはkyuusha側の責務**であり、
-  ネットワークチームは「使用可能なVLAN ID範囲をAZごとに確保・申告する」ことが役割。
-  申告された範囲はnetwork-reconcilerの`-vlan-ranges`フラグに設定する（例:
-  `-vlan-ranges='zone-a=100-2000;zone-b=100-2000'`、書式は[network仕様](specs/network.md)
-  「VLAN ID」参照）
+kyuushaでは、Subnetに何を払い出すかを管理者が**NetworkClass**と**AllocationPool**で定義する
+（[network仕様](specs/network.md)「リソース」参照。kyuusha自身はVLANという概念を知らず、
+払い出された名前付きの値をVNAPプラグインへ渡すだけ）。VLANトランク方式（Type-2、本ガイドの
+既定）での典型的な流れ:
+
+1. **ネットワークチームが、AZごとにCIDRとVLAN IDの組を事前に決め、スイッチに設定する**
+   （VLANのトランク、Network単位のVRFへのSVIの所属、SVIへのgateway_ipの設定）
+2. その組を**組の一覧（`entries`）のAllocationPool**としてAZごとに登録する（例: `{key:
+   "vlan-300", values: {"vlan_id": 300}, addresses: [{cidr: "192.168.30.0/24", gateway_ip:
+   "192.168.30.254"}]}`）。組は丸ごと1つのSubnetに払い出される
+3. NetworkClassでzoneごとにそのプールを参照する（`subnet: {"az-a": [az-aの組のプール],
+   "az-b": [...]}`）。Route Target等のNetwork単位の値は`network`側に整数プールで足す（2.5節）
+4. テナントはそのClassでNetworkを作り、Subnetを「どのNetworkの、どのAZに」と依頼するだけで、
+   VLAN IDとCIDRとgatewayがkyuushaから払い出される
+
+CIDRをテナント自身に選ばせたい場合は、組の一覧の代わりに「AZごとのVLAN IDの整数プール」と
+「利用者指定のCIDRプール」をClassで組み合わせる（この場合のgatewayもファブリック側の設定と
+合わせる必要がある点に注意）。
+
+- VLAN IDは**AZごとに独立**してよい（同じ番号を別AZで再利用してよい——AZごとに別のプールを
+  Classに割り当てる）
+- 1つのL2ファブリックで最大4094まで。VLAN方式ではSubnetを足すたびにVLANを1つ消費するので、
+  Subnetの初期サイズを大きめにする、上限を大きく超える見込みのあるAZはPure L3デプロイへ
+  切り替える（「3.5. Pure L3デプロイの場合」節）——kyuusha側にVXLANへの自動エスケープパスの
+  ような機能は無い
+- 払い出し済みの組が残っている間は、その組をプールから消したり範囲を狭めたりできない
+  （kyuusha側で拒否される）
 - host（compute hypervisor）向けのToRポートは、そのAZで使用されうる全VLAN IDを許可する**トランクポート**
   として設定する
-- **このVLAN番号はkyuusha自身のローカルな帳簿番号であり、ワイヤ上の本物の802.1Qタグである
-  ことを強制されない**: `internal/compute-agent/netsetup`はこの番号をHypervisorごとの
-  ローカルなLinuxブリッジ名（`kbr<vlan_id>`）とそのブリッジに乗せる`gateway_ip`の決定にしか
-  使わない——複数のSubnetが同じ番号を共有すると、同じホスト上でブリッジと`gateway_ip`の
-  割り当てが衝突する（後勝ちで上書きされる）ため、Subnetごとに排他的な番号自体は必須。
-  ただし**その番号を実際にワイヤへ802.1Qタグとして出すかどうかは、host-ToR間の実配線を
-  担うVNAPプラグイン（`-network-attach-bin`）次第**であり、上記のトランクポート設定は
-  あくまでVLANトランク方式（Type-2、本ガイドの既定の前提）の場合の話。組み込み実装
-  （`-network-attach-bin`未指定）はホスト内のLinuxブリッジ配線のみでこのタグ付けを
-  一切行わないが、`examples/vnap-plugins/vlan-trunk.sh`という参考VNAPプラグインが
-  アップリンクNICへのVLANサブインターフェース作成を代わりに担う——ゼロから自作する
+- **払い出された値をワイヤ上の802.1Qタグとして出すかどうかは、host-ToR間の実配線を担う
+  VNAPプラグイン（`-network-attach-bin`）次第**。組み込み実装（`-network-attach-bin`未指定）は
+  ホスト内でSubnetごとのLinuxブリッジに繋ぐだけでタグ付けを一切行わない。
+  `examples/vnap-plugins/vlan-trunk.sh`という参考VNAPプラグインが、`subnet_values.vlan_id`を
+  タグとしてアップリンクNICへのVLANサブインターフェース作成を担う——ゼロから自作する
   必要はない（[VNAP仕様](specs/vnap.md)「参考実装」参照）。このときSubnetの
-  `gateway_ip`は**ファブリック側（そのVLANのVRFのSVI）に必ず設定する**——
+  `gateway_ip`は**ファブリック側（そのNetworkのVRFのSVI）に必ず設定する**——
   `vlan-trunk.sh`はハイパーバイザー側でgatewayを名乗らない（純粋なL2の延伸）。Pure L3デプロイでは
   事情が異なる——「3.5. Pure L3デプロイの場合」参照
 
 ## 2. VRF設計とルートリークポリシー（最重要）
 
-**これがテナント間の分離を実際に担保する仕組みであり、最も重要な設定項目。**
+**これがNetwork間（ひいてはテナント間）の分離を実際に担保する仕組みであり、最も重要な設定項目。**
 
-- **1 VLAN = 1 VRF**として払い出す。ゲートウェイ（leaf/ToRスイッチ）側で、各VLANに対応するSVIを
-  個別のVRFへ所属させる
-- **テナント間のデフォルトルートリークは行わない**。VRFはルーティングテーブルそのものを
-  分離するため、明示的なルートリークを設定しない限りテナント間に経路自体が存在しない
-  （これがVLANタグそのものではなく、VRF分離こそがテナント分離を実現する理由。VLANは
+- **1 Network = 1 VRF**（AZごとに1インスタンス）とする。kyuushaのNetworkはルーティング
+  ドメイン兼分離の境界で、同じNetworkのSubnet同士は疎通し、別のNetwork同士は疎通しない
+  （同じテナントの別のNetwork同士も）。ゲートウェイ（leaf/ToRスイッチ）側で、同じNetworkの
+  Subnet（VLAN）のSVIを、そのNetworkのVRFへ所属させる。どのVLANがどのNetworkのものかは、
+  Networkに払い出されたRoute Target等の値（2.5節）とSubnetの値をVNAP/運用の取り決めで対応付ける
+- **Network間のデフォルトルートリークは行わない**。VRFはルーティングテーブルそのものを
+  分離するため、明示的なルートリークを設定しない限りNetwork間に経路自体が存在しない
+  （これがVLANタグそのものではなく、VRF分離こそが分離を実現する理由。VLANは
   L2ブロードキャストドメインを分けるだけで、L3の到達可能性はゲートウェイの設定次第である点に注意）
-- VRFを跨ぐルートリークは、次節で挙げる**限定的な例外のみ**許可する。それ以外の
-  テナント間ルートリークは原則として設定してはならない
+- VRFを跨ぐルートリークは、次節で挙げる**限定的な例外と、Network同士を意図してつなぐ場合のみ**
+  許可する（ファブリック側でVRFが実現されている構成では、Network同士をつなぐのは
+  ネットワークチームのルートリーク設定になる）
 
 ### 許可される例外的ルートリーク
 
@@ -155,8 +168,8 @@ L2ストレッチに頼らない別の実現方式がある）
 上記以外の「とりあえず疎通させておく」ようなルートリークは、テナント分離の前提を壊すため
 **絶対に行わないこと**。
 
-※ `SubnetSpec.shared_with_tenant_ids`（[network仕様](specs/network.md)参照）は、ここで
-言う意味でのVRF間ルートリークとは無関係——他テナントの`NetworkInterface`がそのSubnetへ
+※ Networkの`shared_with_tenant_ids`（[network仕様](specs/network.md)参照）は、ここで
+言う意味でのVRF間ルートリークとは無関係——他テナントの`NetworkInterface`がそのNetworkへ
 **直接attachする**（＝所有テナントのVRF/VLANへそのまま参加する）ことを許可する宣言で、
 2つの別々のVRFを跨ぐ経路を作るものではない。よってこのフィールドに対応する特別な
 ルートリーク設定は不要。
@@ -164,31 +177,32 @@ L2ストレッチに頼らない別の実現方式がある）
 ### 防御層（参考）
 
 万が一ここでの設定ミスによりルートがリークしても、kyuusha側のNetworkInterfaceには
-「自Subnetの CIDR外からのトラフィックはデフォルト拒否」というホスト側ACL（nftables）が
+「同じNetworkの外からのトラフィックはデフォルト拒否」というホスト側ACL（nftables）が
 デフォルトで入っている。これは二重の防御であり、正しいVRF設定を代替するものではない。
 
-## 2.5. 同一テナントのAZ間ルーティング（Route Target）
+## 2.5. 同一NetworkのAZ間ルーティング（Route Target）
 
-「マルチAZ冗長性が欲しいテナントは、AZごとに別々のSubnetを作る」という設計上、**同一テナントの
-AZ間到達性が無いとそもそもクラスタとして機能しない**。BGP/EVPN L3VPNの標準機能である
-**Route Target (RT)** を使って実現する。
+NetworkはAZをまたぎ、AZに閉じるSubnetを束ねる。**同一NetworkのAZ間到達性が無いとそもそも
+クラスタとして機能しない**。BGP/EVPN L3VPNの標準機能である**Route Target (RT)** を使って実現する。
 
-- 各テナントに、AZを跨いで一意な**Route Targetを1つ**割り当てる（kyuusha側の設計チームが
-  テナント作成時に払い出す番号体系を提示する）
-- そのテナントが持つ全AZのVRFインスタンスで、このRTを共通してimport/exportするよう設定する
+- 各Networkに、AZを跨いで一意な**Route Targetを1つ**割り当てる——**kyuushaが払い出す**。
+  NetworkClassのNetwork単位の参照に整数プールを置く（例: `network: [{pool: rt-pool, name:
+  route_target}]`）と、Networkの作成時にkyuushaがそこから一意な値を払い出し、Networkの
+  `status.values.route_target`に記録してVNAPへ（`network_values`として）渡す。ネットワーク
+  チームの役割は、RTに使ってよい番号範囲を決めてプールとして登録すること
+- そのNetworkの全AZのVRFインスタンスで、このRTを共通してimport/exportするよう設定する
 - 同じRTを持つVRF同士は、spine層を経由したBGP/EVPN Type-5の標準動作としてルートを自動交換する。
-  **テナントごとに個別のルートリーク設定を人手で組む必要はない**
-- 異なるテナントは異なるRTを持つため、このRTベースの仕組みではデフォルトで疎通しない
+  **Networkごとに個別のルートリーク設定を人手で組む必要はない**
+- 異なるNetworkは異なるRTを持つため、このRTベースの仕組みではデフォルトで疎通しない
   （分離は引き続き保たれる）
-- **障害分離**: AZ間の中継経路（spine層でのRT間ルート交換）が落ちても、そのテナントの
+- **障害分離**: AZ間の中継経路（spine層でのRT間ルート交換）が落ちても、そのNetworkの
   AZ内トラフィックはそのAZのVRF内で問題なく動き続ける。失われるのはAZ間到達性のみ
-- **Route Distinguisher（RD）を`vlan_id`単体から機械的に導出しないこと**: 「1. VLANプール設計」
-  の通り`vlan_id`はAZ内でのみ一意（AZを跨いで同じ番号が再利用されうる）。RDを
-  `<ToRのrouter-id>:<vlan_id>`のようにToR自身のグローバルに一意な識別子と組み合わせて
-  導出するのはRFC 4364の標準的なやり方でありAZを跨いだ衝突は起きないが、`vlan_id`単体
-  （例:単に`65000:<vlan_id>`のような形）をRDとして使うと、別AZで同じ`vlan_id`が
-  再利用された別テナントのVRFとRDが衝突しうる。RTはテナント単位でAZを跨いで一意な
-  ため、この問題を受けない
+- **Route Distinguisher（RD）をSubnetのVLAN ID単体から機械的に導出しないこと**: VLAN IDは
+  AZ内でのみ一意（AZを跨いで同じ番号が再利用されうる）。RDを`<ToRのrouter-id>:<値>`の
+  ようにToR自身のグローバルに一意な識別子と組み合わせて導出するのはRFC 4364の標準的な
+  やり方でありAZを跨いだ衝突は起きないが、VLAN ID単体（例:単に`65000:<vlan_id>`のような形）
+  をRDとして使うと、別AZで同じ番号が再利用された別NetworkのVRFとRDが衝突しうる。RTは
+  Network単位でAZを跨いで一意なため、この問題を受けない
 
 ## 3. ネットワークセグメンテーション（推奨）
 
@@ -213,26 +227,26 @@ host内のL2ドメインをVLANトランクで物理ファブリックまで延�
 （CLOS、オーバーレイ無し、Leaf単位でL2が独立する構成）をそのまま使いたい場合の解にも
 なる——host-ToR間にVLANトランクもVXLANオーバーレイも要らず、ルーテッドポートで足りる。
 
-Pure L3デプロイはさらに、**テナント間でIPアドレス空間の重複を許すかどうか**で
+Pure L3デプロイはさらに、**Network間でIPアドレス空間の重複を許すかどうか**で
 2通りに分かれ、VNAP参考実装（`examples/vnap-plugins/`）もそれぞれ別のスクリプトに
 なる。host側のVNAPロジック（tapへのgateway_ip付与・proxy ARP・VM自身の`/32`の
 FRRへの注入）は共通の設計だが、**VRFを使うかどうか**が唯一かつ決定的な分岐点になる:
 
-- **テナントのIPアドレス空間がfabric全体で一意と保証できる場合**: VRFは一切不要——
+- **IPアドレス空間がfabric全体で一意と保証できる場合**（NetworkClassのCIDRプールを
+  ブロック内で重ならないもの——自動切り出しか、ブロック内の利用者指定——にする）: VRFは一切不要——
   全VMの`/32`をFRRの1つの共有ルーティングテーブルへ直接広報する、プレーンなBGP
-  `address-family ipv4 unicast`だけで足りる。テナント分離はkyuusha自身のIPAM
-  （アドレス一意性の強制）と、host側のNetworkInterface ACL（nftables、「2.
+  `address-family ipv4 unicast`だけで足りる。Network間の分離はkyuusha自身のIPAM
+  （プールによるアドレス一意性）と、host側のNetworkInterface ACL（nftables、「2.
   VRF設計とルートリークポリシー」の「防御層（参考）」と同じ仕組み）に委ねる。
   VRFによる構造的な遮断が無いため、どちらかが崩れるとテナント間リークに直結する
   点は踏まえておくこと。**VNAPプラグインでの実現例**: `examples/vnap-plugins/
   frr-ipv4-unicast.sh`（`playground/ipv4-unicast-clos/`で実機確認済み）
-- **テナントのIPアドレス空間が重複しうる場合**（kyuushaの通常の運用はこちら——
-  各テナントが自分でCIDRを選ぶため）: 「2. VRF設計とルートリークポリシー」と同様、
-  VRFによるルーティングテーブル分離が必要。ただし粒度が異なる——Type-2の既定デプロイ
-  が「1 VLAN(=Subnet) = 1 VRF」なのに対し、Pure L3では通常VRFの粒度をSubnet単位
-  ではなくテナント単位（IP-VRF）に置く。厩舎側の`vlan_id`は引き続きSubnet単位で
-  払い出されるが、それをどうVRFへマッピングするかはVNAPプラグイン（下記参照）と
-  ネットワークチームのFRR設定の取り決め次第——`docs/architecture.md`
+- **IPアドレス空間がNetwork間で重複しうる場合**（各テナントが自分でCIDRを選ぶ
+  利用者指定のCIDRプールを使う場合）: 「2. VRF設計とルートリークポリシー」と同様、
+  VRFによるルーティングテーブル分離が必要で、粒度も同じNetwork単位（IP-VRF）。
+  VRFの識別に要る値（L3 VNI、Route Target等）はNetworkClassのNetwork単位の参照で
+  kyuushaに払い出させられ（VNAPへ`network_values`として渡る）、それをどうVRFへ
+  マッピングするかはVNAPプラグイン（下記参照）とネットワークチームのFRR設定の取り決め次第——`docs/architecture.md`
   「VMのネットワーク接続をCNIのようにプラガブルにすべきか」で確定した通り、host内の
   ローカルなtap-スイッチ接続ステップだけがVNAPで差し替え可能になっている。
   **VNAPプラグインでの実現例**: `examples/vnap-plugins/frr-vrf-host-route.sh`
@@ -297,7 +311,7 @@ CIDR＋gateway4のままで良く、Pure L3固有の変更は全てVNAPプラグ
 
 以下は今回のバージョンでは対応しない。将来的に要求が出てきた場合の再検討事項として記録する。
 
-- **RTに関係なく任意のAZ同士を無条件にメッシュ接続すること**: 必要なのは「登録されたテナントの
+- **RTに関係なく任意のAZ同士を無条件にメッシュ接続すること**: 必要なのは「払い出されたNetworkの
   RTについてのみ選択的にVRF間ルートを交換する」機能であり、AZ間のフルメッシュ相互接続ではない
 - **マルチリージョン**: 別デプロイとして扱う。リージョンを跨ぐネットワーク設定はこのガイドの対象外
 
@@ -305,13 +319,14 @@ CIDR＋gateway4のままで良く、Pure L3固有の変更は全てVNAPプラグ
 
 - [ ] AZごとにCLOSファブリック（leaf/spine）が構築され、EVPN-VXLANでAZ内のL2ストレッチが
       機能している
-- [ ] AZごとに独立したVLAN IDプールが確保され、kyuusha側の設計チームへ範囲を申告済み
+- [ ] AZごとのCIDRとVLAN IDの組（またはVLAN IDの範囲）がスイッチに設定され、kyuushaの
+      AllocationPoolとして登録され、NetworkClassから参照されている
 - [ ] host向けToRポートが、該当AZの全VLANを許可するトランクポートとして設定されている
-- [ ] 1 VLAN = 1 VRFのマッピングがゲートウェイ側で設定されている
-- [ ] テナント間のデフォルトルートリークが**存在しない**ことを確認済み
+- [ ] 1 Network = 1 VRF（AZごと）のマッピングがゲートウェイ側で設定されている
+- [ ] Network間のデフォルトルートリークが**存在しない**ことを確認済み
 - [ ] 共有NATゲートウェイ・共有DNSリゾルバへの経路のみが全VRFへリークされている
-      （`shared_with_tenant_ids`によるSubnet共有はVRF間ルートリークを伴わないため、
+      （`shared_with_tenant_ids`によるNetwork共有はVRF間ルートリークを伴わないため、
       対応するチェック項目はない）
-- [ ] 各テナントにAZ横断で一意なRoute Targetが割り当てられ、そのテナントの全AZのVRFインスタンスで
-      import/exportが設定されている
+- [ ] Route Targetに使う番号範囲が整数プールとして登録され、NetworkClassのNetwork単位の参照から
+      払い出されたRTが、そのNetworkの全AZのVRFインスタンスでimport/exportされている
 - [ ] 管理系ネットワーク（NATS/ストレージ/Hypervisor登録）がテナントVLANと別経路になっている

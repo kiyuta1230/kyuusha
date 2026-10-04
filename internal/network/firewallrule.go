@@ -46,38 +46,37 @@ func cidrsOverlap(a, b *net.IPNet) bool {
 	return a.Contains(b.IP) || b.Contains(a.IP)
 }
 
-// EffectiveFirewallRules is spec.ingress_rules/egress_rules plus, when n's
-// Subnet declares a non-empty mesh_group, an implicit allow entry for every
-// other Subnet in the same tenant sharing that mesh_group (see
-// docs/specs/network.md「spec.mesh_group」) -- this is what actually gets
-// enforced on the host, not necessarily what's stored in spec (mesh_group-
-// derived entries are never written back to etcd, same "implicit baseline,
-// not persisted" treatment as SubnetCIDR/GatewayIP already gets in
-// nftacl/SNAP). protocol="" on a synthetic entry means "any protocol",
-// matching nftacl/SNAP's existing protocol==0-is-any convention.
+// EffectiveFirewallRules is what a NetworkInterface's host-side ACL
+// actually enforces: its own ingress_rules/egress_rules, plus an implicit
+// any-protocol allow for every *other* Subnet of the same Network -- Subnets
+// within one Network reach each other by default (docs/specs/network.md).
+// Recomputed on every read rather than stored (the implicit part never
+// lands in spec), and re-sent to hosts whenever the Network's membership
+// changes (republishNetworkACLs). Kept separate from the stored rules so
+// T2's per-Network default security group can replace just this part.
 func (s *Service) EffectiveFirewallRules(ctx context.Context, n *NetworkInterface) (ingress, egress []FirewallRule, err error) {
 	ingress = n.Spec.IngressRules
 	egress = n.Spec.EgressRules
 
-	subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID)
+	subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.SubnetID())
 	if err != nil {
 		return nil, nil, err
 	}
-	if subnet.Spec.MeshGroup == "" {
-		return ingress, egress, nil
-	}
-
-	siblings, err := s.subnets.List(ctx, n.Meta.TenantID)
+	siblings, err := s.subnets.List(ctx, subnet.Meta.TenantID) // a Network's Subnets all belong to its owner
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, sib := range siblings {
-		if sib.Meta.ID == subnet.Meta.ID || sib.Spec.MeshGroup != subnet.Spec.MeshGroup {
+		if sib.Meta.ID == subnet.Meta.ID || sib.Spec.NetworkID != subnet.Spec.NetworkID {
 			continue
 		}
-		meshRule := FirewallRule{SourceCIDR: sib.Spec.CIDR, Action: "allow"}
-		ingress = append(append([]FirewallRule{}, ingress...), meshRule)
-		egress = append(append([]FirewallRule{}, egress...), meshRule)
+		cidr, _ := sib.Status.IPv4()
+		if cidr == "" {
+			continue // not allocated yet
+		}
+		rule := FirewallRule{SourceCIDR: cidr, Action: "allow"}
+		ingress = append(append([]FirewallRule{}, ingress...), rule)
+		egress = append(append([]FirewallRule{}, egress...), rule)
 	}
 	return ingress, egress, nil
 }

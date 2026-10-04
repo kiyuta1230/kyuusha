@@ -52,7 +52,7 @@ kyuushaの上に載る外部ソフトウェア（kyuusha-vpc等）の利用者�
 
 ## ラベルとアノテーション
 
-Subnet・NetworkInterface・VirtualMachineは`meta.labels`/`meta.annotations`（任意の
+Network・NetworkClass・AllocationPool・Subnet・NetworkInterface・VirtualMachineは`meta.labels`/`meta.annotations`（任意の
 key/value）を持てる。kyuushaの上に載る外部ソフトウェアが「このSubnetはどのVPCに属するか」
 のような自分の情報を記録するためのもので、kyuusha自身は中身を一切解釈しない（`vpc_id`の
 ような専用フィールドを足してkyuushaにVPC等の概念を持ち込まないための仕組み）。
@@ -69,9 +69,9 @@ key/value）を持てる。kyuushaの上に載る外部ソフトウェアが「�
   書ける。テナントに偽造されては困る情報（「このSubnetはVPC Xに属する」が認可の根拠に
   なる等）は、ラベルだけを信用せず、Admission Webhookで変更を検証するか、外部ソフト
   ウェア側で正となる台帳を持つこと
-- **VNAP/SNAPへの伝搬**: Subnetのラベルは`subnet_labels`としてVNAP/SNAPのattach
+- **VNAP/SNAPへの伝搬**: Networkのラベルは`network_labels`、Subnetのラベルは`subnet_labels`としてVNAP/SNAPのattach
   payloadに載る（[VNAP仕様](vnap.md)・[SNAP仕様](snap.md)）
-- 上記3種類以外のリソースでは、protoの`ObjectMeta`にフィールドはあるが常に空
+- 上記以外のリソース（Tenant・Image・Volume等）では、protoの`ObjectMeta`にフィールドはあるが常に空
   （保存されない）
 
 ## 通知系: Watch
@@ -84,7 +84,7 @@ key/value）を持てる。kyuushaの上に載る外部ソフトウェアが「�
 
 ### 全テナント横断のList/Watch
 
-テナントにスコープを持つリソース（VirtualMachine/Subnet/NetworkInterface等）の
+テナントにスコープを持つリソース（VirtualMachine/Network/Subnet/NetworkInterface等）の
 `List`/`Watch`は、`tenant_id`を空にすると**全テナント横断**で返す——1プロセスで
 全テナントを見る外部コントローラー向けの正式な契約で、`resource_version`からの再開も
 テナント単位のWatchと同じく効く（`since_resource_version`は全テナント共通のetcd
@@ -154,10 +154,10 @@ kyuusha vm remove-finalizer -tenant=... -id=... -finalizer="acme.corp/network-ac
 `kyuusha vm get`/`list`/`watch`の出力には`finalizers=...`と`deleted_at=...`が
 表示される。
 
-### 現状の対応範囲: VirtualMachine・Subnet・NetworkInterface
+### 現状の対応範囲: VirtualMachine・Network・Subnet・NetworkInterface
 
 Finalizer機構自体は`internal/resource.Store`（全リソース共通の汎用実装）にあり
-どの型でも使えるが、実際に意味のある形で使えるのは**VirtualMachine・Subnet・
+どの型でも使えるが、実際に意味のある形で使えるのは**VirtualMachine・Network・Subnet・
 NetworkInterface**（Updateでの追加・削除、所有者チェック、削除待ちの間の資源保持が
 揃っているもの）。CLIは`vm`と`subnet`の`add-finalizer`/`remove-finalizer`。
 
@@ -166,7 +166,7 @@ NetworkInterface**（Updateでの追加・削除、所有者チェック、削�
   Delete呼び出し時点で減算する——Finalizerが解放されて実際にオブジェクトが
   消えるタイミングではない（同一テナント内で一時的にQuotaの余裕が実態より
   多く見える、という無害な近似。詳細はコード中のコメント参照）
-- Subnet/NetworkInterfaceは、Finalizerで削除が止まっている間もVLAN ID/IPを保持し
+- Network/Subnet/NetworkInterfaceは、Finalizerで削除が止まっている間も払い出された値/IPを保持し
   続け、実際に消えた時点で初めてプールへ返却する（[network仕様](network.md)
   「IPAM」参照）。`tenant_usage`の扱いはVirtualMachineと同じ近似
 - Volumeの`Delete`は資源の解放と`tenant_usage`減算を無条件かつ即座に行っており、
@@ -241,6 +241,8 @@ api-gatewayを経由しない内部呼び出しから付いたエントリ）の
 | サービス | リソース | 操作 |
 |---|---|---|
 | `compute` | VirtualMachine | `Create` |
+| `network` | NetworkClass | `Create`/`Update`/`Delete` |
+| `network` | Network | `Create`/`Update`/`Delete` |
 | `network` | Subnet | `Create`/`Update`/`Delete` |
 | `network` | NetworkInterface | `Create`/`Update`/`UpdateFirewallRules`（いずれも`UPDATE`として届く） |
 
