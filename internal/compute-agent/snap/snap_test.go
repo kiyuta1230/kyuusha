@@ -40,16 +40,16 @@ func TestAttachSendsAddressAndSubnetToPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read stdin.json: %v", err)
 	}
-	var got pluginRequest
+	var got PluginRequest
 	if err := json.Unmarshal(stdin, &got); err != nil {
 		t.Fatalf("unmarshal plugin stdin: %v", err)
 	}
-	want := pluginRequest{
+	want := PluginRequest{
 		TapName: "tap0", IfaceID: "netif-1", VMID: "vm-1", TenantID: "tenant-1",
 		SubnetID: "subnet-1", SubnetLabels: map[string]string{"vpc.example.com/id": "vpc-1"},
 		SubnetCIDR: "10.9.9.0/24", GatewayIP: "10.9.9.1",
 		IPAddress: "10.9.9.5", MACAddress: "02:00:00:00:00:05",
-		EgressRules: []pluginFirewallRule{{Protocol: "tcp", PortRange: "443", SourceCIDR: "0.0.0.0/0", Action: "allow"}},
+		EgressRules: []PluginFirewallRule{{Protocol: "tcp", PortRange: "443", SourceCIDR: "0.0.0.0/0", Action: "allow"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("attach payload = %+v, want %+v", got, want)

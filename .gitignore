@@ -19,6 +19,7 @@
 /image
 /network
 /network-reconciler
+/nftacl-snap
 
 # The playground's "playground-nfs" storage connection fixture -- a plain
 # host directory standing in for a real NFS export, bind-mounted into every

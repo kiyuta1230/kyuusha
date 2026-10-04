@@ -17,6 +17,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /out/compute ./cmd/compute
 RUN CGO_ENABLED=0 go build -o /out/compute-reconciler ./cmd/compute-reconciler
 RUN CGO_ENABLED=0 go build -o /out/compute-agent ./cmd/compute-agent
+RUN CGO_ENABLED=0 go build -o /out/nftacl-snap ./cmd/nftacl-snap
 RUN CGO_ENABLED=0 go build -o /out/kyuusha ./cmd/kyuusha
 RUN CGO_ENABLED=0 go build -o /out/api-gateway ./cmd/api-gateway
 RUN CGO_ENABLED=0 go build -o /out/identity ./cmd/identity
@@ -135,6 +136,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       e2fsprogs iproute2 nftables \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/compute-agent /usr/local/bin/compute-agent
+# The built-in nftacl backend as a standalone SNAP plugin (docs/specs/snap.md):
+# point -security-backend-bin here, or delegate to it from a SNAP shim.
+COPY --from=builder /out/nftacl-snap /usr/local/bin/nftacl-snap
 COPY hack/devcerts/ca.crt hack/devcerts/server.crt hack/devcerts/server.key /etc/kyuusha/tls/
 # All 3 playground compute-agents register into zone-a (see
 # playground/docker-compose.yml), so one baked-in dev token covers all of

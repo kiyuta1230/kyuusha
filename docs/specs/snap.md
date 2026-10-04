@@ -105,6 +105,16 @@ preroutingに置くのは、VMからブリッジ自身（`gateway_ip`、つま�
   限らずVNAP以来のtap永続化の前提そのものに付随する、コンテナ化playground側の
   制約として認識しておく
 
+### 単体のSNAPバイナリとしてのnftacl: `cmd/nftacl-snap`
+
+同じnftacl実装（アンチスプーフィング・ルーティングされる通信への適用込み）を、SNAP契約を
+満たす単体のバイナリとしても提供する。compute-agentのコンテナイメージに
+`/usr/local/bin/nftacl-snap`として同梱しており、`-security-backend-bin=/usr/local/bin/nftacl-snap`
+を指定しても未指定（組み込み）と同じ動作になる。主な用途は、独自のSNAP shimが一部の
+NetworkInterfaceだけを従来どおりのnftaclへ委譲すること（execしてpayloadをそのまま渡す）。
+payloadの解釈は`internal/compute-agent/snap`の`PluginRequest`/`ServeBuiltin`を
+組み込み実装と共有している。
+
 ## 非ブリッジ配線向けの参考実装: `examples/snap-plugins/ebpf-snap`
 
 `nftacl`はtapがLinuxブリッジのポートであることを前提とするため、VNAPで非ブリッジ

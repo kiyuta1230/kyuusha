@@ -7,6 +7,12 @@
 
 ## 2026-10-04
 
+- **組み込みのnftaclを単体のSNAPバイナリ`cmd/nftacl-snap`としても提供した**（kyuusha-vpcからの
+  変更依頼A8）。compute-agentのイメージに`/usr/local/bin/nftacl-snap`として同梱。
+  playgroundで`-security-backend-bin=/usr/local/bin/nftacl-snap`を指定して実VMを起動し、
+  組み込みと同じチェーン（bridgeのin/out/spoof、inetのin/out）が入ること、
+  `UpdateFirewallRules`の再適用が反映されること、VM削除で全て消えること、
+  ゲストのgateway疎通が通ることを確認
 - **`vlan-trunk.sh`をgatewayを名乗らない純粋なL2延伸にした**（kyuusha-vpcからの
   変更依頼B5）。それまでは組み込み実装と同じくブリッジに`gateway_ip`を付けていたため、
   同じSubnetのVMを持つ全ハイパーバイザーとファブリックのSVIが、同じVLAN上で同じIPを

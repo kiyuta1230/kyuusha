@@ -74,7 +74,7 @@ func Attach(iface Interface, securityBackendBin string) error {
 			EgressRules:  toNftaclRules(iface.EgressRules),
 		})
 	}
-	return runPlugin(securityBackendBin, "attach", pluginRequest{
+	return runPlugin(securityBackendBin, "attach", PluginRequest{
 		TapName: iface.TapName, IfaceID: iface.IfaceID, VMID: iface.VMID, TenantID: iface.TenantID,
 		SubnetID: iface.SubnetID, SubnetLabels: iface.SubnetLabels, SubnetCIDR: iface.SubnetCIDR, GatewayIP: iface.GatewayIP,
 		IPAddress: iface.IPAddress, MACAddress: iface.MACAddress,
@@ -90,7 +90,7 @@ func Detach(ifaceID, vmID, tenantID, tapName, securityBackendBin string) error {
 	if securityBackendBin == "" {
 		return nftacl.Remove(tapName)
 	}
-	return runPlugin(securityBackendBin, "detach", pluginRequest{
+	return runPlugin(securityBackendBin, "detach", PluginRequest{
 		TapName: tapName, IfaceID: ifaceID, VMID: vmID, TenantID: tenantID,
 	})
 }
@@ -103,11 +103,12 @@ func toNftaclRules(rules []FirewallRule) []nftacl.FirewallRule {
 	return out
 }
 
-// pluginRequest is the JSON an external security-backend plugin receives on
-// stdin. Detach only ever sets TapName/IfaceID/VMID/TenantID (omitempty
-// drops the rest), same reasoning as netsetup's own pluginRequest: removing
+// PluginRequest is the JSON an external security-backend plugin receives on
+// stdin -- exported so cmd/nftacl-snap (ServeBuiltin) decodes exactly the
+// shape this package encodes. Detach only ever sets TapName/IfaceID/VMID/TenantID (omitempty
+// drops the rest), same reasoning as netsetup's own PluginRequest: removing
 // a port never needs to know what it used to be configured with.
-type pluginRequest struct {
+type PluginRequest struct {
 	TapName      string            `json:"tap_name"`
 	IfaceID      string            `json:"iface_id"`
 	VMID         string            `json:"vm_id"`
@@ -119,21 +120,56 @@ type pluginRequest struct {
 	IPAddress    string            `json:"ip_address,omitempty"`
 	MACAddress   string            `json:"mac_address,omitempty"`
 
-	IngressRules []pluginFirewallRule `json:"ingress_rules,omitempty"`
-	EgressRules  []pluginFirewallRule `json:"egress_rules,omitempty"`
+	IngressRules []PluginFirewallRule `json:"ingress_rules,omitempty"`
+	EgressRules  []PluginFirewallRule `json:"egress_rules,omitempty"`
 }
 
-type pluginFirewallRule struct {
+type PluginFirewallRule struct {
 	Protocol   string `json:"protocol"`
 	PortRange  string `json:"port_range,omitempty"`
 	SourceCIDR string `json:"source_cidr"`
 	Action     string `json:"action"`
 }
 
-func toPluginRules(rules []FirewallRule) []pluginFirewallRule {
-	var out []pluginFirewallRule
+// ServeBuiltin handles one SNAP plugin call ("attach"/"detach" plus its
+// payload) with the built-in nftacl backend -- the same thing Attach/
+// Detach do when -security-backend-bin is empty, reached through the
+// plugin contract instead. cmd/nftacl-snap is a thin main around this, so
+// a SNAP shim (or anyone) can delegate some interfaces to stock nftacl.
+func ServeBuiltin(verb string, req PluginRequest) error {
+	if req.TapName == "" {
+		return fmt.Errorf("snap: tap_name is required")
+	}
+	switch verb {
+	case "attach":
+		return nftacl.Apply(nftacl.Interface{
+			TapName:      req.TapName,
+			SubnetCIDR:   req.SubnetCIDR,
+			GatewayIP:    req.GatewayIP,
+			IPAddress:    req.IPAddress,
+			MACAddress:   req.MACAddress,
+			IngressRules: fromPluginRules(req.IngressRules),
+			EgressRules:  fromPluginRules(req.EgressRules),
+		})
+	case "detach":
+		return nftacl.Remove(req.TapName)
+	default:
+		return fmt.Errorf("snap: unknown verb %q (want attach or detach)", verb)
+	}
+}
+
+func fromPluginRules(rules []PluginFirewallRule) []nftacl.FirewallRule {
+	var out []nftacl.FirewallRule
 	for _, r := range rules {
-		out = append(out, pluginFirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
+		out = append(out, nftacl.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
+	}
+	return out
+}
+
+func toPluginRules(rules []FirewallRule) []PluginFirewallRule {
+	var out []PluginFirewallRule
+	for _, r := range rules {
+		out = append(out, PluginFirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
 	}
 	return out
 }
@@ -146,7 +182,7 @@ const pluginTimeout = 10 * time.Second
 // runPlugin mirrors netsetup.runPlugin's exec/stdin-JSON/exit-code contract
 // verbatim -- see this package's own doc comment for why it's a separate
 // contract (separate flag/binary) rather than reusing netsetup's.
-func runPlugin(securityBackendBin, verb string, req pluginRequest) error {
+func runPlugin(securityBackendBin, verb string, req PluginRequest) error {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("snap: marshal request: %w", err)
