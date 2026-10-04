@@ -231,6 +231,7 @@ func main() {
 	grpcServer := grpc.NewServer(grpc.Creds(serverCreds), grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	computev1.RegisterVirtualMachineServiceServer(grpcServer, grpcserver.New(svc, recon))
 	computev1.RegisterHypervisorServiceServer(grpcServer, grpcserver.NewHypervisorServer(svc, bootstrapPubKey))
+	computev1.RegisterHostAggregateServiceServer(grpcServer, grpcserver.NewHostAggregateServer(svc))
 
 	go func() {
 		<-ctx.Done()

@@ -260,6 +260,28 @@ type scheduleConstraints struct {
 	// picking the VM's current Hypervisor back again; every other caller
 	// leaves it "".
 	Exclude string
+	// AggregateSelectors are the host_aggregate_selector of the VM's NICs'
+	// NetworkClasses (resolved by the caller via aggregateSelectors);
+	// a candidate must satisfy each one (matchesAggregateSelectors). Empty
+	// means no constraint. See docs/specs/vm-scheduling.md「HostAggregate」.
+	AggregateSelectors []map[string]string
+	// aggregates is filled in by scheduleVM/scheduleMigration (only when
+	// AggregateSelectors is non-empty) for filterSchedulable to match
+	// against; callers never set it.
+	aggregates []HostAggregate
+}
+
+// loadAggregates fills c.aggregates when there's a selector to match.
+func (s *Service) loadAggregates(ctx context.Context, c *scheduleConstraints) error {
+	if len(c.AggregateSelectors) == 0 {
+		return nil
+	}
+	aggs, err := s.aggregates.List(ctx, "")
+	if err != nil {
+		return err
+	}
+	c.aggregates = aggs
+	return nil
 }
 
 // scheduleVM picks a Hypervisor satisfying spec's hard constraints plus c
@@ -274,6 +296,9 @@ type scheduleConstraints struct {
 func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c scheduleConstraints) (hypervisorID string, allocatedPciDevices []string, numaNode int32, err error) {
 	candidates, err := s.hypervisors.List(ctx, "")
 	if err != nil {
+		return "", nil, UnpinnedNumaNode, err
+	}
+	if err := s.loadAggregates(ctx, &c); err != nil {
 		return "", nil, UnpinnedNumaNode, err
 	}
 	driver := spec.DriverHint
@@ -313,12 +338,18 @@ func (s *Service) scheduleVM(ctx context.Context, spec VirtualMachineSpec, c sch
 // never just re-picks the same place); a non-empty target is Migrate's
 // admin-specified path, validated against the exact same hard constraints
 // scheduleVM's auto-pick applies (Ready/schedulable/driver/zone/storage
-// connections/PCI devices/capacity) rather than trusted blindly --
+// connections/PCI devices/capacity/host aggregates) rather than trusted blindly --
 // ErrUnschedulable if it doesn't qualify, ErrValidation if it names the
 // VM's current Hypervisor (migrating to the same place is never valid).
-func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, requiredZone, currentHypervisor, target string, requiredConnections []string) (hypervisorID string, allocatedPciDevices []string, numaNode int32, err error) {
+//
+// c carries the caller-derived constraints (Zone, StorageConnections,
+// AggregateSelectors); PciDevices/NumaPinned/Exclude are filled from spec
+// and currentHypervisor here.
+func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec, currentHypervisor, target string, c scheduleConstraints) (hypervisorID string, allocatedPciDevices []string, numaNode int32, err error) {
+	c.PciDevices, c.NumaPinned = spec.PciDevices, spec.NumaPinned
 	if target == "" {
-		return s.scheduleVM(ctx, spec, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, PciDevices: spec.PciDevices, NumaPinned: spec.NumaPinned, Exclude: currentHypervisor})
+		c.Exclude = currentHypervisor
+		return s.scheduleVM(ctx, spec, c)
 	}
 	if target == currentHypervisor {
 		return "", nil, UnpinnedNumaNode, fmt.Errorf("%w: target_hypervisor %q is the vm's current Hypervisor", ErrValidation, target)
@@ -331,7 +362,10 @@ func (s *Service) scheduleMigration(ctx context.Context, spec VirtualMachineSpec
 	if driver == VmmDriverUnspecified {
 		driver = VmmDriverFirecracker
 	}
-	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, scheduleConstraints{Zone: requiredZone, StorageConnections: requiredConnections, PciDevices: spec.PciDevices, NumaPinned: spec.NumaPinned})) == 0 {
+	if err := s.loadAggregates(ctx, &c); err != nil {
+		return "", nil, UnpinnedNumaNode, err
+	}
+	if len(filterSchedulable([]Hypervisor{h}, driver, spec.VCPU, spec.MemoryMB, c)) == 0 {
 		return "", nil, UnpinnedNumaNode, ErrUnschedulable
 	}
 	if err := s.reserveHypervisorCapacity(ctx, target, spec.VCPU, spec.MemoryMB); err != nil {
@@ -385,6 +419,9 @@ func filterSchedulable(candidates []Hypervisor, driver VmmDriver, vcpu int32, me
 			continue
 		}
 		if c.NumaPinned && !hasQualifyingNumaNode(h.Status.NumaNodes, vcpu, memoryMB) {
+			continue
+		}
+		if !matchesAggregateSelectors(h, c.AggregateSelectors, c.aggregates) {
 			continue
 		}
 		out = append(out, h)

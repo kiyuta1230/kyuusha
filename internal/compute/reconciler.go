@@ -211,7 +211,22 @@ func (r *Reconciler) reconcile(ctx context.Context, vm VirtualMachine) {
 			return
 		}
 
-		hypervisorID, allocatedPciDevices, numaNode, err := r.svc.scheduleVM(ctx, vm.Spec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, PciDevices: vm.Spec.PciDevices, NumaPinned: vm.Spec.NumaPinned})
+		selectors, err := r.svc.aggregateSelectors(ctx, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+		if err != nil {
+			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+				Type:             "Unschedulable",
+				Status:           resource.ConditionTrue,
+				Reason:           "NetworkInterfaceInvalid",
+				Message:          err.Error(),
+				LastTransitionAt: time.Now(),
+			})
+			if _, uerr := r.svc.Update(ctx, &vm); uerr != nil {
+				slog.Error("unschedulable: report condition failed", "vm_id", vm.Meta.ID, "err", uerr)
+			}
+			return
+		}
+
+		hypervisorID, allocatedPciDevices, numaNode, err := r.svc.scheduleVM(ctx, vm.Spec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, PciDevices: vm.Spec.PciDevices, NumaPinned: vm.Spec.NumaPinned, AggregateSelectors: selectors})
 		if err != nil {
 			vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 				Type:             "Unschedulable",
@@ -308,10 +323,25 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 		return
 	}
 
+	selectors, err := r.svc.aggregateSelectors(ctx, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+	if err != nil {
+		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
+			Type:             "Unmigratable",
+			Status:           resource.ConditionTrue,
+			Reason:           "NetworkInterfaceInvalid",
+			Message:          err.Error(),
+			LastTransitionAt: time.Now(),
+		})
+		if _, uerr := r.svc.Update(ctx, &vm); uerr != nil {
+			slog.Error("migrate: report condition failed", "vm_id", vm.Meta.ID, "err", uerr)
+		}
+		return
+	}
+
 	oldHypervisor := vm.Status.Hypervisor
 	oldPciDevices := vm.Status.AllocatedPciDevices
 	oldNumaNode := vm.Status.AllocatedNumaNode
-	newHypervisor, newPciDevices, newNumaNode, err := r.svc.scheduleMigration(ctx, vm.Spec, zone, oldHypervisor, vm.Status.MigrateTarget, storageConnections)
+	newHypervisor, newPciDevices, newNumaNode, err := r.svc.scheduleMigration(ctx, vm.Spec, oldHypervisor, vm.Status.MigrateTarget, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, AggregateSelectors: selectors})
 	if err != nil {
 		vm.Status.Conditions = upsertCondition(vm.Status.Conditions, resource.Condition{
 			Type:             "Unmigratable",
@@ -481,6 +511,10 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 	if err != nil {
 		return nil, err
 	}
+	selectors, err := r.svc.aggregateSelectors(ctx, vm.Meta.TenantID, vm.Spec.NetworkInterfaces)
+	if err != nil {
+		return nil, err
+	}
 
 	oldHypervisor := vm.Status.Hypervisor
 	oldPciDevices := vm.Status.AllocatedPciDevices
@@ -488,7 +522,7 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 	newSpec := vm.Spec
 	newSpec.VCPU = vcpu
 	newSpec.MemoryMB = memoryMB
-	newHypervisor, newPciDevices, newNumaNode, err := r.svc.scheduleVM(ctx, newSpec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, PciDevices: newSpec.PciDevices, NumaPinned: newSpec.NumaPinned, Exclude: oldHypervisor})
+	newHypervisor, newPciDevices, newNumaNode, err := r.svc.scheduleVM(ctx, newSpec, scheduleConstraints{Zone: zone, StorageConnections: storageConnections, PciDevices: newSpec.PciDevices, NumaPinned: newSpec.NumaPinned, Exclude: oldHypervisor, AggregateSelectors: selectors})
 	if err != nil {
 		return nil, fmt.Errorf("%w: no other hypervisor has room for the new size either", ErrHypervisorCapacityExceeded)
 	}

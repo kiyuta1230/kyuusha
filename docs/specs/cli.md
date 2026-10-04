@@ -90,6 +90,17 @@ hypervisor_id）スコープ付きJWTを、CLIを実行しているマシン上�
 標準出力に印字するだけ（`internal/bootstraptoken`、
 [Hypervisor登録・死活監視仕様](hypervisor-bootstrap.md)参照）。
 
+## `kyuusha hostaggregate <create|get|list|update|delete>`（admin-only）
+
+[VMスケジュール仕様](vm-scheduling.md)「HostAggregate」の管理。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-name`(必須、冪等キー) `-zone`(必須) `-labels`(カンマ区切り`key=value`) `-hypervisors`(カンマ区切りのHypervisor id) |
+| `get` / `delete` | `-id`(必須) |
+| `list` | なし |
+| `update` | `-id`(必須) `-zone` `-labels` `-hypervisors`。明示的に指定したフラグだけをGet→Updateで丸ごと置き換える |
+
 ## `kyuusha image <create|get|list|watch|share|delete>`
 
 image向け。`create`は`-tenant`を持つためadmin-onlyではない（テナント自身が自分のImageを作れる）。

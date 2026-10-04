@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package kyuusha.compute.v1;
+
+option go_package = "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1;computev1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// HostAggregate groups Hypervisors within one zone under labels, for
+// placement constraints that are narrower than a zone -- e.g. a VLAN that
+// only reaches the racks under one leaf. A NetworkClass's
+// host_aggregate_selector names labels; a VM with a NIC of that class only
+// schedules onto a Hypervisor that's a member of some aggregate in the
+// VM's zone carrying all of them. See docs/specs/vm-scheduling.md.
+// Cluster-scoped and admin-only (no tenant_id).
+message HostAggregateSpec {
+  string zone = 1;                  // required: members must be in this zone to count
+  map<string, string> labels = 2;   // what NetworkClass selectors match against
+  repeated string hypervisors = 3;  // member Hypervisor ids; a Hypervisor may belong to several aggregates
+}
+
+message HostAggregate {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  HostAggregateSpec spec = 2;
+}
+
+message CreateHostAggregateRequest {
+  string name = 1; // idempotency key
+  HostAggregateSpec spec = 2;
+}
+message GetHostAggregateRequest { string id = 1; }
+message ListHostAggregatesRequest {}
+message ListHostAggregatesResponse { repeated HostAggregate items = 1; }
+message UpdateHostAggregateRequest { HostAggregate host_aggregate = 1; }
+message DeleteHostAggregateRequest { string id = 1; }
+message WatchHostAggregatesRequest { int64 since_resource_version = 1; }
+message HostAggregateEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  HostAggregate host_aggregate = 2;
+  int64 resource_version = 3;
+}
+
+service HostAggregateService {
+  rpc Create(CreateHostAggregateRequest) returns (HostAggregate);
+  rpc Get(GetHostAggregateRequest) returns (HostAggregate);
+  rpc List(ListHostAggregatesRequest) returns (ListHostAggregatesResponse);
+  rpc Update(UpdateHostAggregateRequest) returns (HostAggregate);
+  rpc Delete(DeleteHostAggregateRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchHostAggregatesRequest) returns (stream HostAggregateEvent);
+}

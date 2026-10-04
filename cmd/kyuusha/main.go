@@ -39,6 +39,8 @@ func main() {
 		tenantCmd(os.Args[2:])
 	case "hypervisor":
 		hypervisorCmd(os.Args[2:])
+	case "hostaggregate":
+		hostaggregateCmd(os.Args[2:])
 	case "image":
 		imageCmd(os.Args[2:])
 	case "subnet":
@@ -70,6 +72,7 @@ func usage() {
   kyuusha vm <create|get|list|watch|console|delete|stop|start|resize|migrate|attach-volume|detach-volume|reboot|hard-reboot|add-finalizer|remove-finalizer> [flags]
   kyuusha tenant <create|get|list|watch|update|delete> [flags]
   kyuusha hypervisor <get|list|watch|set-schedulable> [flags]   (admin-only)
+  kyuusha hostaggregate <create|get|list|update|delete> [flags]   (admin-only)
   kyuusha hypervisor bootstrap-token create -zone=... [flags]   (dev-only, local signing; see internal/bootstraptoken)
   kyuusha image <create|build|get|list|watch|share|delete> [flags]
   kyuusha image build -dockerfile=... -context=... -registry=... -repo=... -kernel-url=... [flags]   (builds a KERNEL_ROOTFS Image from a Dockerfile's rootfs; requires docker/tar/mkfs.ext4 locally, see docs/specs/image.md)

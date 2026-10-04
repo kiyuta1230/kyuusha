@@ -47,7 +47,9 @@ Network（テナント）       ルーティングドメイン兼分離の境界
   無いzoneにはSubnetを作れない。ほかに属性、`visibility`/`shared_with_tenant_ids`
   （誰がこのClassでNetworkを作れるか。Classには所有者がいないので`PRIVATE`は「列挙した
   テナントだけ」）、`allow_public_networks`、zoneごとの既定DNSリゾルバ、MTU、gatewayの
-  決め方（先頭/末尾）、host aggregateの条件を持つ。**参照でありコピーではない**: Classや
+  決め方（先頭/末尾）、`host_aggregate_selector`（このClassのNICを持つVMを、ラベルが
+  一致するcomputeの`HostAggregate`のHypervisorにだけ配置する。[VMスケジュール仕様](vm-scheduling.md)
+  「HostAggregate」）を持つ。**参照でありコピーではない**: Classや
   プールの変更は以降の払い出しにだけ効く。既定のClassは持たない（Network作成時に必須）。
   Networkが参照している間は削除できない。テナントは`tenant_id`付きのGet/Listで、自分が
   使えるClassだけを見られる

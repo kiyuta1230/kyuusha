@@ -163,8 +163,8 @@ func printClass(c *networkv1.NetworkClass) {
 		zones = append(zones, z)
 	}
 	sort.Strings(zones)
-	fmt.Printf("id=%s name=%s visibility=%s zones=%s mtu=%d attributes=%s rv=%d\n", c.GetMeta().GetId(), c.GetMeta().GetName(),
-		c.GetSpec().GetVisibility(), strings.Join(zones, ","), c.GetSpec().GetMtu(), formatKeyValues(c.GetSpec().GetAttributes()), c.GetMeta().GetResourceVersion())
+	fmt.Printf("id=%s name=%s visibility=%s zones=%s mtu=%d attributes=%s host_aggregate_selector=%s rv=%d\n", c.GetMeta().GetId(), c.GetMeta().GetName(),
+		c.GetSpec().GetVisibility(), strings.Join(zones, ","), c.GetSpec().GetMtu(), formatKeyValues(c.GetSpec().GetAttributes()), formatKeyValues(c.GetSpec().GetHostAggregateSelector()), c.GetMeta().GetResourceVersion())
 }
 
 // ---------------------------------------------------------------------------

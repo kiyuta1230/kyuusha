@@ -417,9 +417,11 @@ func (f *FakeNetworkClient) Get(ctx context.Context, req *networkv1.GetNetworkRe
 }
 
 // FakeNetworkClassClient is a minimal networkv1.NetworkClassServiceClient:
-// Get returns a class with an MTU and per-zone default resolvers.
+// Get returns a class with an MTU and per-zone default resolvers, plus
+// HostAggregateSelector if set.
 type FakeNetworkClassClient struct {
 	networkv1.NetworkClassServiceClient
+	HostAggregateSelector map[string]string
 }
 
 func (f *FakeNetworkClassClient) Get(ctx context.Context, req *networkv1.GetNetworkClassRequest, opts ...grpc.CallOption) (*networkv1.NetworkClass, error) {
@@ -431,6 +433,7 @@ func (f *FakeNetworkClassClient) Get(ctx context.Context, req *networkv1.GetNetw
 				"zone-a": {Servers: []string{"10.0.0.53"}},
 				"*":      {Servers: []string{"10.255.0.53"}},
 			},
+			HostAggregateSelector: f.HostAggregateSelector,
 		},
 	}, nil
 }

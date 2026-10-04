@@ -51,6 +51,10 @@ sequenceDiagram
 9. `spec.numa_pinned`が`true`の場合、`status.numa_nodes`のうち**いずれか1つ**が
    要求vcpu/memory_mbを満たす（`spec.numa_pinned`が`false`のVMには影響しない。
    [VirtualMachine仕様](virtual-machine.md)「NUMA/CPUピニング」参照）
+10. VMのNICが属するNetworkのNetworkClassが`host_aggregate_selector`を持つ場合、
+    その各selectorについて「Hypervisorと同じzoneの、Hypervisorを`hypervisors`に含み、
+    selectorのラベルを全て持つ`HostAggregate`」が少なくとも1つある（下記
+    「HostAggregate」。selectorを持つClassが無いVMには影響しない）
 
 `requiredZone`は`spec.network_interfaces`が参照するSubnetのzoneから導出する
 （[network.md](network.md)「compute側の統合」参照）。マルチAZにまたがる
@@ -68,6 +72,28 @@ Create時点から実際のスケジュール時点までの間にSubnetが変�
 再スケジュールもこの同じフィルタを通るため、移行先で対象Volumeが解決できない
 Hypervisorへ移すことはない。`network_interfaces`が空のVMと同様、`volumes`が
 空のVM（接続要件なし）には影響しない。
+
+## HostAggregate
+
+zoneより狭い配置の制約（オーバーレイの無いCLOSで、あるVLANが特定のleaf配下のラックに
+しか届かない等）のための、computeのクラスタ単位・管理者専用リソース
+（`kyuusha.compute.v1.HostAggregateService`、api-gatewayは汎用転送で中継）。
+
+- `spec.zone`（必須）: メンバーはこのzoneのHypervisorである場合だけ数える
+- `spec.labels`: NetworkClassの`host_aggregate_selector`が照合するラベル
+- `spec.hypervisors`: メンバーのHypervisor id。未登録のidも書ける（ホストの登録前に
+  ラック構成を定義できる）。1台のHypervisorが複数のHostAggregateに属してよい
+
+照合: VMのNICごとに（Subnet指定ならそのSubnetの`network_id`から）Network →
+NetworkClassを引き、空でない`host_aggregate_selector`を集める。候補Hypervisorは
+selectorごとに条件を満たすHostAggregateを持たなければならない。複数のselectorは
+別々のHostAggregateで満たしてよい。selectorはzoneと同じく**スケジュールの都度引き直す**
+（Create時点でキャッシュしない）。初回スケジュール・`Migrate`（自動選択・
+`target_hypervisor`指定の両方）・`Resize`の容量不足フォールバックの全てに適用する。
+
+HostAggregate・NetworkClassの変更は以降のスケジュールにだけ効き、配置済みのVMは
+動かさない。条件を満たすHypervisorが無いVMは`Pending`（移行中なら`Migrating`）の
+まま留まり、HostAggregateが追加・変更されると定期スイープで配置される。
 
 ## ピック（MostAvailableFirst）
 

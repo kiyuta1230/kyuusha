@@ -464,8 +464,13 @@ VNAPだけで対応できる。
   同じ値を別のNetwork/Subnetへ渡さないため（[Finalizer](#finalizer-外部システムによる削除ブロック)）
 
 **届く範囲**: 特定のラックやホスト群にしか届かない構成（オーバーレイの無いCLOSのVLAN等）の
-ために、AZの中でホストをグループ化する概念（host aggregate相当）とNetworkClassの条件を
-ラベルで合わせ、VMの配置先を絞る。
+ために、AZの中でホストをグループ化する`HostAggregate`（computeのクラスタ単位リソース、
+OpenStackのhost aggregate相当）とNetworkClassの`host_aggregate_selector`をラベルで合わせ、
+VMの配置先を絞る。HostAggregateをcomputeに置くのは、スケジューラが引くのはHypervisorの
+集合で、ネットワークに固有の概念ではないため（ストレージやGPUの配置制約にも同じ集合を
+使い回せる）。Hypervisor自身のラベルにしなかったのは、Hypervisorはcompute-agentの自己
+登録で作られ、所属を運用者が別に管理したいから（登録前にラック構成を定義でき、1台が複数の
+集合に属せる）。selectorはスケジュールの都度NICから引き直し、配置済みのVMは動かさない。
 
 **`NetworkInterface`**: VirtualMachineとSubnetの結びつきそのものをリソースにする
 （`VolumeAttachment`と同じパターン）。NICの単位のACL（`ingress_rules`/`egress_rules`）を

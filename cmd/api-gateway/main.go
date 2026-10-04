@@ -200,6 +200,9 @@ func main() {
 	// -- no hand-written proxy per service. Built-in proxies above still
 	// win for the services they register.
 	external.AddRoute("kyuusha.network.v1.", networkConn, protoregistry.GlobalFiles)
+	// Same for compute's HostAggregateService (VM/Hypervisor keep their
+	// built-in proxies).
+	external.AddRoute("kyuusha.compute.v1.", computeConn, protoregistry.GlobalFiles)
 	for prefix, addr := range externalRoutes {
 		conn, err := grpc.NewClient(addr,
 			grpc.WithTransportCredentials(clientCreds),

@@ -55,20 +55,21 @@ const (
 // target scale implies. Sharding it per tenant is a reasonable follow-up if
 // that ever matters.
 type Service struct {
-	store                  *resource.Store[VirtualMachine, *VirtualMachine]
-	hypervisors            *resource.Store[Hypervisor, *Hypervisor]
-	scheduler              SchedulingStrategy
-	identityClient         identityv1.TenantServiceClient
-	imageClient            imagev1.ImageServiceClient
-	subnetClient           networkv1.SubnetServiceClient
-	netifClient            networkv1.NetworkInterfaceServiceClient
+	store          *resource.Store[VirtualMachine, *VirtualMachine]
+	hypervisors    *resource.Store[Hypervisor, *Hypervisor]
+	aggregates     *resource.Store[HostAggregate, *HostAggregate]
+	scheduler      SchedulingStrategy
+	identityClient identityv1.TenantServiceClient
+	imageClient    imagev1.ImageServiceClient
+	subnetClient   networkv1.SubnetServiceClient
+	netifClient    networkv1.NetworkInterfaceServiceClient
 	// NetworkClient/NetworkClassClient resolve a NIC's Network and
 	// NetworkClass: attaching by network_id needs NetworkClient, and both
 	// feed the plugin-facing AttachInfo (see createNetworkInterfaces).
 	// Optional (nil in most tests); set by cmd/compute and
 	// cmd/compute-reconciler.
-	NetworkClient      networkv1.NetworkServiceClient
-	NetworkClassClient networkv1.NetworkClassServiceClient
+	NetworkClient          networkv1.NetworkServiceClient
+	NetworkClassClient     networkv1.NetworkClassServiceClient
 	volumeClient           blockstoragev1.VolumeServiceClient
 	volumeAttachmentClient blockstoragev1.VolumeAttachmentServiceClient
 	quota                  *quotaChecker
@@ -106,6 +107,11 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 			NotFound:      ErrHypervisorNotFound,
 			Conflict:      ErrHypervisorConflict,
 			HistoryPruned: ErrHypervisorHistoryPruned,
+		}),
+		aggregates: resource.NewStore[HostAggregate, *HostAggregate](etcdClient, "hostaggregate", resource.StoreErrors{
+			NotFound:      ErrHostAggregateNotFound,
+			Conflict:      ErrHostAggregateConflict,
+			HistoryPruned: ErrHostAggregateHistoryPruned,
 		}),
 		scheduler:              MostAvailableFirst{},
 		identityClient:         identityClient,

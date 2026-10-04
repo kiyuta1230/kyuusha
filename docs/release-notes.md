@@ -7,6 +7,16 @@
 
 ## 2026-10-05
 
+- **`HostAggregate`とNetworkClassの`host_aggregate_selector`によるVM配置の絞り込みを
+  追加した**（変更依頼A9の実装順序6）。computeにクラスタ単位・管理者専用の
+  `HostAggregate`（zone・ラベル・メンバーのHypervisor）を追加し、スケジューラはVMのNICの
+  NetworkClassのselectorを満たすHostAggregateに属するHypervisorだけを候補にする
+  （初回スケジュール・Migrate・Resizeのフォールバック全て）。CLIは`kyuusha hostaggregate`。
+  playground（3台のHypervisor）で、selector付きClassのNetworkのVM 3台が全てメンバーの
+  1台に載ること、該当するHostAggregateが無いVMは`Pending`に留まりHostAggregateの追加で
+  配置されること、非メンバーへの移行（自動選択・`target_hypervisor`指定とも）が保留され
+  メンバー追加後に進むこと、一般テナントはHostAggregateを操作できないことを確認。
+  設計: [architecture.md「届く範囲」](architecture.md)
 - **NetworkClassのDNSリゾルバ・MTU・gatewayの決め方をゲストまで効かせた**（変更依頼A9の
   実装順序5）。リゾルバはSubnetの`dns_servers`、空ならClassのzoneごとの既定、searchは
   Networkの`dns_suffix`。MTUはClassの`mtu`。いずれもカーネルコマンドライン規約
