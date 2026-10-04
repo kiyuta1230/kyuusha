@@ -16,6 +16,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/reflect/protoregistry"
 
 	"github.com/kiyuta1230/kyuusha/internal/authn"
 	"github.com/kiyuta1230/kyuusha/internal/authz"
@@ -44,6 +45,8 @@ func main() {
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented when dialing backend services (see internal/mtls); unrelated to the client-facing JWT above")
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA backend services' certificates must chain to")
+	externalBackendsFlag := flag.String("external-backends", "", `extra gRPC backends this gateway fronts without knowing their proto, "<service prefix>=<address>[,...]" (e.g. "kyuusha.vpc.v1.=vpc-api:9000"); same authn/authz/audit/mTLS as built-in services -- see docs/specs/external-integration.md`)
+	externalDescriptorsFlag := flag.String("external-backend-descriptor-sets", "", `optional "<service prefix>=<FileDescriptorSet file>[,...]" for -external-backends routes, used instead of asking the backend via gRPC server reflection`)
 	flag.Parse()
 
 	// JSON structured logging (docs/architecture.md's Observability design),
@@ -180,6 +183,44 @@ func main() {
 	volumeAttachmentProxy := gateway.NewVolumeAttachmentProxy(blockstoragev1.NewVolumeAttachmentServiceClient(blockStorageConn))
 	storageConnectionProxy := gateway.NewStorageConnectionProxy(blockstoragev1.NewStorageConnectionServiceClient(blockStorageConn))
 
+	externalRoutes, err := gateway.ParseExternalBackends(*externalBackendsFlag)
+	if err != nil {
+		slog.Error("parse -external-backends", "err", err)
+		os.Exit(1)
+	}
+	descriptorFiles, err := gateway.ParseExternalBackends(*externalDescriptorsFlag) // same "<prefix>=<value>" shape
+	if err != nil {
+		slog.Error("parse -external-backend-descriptor-sets", "err", err)
+		os.Exit(1)
+	}
+	var external gateway.ExternalBackends
+	for prefix, addr := range externalRoutes {
+		conn, err := grpc.NewClient(addr,
+			grpc.WithTransportCredentials(clientCreds),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+			grpc.WithChainUnaryInterceptor(authn.PropagateCallerUnaryInterceptor()),
+			grpc.WithChainStreamInterceptor(authn.PropagateCallerStreamInterceptor()),
+		)
+		if err != nil {
+			slog.Error("dial external backend", "prefix", prefix, "addr", addr, "err", err)
+			os.Exit(1)
+		}
+		defer conn.Close()
+		var files *protoregistry.Files
+		if path, ok := descriptorFiles[prefix]; ok {
+			raw, err := os.ReadFile(path)
+			if err == nil {
+				files, err = gateway.FilesFromDescriptorSet(raw)
+			}
+			if err != nil {
+				slog.Error("load external backend descriptor set", "prefix", prefix, "path", path, "err", err)
+				os.Exit(1)
+			}
+		}
+		external.AddRoute(prefix, conn, files)
+		slog.Info("api-gateway: external backend registered", "prefix", prefix, "addr", addr)
+	}
+
 	lis, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
 		slog.Error("listen", "addr", *listenAddr, "err", err)
@@ -189,6 +230,11 @@ func main() {
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(verifier.UnaryInterceptor(), authorizer.UnaryInterceptor()),
 		grpc.ChainStreamInterceptor(verifier.StreamInterceptor(), authorizer.StreamInterceptor()),
+		// Unregistered services go to external backends (or Unimplemented),
+		// behind the same stream interceptors; the codec lets them see raw
+		// frames while every built-in service still gets plain proto.
+		grpc.UnknownServiceHandler(external.Handler()),
+		grpc.ForceServerCodecV2(gateway.ServerCodec()),
 	)
 	computev1.RegisterVirtualMachineServiceServer(grpcServer, vmProxy)
 	computev1.RegisterHypervisorServiceServer(grpcServer, hypervisorProxy)

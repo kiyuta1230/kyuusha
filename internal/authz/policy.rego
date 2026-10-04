@@ -27,6 +27,15 @@ allow if {
 	input.rpc.service == "network"
 }
 
+# <service>-admin generalizes storage-admin/network-admin to any service
+# by naming convention -- in particular to external backends registered on
+# api-gateway (e.g. role "vpc-admin" for kyuusha.vpc.v1.*), whose service
+# names kyuusha can't list here. See docs/specs/authn-authz.md "将来の拡張".
+allow if {
+	input.rpc.service != ""
+	input.claims.role == concat("", [input.rpc.service, "-admin"])
+}
+
 # viewer (role, not tenant_role) is the cross-tenant, cross-service
 # counterpart to tenant_role=="viewer" below: admin's reach (including
 # unscoped requests like Hypervisor/Tenant lists, which only admin/

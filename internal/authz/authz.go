@@ -119,7 +119,9 @@ func (a *Authorizer) StreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		wrapped := &authorizedStream{ServerStream: ss, a: a, rpcMethod: info.FullMethod}
 		err := handler(srv, wrapped)
-		if wrapped.claims != nil {
+		// A denied stream was already audited as authz_denied, same as a
+		// denied unary call -- don't log it a second time as completed.
+		if wrapped.claims != nil && !wrapped.denied {
 			audit.Log(ss.Context(), audit.Record{
 				Event: audit.EventRPCCompleted, RPCMethod: info.FullMethod, RequestTenantID: wrapped.requestTenantID,
 				TenantID: wrapped.claims.TenantID, Sub: wrapped.claims.Subject, Role: wrapped.claims.Role, TenantRole: wrapped.claims.TenantRole, Err: err,
@@ -145,6 +147,7 @@ type authorizedStream struct {
 	rpcMethod string
 
 	checked         bool
+	denied          bool
 	claims          *authn.Claims
 	requestTenantID string
 }
@@ -158,6 +161,7 @@ func (s *authorizedStream) RecvMsg(m any) error {
 		claims, requestTenantID, err := s.a.authorize(s.Context(), m, s.rpcMethod)
 		s.claims, s.requestTenantID = claims, requestTenantID
 		if err != nil {
+			s.denied = true
 			auditDenied(s.Context(), s.rpcMethod, requestTenantID, claims, err)
 			return err
 		}

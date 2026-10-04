@@ -110,7 +110,7 @@ allow if {
     `action`はメソッド名が`Get`/`List`/`Watch`で始まれば`read`、それ以外は`write`——どちらも
     手書きの対応表を持たず構造的に導出するので、新しいサービス/RPCを足しても
     このファイル自体は変更不要
-- **リクエストメッセージが`tenant_id`フィールドを持たない場合**（例: `CreateTenantRequest`, Hypervisor系の各Request, `CreateStorageConnectionRequest`）、`input.request.tenant_id`は空文字列として扱われる。`claims.tenant_id`は空になり得ないため、この場合は事実上 **admin roleのみ許可**になる（ポリシー自体の変更は不要）——ただし対象がblock-storageサービスのRPCなら`role=="storage-admin"`、networkサービスのRPCなら`role=="network-admin"`、read系RPC（Get/List/Watch）なら`role=="viewer"`も同様に許可される
+- **リクエストメッセージが`tenant_id`フィールドを持たない場合**（例: `CreateTenantRequest`, Hypervisor系の各Request, `CreateStorageConnectionRequest`）、`input.request.tenant_id`は空文字列として扱われる。`claims.tenant_id`は空になり得ないため、この場合は事実上 **admin roleのみ許可**になる（ポリシー自体の変更は不要）——ただし対象がblock-storageサービスのRPCなら`role=="storage-admin"`、それ以外のサービスのRPCなら`role=="<サービス名>-admin"`（例: networkなら`network-admin`）、read系RPC（Get/List/Watch）なら`role=="viewer"`も同様に許可される
 - gRPC unary/stream interceptorとして実装。streamはauthnと同様、RecvMsgラップで最初のメッセージ受信時に評価する
 - interceptorの適用順序: authn → authz（authzはauthnが設定したClaimsに依存する）
 
@@ -202,8 +202,15 @@ VolumeAttachment、テナント横断）——StorageConnectionだけに絞る�
 2026-09-13、当時から予告していた通り`network-admin`を同じ形（`role=="network-admin"`
 かつ`rpc.service=="network"`）で追加した——新しいルールを1つ足しただけで、
 `internal/authz/rpcclass.go`・ポリシーの他の部分とも一切変更不要だった。
-`kyuusha token mint -role=network-admin`で発行できる。同じ拡張がcompute-adminにも
-そのまま使えるが、需要が出るまで見送る。
+`kyuusha token mint -role=network-admin`で発行できる。
+
+これは`role == "<rpc.service>-admin"`という命名規則として一般化してある（ポリシーの
+1ルール）——`network-admin`はその一例で、`compute-admin`等も同じ意味で使える。
+主な用途はapi-gatewayに登録した外部バックエンド（[外部システム連携仕様](external-integration.md)
+「外部バックエンドの登録」）で、kyuushaがサービス名を列挙できないそれらにも、
+例えば`kyuusha.vpc.v1.*`なら`vpc-admin`というサービス限定の管理ロールを付けられる。
+`storage-admin`（サービス名は`blockstorage`）だけは規則に乗らない既存の名前として
+個別のルールのまま残している。
 
 ### 軸4: グローバルなread-only — "viewer"（実装済み、2026-09-13）
 

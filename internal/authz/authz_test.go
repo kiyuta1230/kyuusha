@@ -202,3 +202,30 @@ func TestAuthorize_GlobalViewer(t *testing.T) {
 		t.Fatalf("global viewer on unscoped write request: got %v, want PermissionDenied", err)
 	}
 }
+
+// TestAuthorize_ServiceScopedAdmin covers the <service>-admin naming
+// convention, e.g. for an external backend's service registered on
+// api-gateway: cross-tenant within that service, nothing outside it.
+func TestAuthorize_ServiceScopedAdmin(t *testing.T) {
+	ctx := context.Background()
+	a, err := New(ctx)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	vpcAdmin := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "ops", Role: "vpc-admin"})
+	const vpcCreate = "/kyuusha.vpc.v1.VPCService/Create"
+	if _, _, err := a.authorize(vpcAdmin, fakeReq{tenantID: "tenant-b"}, vpcCreate); err != nil {
+		t.Fatalf("vpc-admin on another tenant's vpc request: got %v, want allowed", err)
+	}
+	if _, _, err := a.authorize(vpcAdmin, fakeUnscopedReq{}, vpcCreate); err != nil {
+		t.Fatalf("vpc-admin on an unscoped vpc request: got %v, want allowed", err)
+	}
+	if _, _, err := a.authorize(vpcAdmin, fakeReq{tenantID: "tenant-b"}, subnetCreateMethod); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("vpc-admin on a network request: got %v, want PermissionDenied", err)
+	}
+	// A role can't match a malformed method with no service segment.
+	bare := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "ops", Role: "-admin"})
+	if _, _, err := a.authorize(bare, fakeUnscopedReq{}, "bogus"); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("role -admin on a method with no service: got %v, want PermissionDenied", err)
+	}
+}

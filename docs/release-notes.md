@@ -7,6 +7,18 @@
 
 ## 2026-10-04
 
+- **api-gatewayに外部バックエンドの登録を追加した**（kyuusha-vpcからの変更依頼A7）。
+  `-external-backends`（`"<サービス名のプレフィックス>=<アドレス>"`）で登録したバックエンドへ、
+  組み込みでないサービスの呼び出しを中身を解釈せずに転送する。認証・認可・監査ログ・
+  メトリクス・トレースは組み込みと同じ経路を通り、認可用の`tenant_id`はgRPC Server Reflection
+  （または`-external-backend-descriptor-sets`）で得た定義から名前で取り出す。あわせて
+  `<サービス名>-admin`という命名規則のサービス限定管理ロールを一般化した。playgroundで、
+  `tenant_id`をフィールド番号7に置いたテスト用のサービスをmTLS＋Reflection付きの外部
+  バックエンドとして実際のapi-gatewayの後ろに立て、自テナントのunary/Watchが通り
+  他テナントは拒否されること、`vpctest-admin`ロールでは通り`network-admin`では拒否される
+  こと、呼び出し元の`sub`がバックエンドに届くこと、監査ログに記録されることを確認。
+  ストリーム経由で拒否された呼び出しが監査ログに`authz_denied`と`rpc_completed`の2件
+  記録されていたのを、unaryと同じ`authz_denied`の1件に揃えた
 - **組み込みのnftaclを単体のSNAPバイナリ`cmd/nftacl-snap`としても提供した**（kyuusha-vpcからの
   変更依頼A8）。compute-agentのイメージに`/usr/local/bin/nftacl-snap`として同梱。
   playgroundで`-security-backend-bin=/usr/local/bin/nftacl-snap`を指定して実VMを起動し、

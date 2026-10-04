@@ -16,6 +16,40 @@ CMDB登録、ネットワーク台帳登録、独自バリデーション、削�
 | ゲート系・削除側（外部の確認が取れるまで実削除させたくない） | VM削除時、そのインターフェースのIPが外部ACLにまだ残っていたら拒否 | **Finalizer**（実装済み、現状VirtualMachineのみ） |
 | ゲート系・作成側（作成前に外部バリデーションを通したい） | 独自ポリシーチェックをCreate前に挟む | **Admission Webhook**（`internal/admissionwebhook`、現状VirtualMachineのみ） |
 
+## 外部バックエンドの登録（api-gateway）
+
+kyuushaの上に載る外部ソフトウェア（kyuusha-vpc等）の利用者向けgRPC APIを、api-gateway
+経由で公開できる。利用者から見てエンドポイントもトークンも1つのままで、認証（JWT検証）・
+認可（OPA）・監査ログ・メトリクス・トレースの実施点もapi-gatewayの1か所のまま。
+**kyuushaは外部バックエンドのprotoを知らない**（取り込まない、専用のプロキシも書かない）。
+
+- **登録**: オペレータ設定のみ。api-gatewayの`-external-backends`に
+  `"<サービス名のプレフィックス>=<アドレス>[,...]"`（例: `kyuusha.vpc.v1.=vpc-api:9000`）。
+  組み込みのサービスに一致しない呼び出しのうち、サービス名がプレフィックスに一致するもの
+  （複数一致したら最長のもの）をそのバックエンドへ転送する。どれにも一致しなければ
+  `Unimplemented`。`kyuusha.`配下のプレフィックスはパッケージの区切り（`.`）で終わる必要がある
+- **転送**: `grpc.UnknownServiceHandler`で、メッセージの中身を解釈せずにバイト列のまま
+  転送する。unary・server streaming（Watch）を含め、どの形のRPCも同じ汎用の双方向
+  ストリームとして扱う
+- **認証・認可・監査・メトリクス・トレース**: 組み込みのサービスと同じinterceptor・
+  stats handlerを通る（外部バックエンドへの呼び出しは常にストリームのinterceptor経由）。
+  `rpcclass.go`の`service`/`action`の導出もそのまま効く（`kyuusha.vpc.v1.*`なら
+  `service == "vpc"`、Get/List/Watchで始まるメソッドは`read`）。サービス限定の管理ロールは
+  `<サービス名>-admin`（[認証・認可仕様](authn-authz.md)参照）
+- **認可用の`tenant_id`**: リクエストを、そのメソッドの入力メッセージの定義で動的に
+  デコードし、**名前が`tenant_id`の**stringフィールドを読む（フィールド番号は
+  メッセージによって違うので決め打ちしない）。定義はバックエンドのgRPC Server Reflection
+  （`grpc.reflection.v1`）から取得してサービスごとにキャッシュする。Reflectionを使えない
+  バックエンドは、`-external-backend-descriptor-sets`に`"<プレフィックス>=<FileDescriptorSetの
+  ファイル>"`（`buf build -o x.binpb`等）を渡す。`tenant_id`を持たないメッセージ、または
+  定義を解決できない場合は「空の`tenant_id`」として扱う（組み込みと同じく、テナント横断の
+  ロールしか通らない）
+- **バックエンドへ渡るもの**: 組み込みのバックエンドと同じく、信頼済みの呼び出し元情報
+  （`x-kyuusha-caller-sub`等、`internal/authn/propagate.go`）だけ。クライアント自身の
+  メタデータ（bearerトークンを含む）は渡さない。外部バックエンドは「認証・認可はgatewayが
+  済ませている」バックエンドとして実装する
+- **gateway→バックエンド間**: 既存の東西通信と同じmTLS（`internal/mtls`）
+
 ## ラベルとアノテーション
 
 Subnet・NetworkInterface・VirtualMachineは`meta.labels`/`meta.annotations`（任意の
