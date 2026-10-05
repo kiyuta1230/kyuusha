@@ -385,16 +385,6 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 		}
 	}
 
-	r.svc.releaseHypervisorCapacity(ctx, oldHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
-	r.svc.releasePciDevices(ctx, oldHypervisor, oldPciDevices)
-	r.svc.releaseNumaNode(ctx, oldHypervisor, oldNumaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
-	payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
-	msg := nats.NewMsg(CmdSubjectDelete(oldHypervisor))
-	msg.Data = payload
-	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
-		slog.Error("migrate: publish cleanup command to old hypervisor failed", "vm_id", vm.Meta.ID, "old_hypervisor", oldHypervisor, "err", err)
-	}
-
 	vm.Status.Hypervisor = newHypervisor
 	vm.Status.AllocatedPciDevices = newPciDevices
 	vm.Status.AllocatedNumaNode = newNumaNode
@@ -427,6 +417,22 @@ func (r *Reconciler) migrateVM(ctx context.Context, vm VirtualMachine) {
 		if pendingRootDiskURL != "" {
 			r.deleteMigrationArtifact(ctx, oldHypervisor, pendingRootDiskURL)
 		}
+		return
+	}
+
+	// Only once the move is recorded: releasing old_hypervisor's capacity
+	// (and tearing the VM down there) before the Update above lands made a
+	// conflicting Update -- which leaves the VM Migrating on
+	// old_hypervisor, to be retried -- release it a second time on the
+	// retry, driving its allocated_* negative.
+	r.svc.releaseHypervisorCapacity(ctx, oldHypervisor, vm.Spec.VCPU, vm.Spec.MemoryMB)
+	r.svc.releasePciDevices(ctx, oldHypervisor, oldPciDevices)
+	r.svc.releaseNumaNode(ctx, oldHypervisor, oldNumaNode, vm.Spec.VCPU, vm.Spec.MemoryMB)
+	payload, _ := json.Marshal(DeleteCommand{VMID: vm.Meta.ID})
+	msg := nats.NewMsg(CmdSubjectDelete(oldHypervisor))
+	msg.Data = payload
+	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
+		slog.Error("migrate: publish cleanup command to old hypervisor failed", "vm_id", vm.Meta.ID, "old_hypervisor", oldHypervisor, "err", err)
 	}
 }
 
@@ -527,6 +533,24 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 		return nil, fmt.Errorf("%w: no other hypervisor has room for the new size either", ErrHypervisorCapacityExceeded)
 	}
 
+	vm.Spec.VCPU = vcpu
+	vm.Spec.MemoryMB = memoryMB
+	vm.Status.Hypervisor = newHypervisor
+	vm.Status.AllocatedPciDevices = newPciDevices
+	vm.Status.AllocatedNumaNode = newNumaNode
+	out, err := r.svc.store.Update(ctx, vm)
+	if err != nil {
+		// The VM object is unchanged (still on oldHypervisor at the old
+		// size, still holding its reservation and root disk there): undo
+		// only the new reservation.
+		r.svc.releaseHypervisorCapacity(ctx, newHypervisor, vcpu, memoryMB)
+		r.svc.releasePciDevices(ctx, newHypervisor, newPciDevices)
+		r.svc.releaseNumaNode(ctx, newHypervisor, newNumaNode, vcpu, memoryMB)
+		return nil, err
+	}
+	// Only once the move is recorded, same as migrateVM: before it, a
+	// failed Update would have left the VM pointing at a hypervisor that
+	// had already deleted its root disk.
 	r.svc.releaseHypervisorCapacity(ctx, oldHypervisor, oldVCPU, oldMemoryMB)
 	r.svc.releasePciDevices(ctx, oldHypervisor, oldPciDevices)
 	r.svc.releaseNumaNode(ctx, oldHypervisor, oldNumaNode, oldVCPU, oldMemoryMB)
@@ -535,28 +559,6 @@ func (r *Reconciler) ResizeWithMigration(ctx context.Context, tenantID, id strin
 	msg.Data = payload
 	if _, err := r.js.PublishMsg(ctx, msg); err != nil {
 		slog.Error("resize: publish cleanup command to old hypervisor failed", "vm_id", vm.Meta.ID, "old_hypervisor", oldHypervisor, "err", err)
-	}
-
-	vm.Spec.VCPU = vcpu
-	vm.Spec.MemoryMB = memoryMB
-	vm.Status.Hypervisor = newHypervisor
-	vm.Status.AllocatedPciDevices = newPciDevices
-	vm.Status.AllocatedNumaNode = newNumaNode
-	out, err := r.svc.store.Update(ctx, vm)
-	if err != nil {
-		// Compensate both sides of the reservation swap so accounting
-		// matches the still-unchanged VM object (still on oldHypervisor at
-		// the old size) -- same Saga-style compensating-action shape
-		// Resize's own rollback and reconcile() already use elsewhere.
-		r.svc.releaseHypervisorCapacity(ctx, newHypervisor, vcpu, memoryMB)
-		r.svc.releasePciDevices(ctx, newHypervisor, newPciDevices)
-		r.svc.releaseNumaNode(ctx, newHypervisor, newNumaNode, vcpu, memoryMB)
-		if rerr := r.svc.reserveHypervisorCapacity(ctx, oldHypervisor, oldVCPU, oldMemoryMB); rerr != nil {
-			slog.Error("resize: failed to restore old hypervisor reservation after Update failure", "vm_id", vm.Meta.ID, "err", rerr)
-		}
-		r.svc.restorePciDevices(ctx, oldHypervisor, oldPciDevices)
-		r.svc.restoreNumaNode(ctx, oldHypervisor, oldNumaNode, oldVCPU, oldMemoryMB)
-		return nil, err
 	}
 
 	usage := r.svc.usage[tenantID]

@@ -568,18 +568,6 @@ func (s *Service) releasePciDevices(ctx context.Context, id string, addresses []
 	s.setPciDevicesAllocated(ctx, id, addresses, false)
 }
 
-// restorePciDevices re-marks the exact addresses releasePciDevices
-// previously freed as Allocated again on Hypervisor id -- a rollback's
-// compensating action, deliberately not a fresh reservePciDevices call:
-// this restores the *specific* devices a still-persisted VM object's
-// AllocatedPciDevices already claims (its own Update having failed, so the
-// store's copy never changed), which a new reservePciDevices search could
-// satisfy with *different* addresses instead if something else raced in
-// between. Best-effort, same reasoning as releasePciDevices.
-func (s *Service) restorePciDevices(ctx context.Context, id string, addresses []string) {
-	s.setPciDevicesAllocated(ctx, id, addresses, true)
-}
-
 func (s *Service) setPciDevicesAllocated(ctx context.Context, id string, addresses []string, allocated bool) {
 	if len(addresses) == 0 {
 		return
@@ -630,12 +618,8 @@ func (s *Service) reserveNumaNode(ctx context.Context, id string, vcpu int32, me
 }
 
 // adjustNumaNode adds deltaVCPU/deltaMemoryMB to nodeID's AllocatedVCPU/
-// AllocatedMemoryMB on Hypervisor id -- release (negative deltas) and
-// restore (positive deltas, undoing a rollback the same way
-// restorePciDevices undoes releasePciDevices) share this one function,
-// since unlike PCI addresses there's no "which specific thing" to
-// re-search for: nodeID is already known from the original reserveNumaNode
-// call. Best-effort, same reasoning as releasePciDevices/restorePciDevices.
+// AllocatedMemoryMB on Hypervisor id (release passes negative deltas).
+// Best-effort, same reasoning as releasePciDevices.
 func (s *Service) adjustNumaNode(ctx context.Context, id string, nodeID int32, deltaVCPU int32, deltaMemoryMB int64) {
 	if nodeID == UnpinnedNumaNode {
 		return
@@ -658,12 +642,6 @@ func (s *Service) adjustNumaNode(ctx context.Context, id string, nodeID int32, d
 // releaseNumaNode releases a NUMA-pinned VM's reservation on Hypervisor id.
 func (s *Service) releaseNumaNode(ctx context.Context, id string, nodeID int32, vcpu int32, memoryMB int64) {
 	s.adjustNumaNode(ctx, id, nodeID, -vcpu, -memoryMB)
-}
-
-// restoreNumaNode undoes a rollback of releaseNumaNode -- see
-// adjustNumaNode's doc comment.
-func (s *Service) restoreNumaNode(ctx context.Context, id string, nodeID int32, vcpu int32, memoryMB int64) {
-	s.adjustNumaNode(ctx, id, nodeID, vcpu, memoryMB)
 }
 
 // SchedulingStrategy picks among candidates that already satisfy every hard

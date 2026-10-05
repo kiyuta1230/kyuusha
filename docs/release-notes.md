@@ -7,6 +7,13 @@
 
 ## 2026-10-05
 
+- **Migrate／Resize（`allow_migrate`）が、最後のVMの更新に失敗した時に旧ホストの容量を
+  二重に解放していたのを直した**。旧ホストの容量の解放と削除コマンドの送信を、VMの更新が
+  成功するより前にしていたため、`resource_version`の競合で更新が失敗するとMigrateは
+  リトライの度に旧ホストの容量をもう一度解放し（playgroundでHypervisorの`allocated_vcpu`が
+  負になった）、Resizeは旧ホストに削除コマンド（ルートディスクの削除）を送ったままVMを
+  旧ホストに残していた。どちらも更新の成功後に行うようにした（A9の実装順序6のplayground
+  検証中に発見）
 - **NIC単位のACL（`ingress_rules`/`egress_rules`）を廃止し、`SecurityGroup`に置き換えた**
   （kyuusha-vpcからの変更依頼A10）。設計: [architecture.md「SecurityGroup」](architecture.md)、
   仕様: [network.md「SecurityGroup」](specs/network.md)・[snap.md](specs/snap.md)
