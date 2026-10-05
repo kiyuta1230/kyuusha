@@ -21,14 +21,13 @@ func TestApplyAndRemove(t *testing.T) {
 	t.Cleanup(func() { Remove(tap) })
 
 	iface := Interface{
-		TapName:    tap,
-		SubnetCIDR: "10.123.45.0/24",
-		GatewayIP:  "10.123.45.1",
-		IngressRules: []FirewallRule{
-			{Protocol: "tcp", PortRange: "22", SourceCIDR: "0.0.0.0/0", Action: "allow"},
+		TapName:   tap,
+		GatewayIP: "10.123.45.1",
+		IngressRules: []Rule{
+			{Protocol: "tcp", PortRange: "22", CIDR: "0.0.0.0/0"},
 		},
-		EgressRules: []FirewallRule{
-			{Protocol: "tcp", PortRange: "443", SourceCIDR: "0.0.0.0/0", Action: "allow"},
+		EgressRules: []Rule{
+			{Protocol: "tcp", PortRange: "443", CIDR: "0.0.0.0/0"},
 		},
 	}
 	if err := Apply(iface); err != nil {
@@ -52,7 +51,7 @@ func TestApplyAndRemove(t *testing.T) {
 		t.Fatalf("ruleset missing the egress rule's tcp dport 443 match:\n%s", ruleset)
 	}
 
-	// Re-Apply (e.g. UpdateFirewallRules changing the rule set) must not
+	// Re-Apply (e.g. update_acl changing the rule set) must not
 	// duplicate rules -- flush-then-reload the tap's own two chains, and
 	// must not add a second, redundant pair of jump rules into the shared
 	// base chain.
@@ -85,28 +84,54 @@ func TestApplyAndRemove(t *testing.T) {
 	}
 }
 
-// TestApplyAnyProtocolRule covers the empty-Protocol ("any protocol")
-// rule shape Service.EffectiveFirewallRules emits for mesh_group-derived
-// synthetic rules -- writeRule silently dropped this case entirely until
-// a real playground mesh_group test caught it (a unit test alone hadn't).
-func TestApplyAnyProtocolRule(t *testing.T) {
+// TestSetRules covers a rule naming an address set: the set exists in
+// both tables, the rule matches @set, UpdateSets deltas/full copies change
+// its members, and Remove of the last referencing tap deletes it.
+func TestSetRules(t *testing.T) {
 	const tap = "nftacltest1"
 	t.Cleanup(func() { Remove(tap) })
 
 	iface := Interface{
 		TapName:      tap,
-		SubnetCIDR:   "10.124.0.0/24",
-		IngressRules: []FirewallRule{{SourceCIDR: "10.125.0.0/24", Action: "allow"}},
-		EgressRules:  []FirewallRule{{SourceCIDR: "10.125.0.0/24", Action: "allow"}},
+		IngressRules: []Rule{{Set: "sg:sg-1"}},
+		EgressRules:  []Rule{{CIDR: "0.0.0.0/0"}, {CIDR: "::/0", Protocol: "tcp"}},
+		Sets:         []SetUpdate{{Name: "sg:sg-1", Full: true, Members: []string{"10.125.0.5"}}},
 	}
 	if err := Apply(iface); err != nil {
 		t.Skipf("skipping: nftables manipulation needs CAP_NET_ADMIN: %v", err)
 	}
-
+	set := setName("sg:sg-1")
 	ruleset := mustListRuleset(t)
-	// Both chains, in both the bridge and the inet (routed) table.
-	if strings.Count(ruleset, "10.125.0.0/24") != 4 {
-		t.Fatalf("expected the any-protocol rule in both %s/%s chains of both tables, got:\n%s", inChain(tap), outChain(tap), ruleset)
+	if strings.Count(ruleset, "ip saddr @"+set) != 2 {
+		t.Fatalf("expected the set rule in the -out chain of both tables, got:\n%s", ruleset)
+	}
+	members := func() []string {
+		m, ok, err := setElements(set)
+		if err != nil || !ok {
+			t.Fatalf("setElements: ok=%v err=%v", ok, err)
+		}
+		return m
+	}
+	if got := members(); len(got) != 1 || got[0] != "10.125.0.5" {
+		t.Fatalf("members = %v", got)
+	}
+	if err := UpdateSets([]SetUpdate{{Name: "sg:sg-1", Add: []string{"10.125.0.6"}, Remove: []string{"10.125.0.5"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := members(); len(got) != 1 || got[0] != "10.125.0.6" {
+		t.Fatalf("after delta: members = %v", got)
+	}
+	if err := UpdateSets([]SetUpdate{{Name: "sg:sg-1", Full: true, Members: []string{"10.125.0.7", "10.125.0.8"}}, {Name: "sg:not-here", Add: []string{"10.0.0.1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := members(); len(got) != 2 {
+		t.Fatalf("after full copy: members = %v", got)
+	}
+	if err := Remove(tap); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := setElements(set); ok {
+		t.Fatal("set still exists after its last referencing tap was removed")
 	}
 }
 

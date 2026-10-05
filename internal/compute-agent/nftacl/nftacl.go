@@ -42,9 +42,18 @@
 // forwarded packet touches two taps, e.g. VM-to-VM on the same bridge, so
 // the *other* tap's own jump rule still needs to run; `return` continues
 // the base chain rather than terminating packet evaluation early the way
-// `accept` would) for each recognized allow, or a terminal `drop` for a
-// recognized deny or an unmatched packet (default-deny once inside a
-// tap's own chain). Neither jump rule nor its target chain ever issues
+// `accept` would) for each allow rule (SecurityGroup rules are allow-only),
+// or a terminal `drop` for an unmatched packet (default-deny once inside a
+// tap's own chain).
+//
+// # Address sets
+//
+// A rule whose peer is a SecurityGroup or a Network names an address set
+// ("sg:<id>", "network:<id>") instead of carrying addresses: it becomes
+// `ip daddr @<set>` / `ip saddr @<set>` against a named nftables set of
+// that table (see setName), shared by every tap whose rules reference it.
+// A membership change is then one set update (UpdateSets), not a rewrite
+// of every referencing tap's chains -- see docs/specs/snap.md. Neither jump rule nor its target chain ever issues
 // `accept` itself -- the base chain's own `policy accept` is what finally
 // allows a packet once every relevant tap's chain has returned instead of
 // dropping.
@@ -65,7 +74,7 @@
 // the same bridge. Traffic the host routes -- a VM leaving its Subnet via
 // its gateway_ip (which lives on the bridge itself), or one bridge to
 // another when ip_forward is on (Docker, for one, turns it on) -- never
-// passes it, and would otherwise skip ingress_rules/egress_rules
+// passes it, and would otherwise skip the SecurityGroup rules
 // entirely, the host quietly acting as a router between tenants. So the
 // same per-tap chains are written again into an inet-family table, hooked
 // on forward/input/output and keyed by (bridge, VM IP) rather than the
@@ -74,36 +83,54 @@
 package nftacl
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-// FirewallRule mirrors snap.FirewallRule -- its own copy, not an import,
-// same "each layer has its own mirror struct" convention as netsetup's own
-// types.
-type FirewallRule struct {
-	Protocol   string // tcp/udp/icmp
-	PortRange  string // e.g. "22", "2379-2380"; ignored for icmp
-	SourceCIDR string // the peer CIDR: who may reach the VM (IngressRules) or which peers the VM may reach (EgressRules)
-	Action     string // allow/deny
+// Rule mirrors snap's vmm.PolicyRule -- its own copy, not an import, same
+// "each layer has its own mirror struct" convention as netsetup's own
+// types. Allow-only: traffic to/from CIDR or any member of Set (exactly
+// one), optionally narrowed to Protocol ("": any) and PortRange
+// (destination port(s), tcp/udp; "": all).
+type Rule struct {
+	Protocol  string
+	PortRange string
+	CIDR      string
+	Set       string
+}
+
+// SetUpdate changes one named address set: Full replaces its members,
+// otherwise Add/Remove apply.
+type SetUpdate struct {
+	Name    string
+	Full    bool
+	Members []string
+	Add     []string
+	Remove  []string
 }
 
 type Interface struct {
-	TapName    string
-	SubnetCIDR string
-	GatewayIP  string
+	TapName   string
+	GatewayIP string
 	// IPAddress/MACAddress are the VM's own allocated address on this
 	// interface -- the only source IPv4/MAC (including ARP sender fields)
 	// the anti-spoofing chain lets the VM send from (see writeAntiSpoof).
 	IPAddress  string
 	MACAddress string
 
-	IngressRules []FirewallRule
-	EgressRules  []FirewallRule
+	IngressRules []Rule
+	EgressRules  []Rule
+	// Sets are full contents to install (sets the rules reference but
+	// that aren't listed here keep whatever members they already have).
+	Sets []SetUpdate
 }
 
 const (
@@ -145,6 +172,14 @@ func Apply(iface Interface) error {
 	}
 	fmt.Fprintf(&setup, "add chain inet %s %s\n", table, inChain(iface.TapName))
 	fmt.Fprintf(&setup, "add chain inet %s %s\n", table, outChain(iface.TapName))
+	for _, name := range referencedSets(iface) {
+		for _, fam := range []string{"bridge", "inet"} {
+			fmt.Fprintf(&setup, "add set %s %s %s { type ipv4_addr; }\n", fam, table, setName(name))
+		}
+	}
+	for _, u := range iface.Sets {
+		writeSetContents(&setup, u.Name, u.Members)
+	}
 	if err := run(setup.String()); err != nil {
 		return err
 	}
@@ -154,7 +189,7 @@ func Apply(iface Interface) error {
 	writeTapChains(&rules, "inet", iface)
 	// Unknown address (either one empty) leaves any previously installed
 	// anti-spoofing chain untouched rather than flushing it: re-Apply's
-	// only post-boot caller (UpdateFirewallRules) changes rules, never the
+	// only post-boot caller (update_acl) changes rules, never the
 	// interface's address, so "don't know" must never mean "stop checking".
 	antiSpoof := iface.IPAddress != "" && iface.MACAddress != ""
 	if antiSpoof {
@@ -208,7 +243,7 @@ func ensureRoutedJumps(tapName, ip string) error {
 }
 
 // writeTapChains (re)writes tapName's -in/-out chains in fam's table:
-// baseline, then the tenant's rules, then default drop.
+// baseline, then the allow rules, then default drop.
 func writeTapChains(b *strings.Builder, fam string, iface Interface) {
 	in, out := inChain(iface.TapName), outChain(iface.TapName)
 	fmt.Fprintf(b, "flush chain %s %s %s\n", fam, table, in)
@@ -218,8 +253,8 @@ func writeTapChains(b *strings.Builder, fam string, iface Interface) {
 	// (Matching the VM's own side instead -- saddr on -in, daddr on -out --
 	// is always true once anti-spoofing pins the VM to its own IP, which
 	// would make every rule below unreachable.)
-	writeBaseline(b, fam, in, iface.SubnetCIDR, iface.GatewayIP, "daddr")
-	writeBaseline(b, fam, out, iface.SubnetCIDR, iface.GatewayIP, "saddr")
+	writeBaseline(b, fam, in, iface.GatewayIP, "daddr")
+	writeBaseline(b, fam, out, iface.GatewayIP, "saddr")
 	for _, r := range iface.EgressRules {
 		writeRule(b, fam, in, r, "daddr") // VM -> remote peer: peer is the destination
 	}
@@ -245,62 +280,202 @@ func writeAntiSpoof(b *strings.Builder, chain, ip, mac string) {
 	fmt.Fprintf(b, "add rule bridge %s %s drop\n", table, chain)
 }
 
-// writeBaseline adds the always-allow rules every tap chain gets
-// regardless of its own ingress_rules/egress_rules: established/related
-// connections, traffic within the interface's own Subnet CIDR, and the
-// Subnet's gateway_ip -- the defense-in-depth default-deny-outside-CIDR
-// baseline docs/architecture.md's「防御層としてのNetworkInterface ACL」
-// describes, now actually enforced. `return`, not `accept` -- see the
-// package doc comment for why.
+// writeBaseline adds what every tap chain lets through regardless of its
+// SecurityGroups -- the host's own basic plumbing, without which a VM
+// can't communicate at all even with groups allowing it: established/
+// related connections, ARP, and the Subnet's gateway_ip. Nothing else: in
+// particular not the rest of the VM's own Subnet (same-Network traffic is
+// a Network's default SecurityGroup's rule, visible and removable).
+// `return`, not `accept` -- see the package doc comment for why.
 //
-// ARP is always let through here too: without it, two VMs on the same
-// bridge can never resolve each other's MAC in the first place (ARP is
-// not IPv4, so no ip saddr/daddr baseline rule matches it, and conntrack
-// doesn't track it). Whether an ARP frame is legitimate is the
-// anti-spoofing chain's job (see writeAntiSpoof), not this one's.
-func writeBaseline(b *strings.Builder, fam, chain, subnetCIDR, gatewayIP, addrKeyword string) {
+// ARP is let through because it isn't IPv4 (no ip saddr/daddr rule
+// matches it) and conntrack doesn't track it; whether an ARP frame is
+// legitimate is the anti-spoofing chain's job (see writeAntiSpoof).
+func writeBaseline(b *strings.Builder, fam, chain, gatewayIP, addrKeyword string) {
 	fmt.Fprintf(b, "add rule %s %s %s ct state established,related return\n", fam, table, chain)
 	if fam == "bridge" { // inet hooks never see ARP
 		fmt.Fprintf(b, "add rule %s %s %s ether type arp return\n", fam, table, chain)
-	}
-	if subnetCIDR != "" {
-		fmt.Fprintf(b, "add rule %s %s %s ip %s %s return\n", fam, table, chain, addrKeyword, subnetCIDR)
 	}
 	if gatewayIP != "" {
 		fmt.Fprintf(b, "add rule %s %s %s ip %s %s return\n", fam, table, chain, addrKeyword, gatewayIP)
 	}
 }
 
-func writeRule(b *strings.Builder, fam, chain string, r FirewallRule, addrKeyword string) {
-	verdict := "return" // allow: this direction checks out, let the other tap's jump (if any) still run
-	if r.Action == "deny" {
-		verdict = "drop" // deny is terminal: no need to wait on the other side
+func writeRule(b *strings.Builder, fam, chain string, r Rule, addrKeyword string) {
+	var match []string
+	v6 := false
+	switch {
+	case r.Set != "":
+		match = append(match, fmt.Sprintf("ip %s @%s", addrKeyword, setName(r.Set)))
+	case r.CIDR != "":
+		ip, _, err := net.ParseCIDR(r.CIDR)
+		if err != nil {
+			return // validated upstream; skip rather than emit a malformed rule
+		}
+		if ip.To4() == nil {
+			v6 = true
+			match = append(match, fmt.Sprintf("ip6 %s %s", addrKeyword, r.CIDR))
+		} else {
+			match = append(match, fmt.Sprintf("ip %s %s", addrKeyword, r.CIDR))
+		}
+	default:
+		return
 	}
-	// "" means "any protocol" -- not reachable from a tenant-submitted rule
-	// (internal/network's validateFirewallRules requires tcp/udp/icmp), but
-	// used by mesh_group-derived synthetic rules (see
-	// Service.EffectiveFirewallRules), which trust a sibling Subnet's
-	// entire CIDR, not just specific protocols/ports.
-	var proto string
 	switch r.Protocol {
 	case "tcp", "udp":
-		proto = fmt.Sprintf("%s dport %s", r.Protocol, r.PortRange)
+		switch {
+		case r.PortRange != "":
+			match = append(match, fmt.Sprintf("%s dport %s", r.Protocol, r.PortRange))
+		case v6:
+			match = append(match, "meta l4proto "+r.Protocol)
+		default:
+			match = append(match, "ip protocol "+r.Protocol)
+		}
 	case "icmp":
-		proto = "ip protocol icmp"
+		if v6 {
+			match = append(match, "meta l4proto ipv6-icmp")
+		} else {
+			match = append(match, "ip protocol icmp")
+		}
 	case "":
-		proto = ""
 	default:
-		return // validated upstream (internal/network's validateFirewallRules); defensively skip an unrecognized protocol rather than emit a malformed rule
+		return // validated upstream
 	}
-	switch {
-	case r.SourceCIDR != "" && proto != "":
-		fmt.Fprintf(b, "add rule %s %s %s ip %s %s %s %s\n", fam, table, chain, addrKeyword, r.SourceCIDR, proto, verdict)
-	case r.SourceCIDR != "":
-		fmt.Fprintf(b, "add rule %s %s %s ip %s %s %s\n", fam, table, chain, addrKeyword, r.SourceCIDR, verdict)
-	case proto != "":
-		fmt.Fprintf(b, "add rule %s %s %s %s %s\n", fam, table, chain, proto, verdict)
-	default:
-		fmt.Fprintf(b, "add rule %s %s %s %s\n", fam, table, chain, verdict) // any protocol, any address -- a blanket allow/deny
+	fmt.Fprintf(b, "add rule %s %s %s %s return\n", fam, table, chain, strings.Join(match, " "))
+}
+
+// setName is the nftables name of address set name: a short hash, since
+// set names are length-limited and "sg:<id>" has a character nft doesn't
+// allow there.
+func setName(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return "ks_" + hex.EncodeToString(sum[:6])
+}
+
+func referencedSets(iface Interface) []string {
+	var out []string
+	for _, rs := range [][]Rule{iface.IngressRules, iface.EgressRules} {
+		for _, r := range rs {
+			if r.Set != "" && !slices.Contains(out, r.Set) {
+				out = append(out, r.Set)
+			}
+		}
+	}
+	for _, u := range iface.Sets {
+		if !slices.Contains(out, u.Name) {
+			out = append(out, u.Name)
+		}
+	}
+	return out
+}
+
+// writeSetContents replaces set name's members (in both tables).
+// Non-IPv4 members are skipped: the sets are ipv4_addr.
+func writeSetContents(b *strings.Builder, name string, members []string) {
+	var elems []string
+	for _, m := range members {
+		if ip := net.ParseIP(m); ip != nil && ip.To4() != nil {
+			elems = append(elems, m)
+		}
+	}
+	for _, fam := range []string{"bridge", "inet"} {
+		fmt.Fprintf(b, "flush set %s %s %s\n", fam, table, setName(name))
+		if len(elems) > 0 {
+			fmt.Fprintf(b, "add element %s %s %s { %s }\n", fam, table, setName(name), strings.Join(elems, ", "))
+		}
+	}
+}
+
+// UpdateSets applies address-set changes to the sets this host has (one
+// some tap's rules reference); others are skipped. A delta is applied by
+// reading the current members and rewriting the set, all in one nft
+// transaction per set.
+func UpdateSets(updates []SetUpdate) error {
+	for _, u := range updates {
+		current, ok, err := setElements(setName(u.Name))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		members := u.Members
+		if !u.Full {
+			members = current
+			for _, a := range u.Add {
+				if !slices.Contains(members, a) {
+					members = append(members, a)
+				}
+			}
+			members = slices.DeleteFunc(members, func(m string) bool { return slices.Contains(u.Remove, m) })
+		}
+		var b strings.Builder
+		writeSetContents(&b, u.Name, members)
+		if err := run(b.String()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setElements reads a set's members from the bridge table; ok=false if
+// the set doesn't exist.
+func setElements(nftName string) ([]string, bool, error) {
+	out, err := exec.Command("nft", "-j", "list", "set", "bridge", table, nftName).CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "No such file or directory") {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("nftacl: nft -j list set %s: %w: %s", nftName, err, strings.TrimSpace(string(out)))
+	}
+	var parsed struct {
+		Nftables []struct {
+			Set *struct {
+				Elem []any `json:"elem"`
+			} `json:"set"`
+		} `json:"nftables"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return nil, false, fmt.Errorf("nftacl: parse nft -j list set output: %w", err)
+	}
+	var elems []string
+	for _, item := range parsed.Nftables {
+		if item.Set == nil {
+			continue
+		}
+		for _, e := range item.Set.Elem {
+			if s, ok := e.(string); ok {
+				elems = append(elems, s)
+			}
+		}
+	}
+	return elems, true, nil
+}
+
+// removeUnusedSets deletes every address set no rule references any more
+// (nft refuses to delete one still in use, which is exactly the check).
+func removeUnusedSets() {
+	for _, fam := range []string{"bridge", "inet"} {
+		out, err := exec.Command("nft", "-j", "list", "sets", fam).CombinedOutput()
+		if err != nil {
+			continue
+		}
+		var parsed struct {
+			Nftables []struct {
+				Set *struct {
+					Name  string `json:"name"`
+					Table string `json:"table"`
+				} `json:"set"`
+			} `json:"nftables"`
+		}
+		if json.Unmarshal(out, &parsed) != nil {
+			continue
+		}
+		for _, item := range parsed.Nftables {
+			if item.Set != nil && item.Set.Table == table && strings.HasPrefix(item.Set.Name, "ks_") {
+				_ = run(fmt.Sprintf("delete set %s %s %s\n", fam, table, item.Set.Name))
+			}
+		}
 	}
 }
 
@@ -308,7 +483,7 @@ func writeRule(b *strings.Builder, fam, chain string, r FirewallRule, addrKeywor
 // entry of jumps (target chain -> match expression) unless base already
 // jumps to that target -- checked via `nft -j list chain`, since a plain
 // `add rule` isn't idempotent the way `add table`/`add chain` are (it would
-// append a duplicate jump on every call, e.g. every UpdateFirewallRules
+// append a duplicate jump on every call, e.g. every update_acl re-apply
 // over a VM's lifetime).
 func ensureJumpRules(fam, base string, jumps map[string]string) error {
 	existing, err := jumpTargets(fam, base)
@@ -426,6 +601,7 @@ func Remove(tapName string) error {
 	if len(errs) > 0 {
 		return fmt.Errorf("nftacl: remove %s: %v", tapName, errs)
 	}
+	removeUnusedSets()
 	return nil
 }
 

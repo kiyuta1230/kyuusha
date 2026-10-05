@@ -365,11 +365,13 @@ if [ "$ranged_ip" != "10.0.6.10" ] && [ "$ranged_ip" != "10.0.6.11" ]; then
   exit 1
 fi
 echo "    confirmed: ip_address stayed inside the configured allocatable_ip_ranges"
-if ! echo "$ranged_netif_line" | grep -q 'effective_ingress_rules=[^ ]*10.0.1.0/24'; then
-  echo "!! expected the same-Network Subnet 10.0.1.0/24 among the implicit allows: $ranged_netif_line" >&2
+default_sg="$(go run ./cmd/kyuusha network get -addr=localhost:8080 -tenant="$tenant" -id="$network" | grep -o 'default_security_group=[^ ]*' | cut -d= -f2)"
+if [ -z "$default_sg" ] || ! echo "$ranged_netif_line" | grep -q "security_groups=$default_sg "; then
+  echo "!! expected the Network's default SecurityGroup ($default_sg) on a NIC created without one: $ranged_netif_line" >&2
   exit 1
 fi
-echo "    confirmed: Subnets of the same Network default-allow each other"
+echo "    confirmed: a NIC created without SecurityGroups gets its Network's default group"
+
 
 # wait_for_volume_ready polls until a Volume reaches Ready -- CreateVolume
 # itself only returns Pending now (see docs/open-questions.md「Hypervisor↔

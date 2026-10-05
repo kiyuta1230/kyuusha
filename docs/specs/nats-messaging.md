@@ -27,6 +27,11 @@ ms.<service>.<cmd|evt>.<hypervisor>.<resource-type>.<verb>
 - **EVT（結果報告）**: at-least-once。受信側（control-plane）は`resource_version`による
   楽観的並行性制御で冪等に反映する
 - **EVT（heartbeat）**: ackなしのfire-and-forget。次回送信が数秒後に来るため1回の欠落は無害
+- **network→agent（`NETWORK_CMD`）**: `ms.network.cmd.<hypervisor>.network_interface.update_acl`
+  （NICのSecurityGroupのポリシーの全量。該当tapが配線されるまでackしない）と
+  `ms.network.cmd.<hypervisor>.security_group.update_sets`（アドレス集合の差分と定期的な
+  全量。常にack）。どちらも`internal/network/nats.go`が型を持つ——詳細は[SNAP仕様](snap.md)
+  「ポリシーの変更とホストへの反映」
 
 ## エンコーディング
 

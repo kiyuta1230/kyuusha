@@ -311,15 +311,11 @@ type NetIface struct {
 	DNSServers []string
 	DNSSearch  string
 	// SubnetCIDR is this interface's Subnet's own CIDR (compute.
-	// NetworkInterfaceInfo.CIDR verbatim) -- used by snap's default
-	// nftacl implementation to build the "allow within own Subnet"
-	// baseline (see docs/specs/snap.md),
-	// same CIDR netsetup itself never needed until now.
+	// NetworkInterfaceInfo.CIDR verbatim), passed on to SNAP plugins.
 	SubnetCIDR string
-	// IngressRules/EgressRules are this interface's spec fields as of Boot
-	// time -- see compute.NetworkInterfaceInfo's identically-named fields.
-	IngressRules []FirewallRule
-	EgressRules  []FirewallRule
+	// Policy is what SNAP enforces from boot on -- see
+	// compute.NetworkInterfaceInfo.Policy.
+	Policy SecurityPolicy
 }
 
 // AttachInfo is the part of a VNAP/SNAP plugin payload describing the
@@ -350,16 +346,43 @@ type ACLUpdate struct {
 	GatewayIP    string
 	IPAddress    string
 	MACAddress   string
-	IngressRules []FirewallRule
-	EgressRules  []FirewallRule
+	Policy       SecurityPolicy
 }
 
-// FirewallRule mirrors compute.FirewallRuleInfo/network.FirewallRule -- its
-// own copy, not an import, same "no dependency on compute" convention as
-// every other vmm-local mirror type (e.g. UnpinnedNumaNode).
-type FirewallRule struct {
-	Protocol   string
-	PortRange  string
-	SourceCIDR string
-	Action     string
+// SecurityPolicy is one interface's enforced policy, in the SNAP payload's
+// own JSON shape (docs/specs/snap.md): its SecurityGroups' merged allow
+// rules, whose group/Network peers stay references to named address sets,
+// plus full copies of those sets. Mirrors compute.SecurityPolicyInfo/
+// network.SecurityPolicyInfo -- its own copy, same "no dependency on
+// compute" convention as every other vmm-local mirror type.
+type SecurityPolicy struct {
+	SecurityGroupIDs []string     `json:"security_group_ids,omitempty"`
+	IngressRules     []PolicyRule `json:"ingress_rules,omitempty"`
+	EgressRules      []PolicyRule `json:"egress_rules,omitempty"`
+	// Sets in a policy are always complete contents (Full is implied).
+	Sets []SetUpdate `json:"sets,omitempty"`
+}
+
+// PolicyRule allows traffic to/from CIDR or any member of Set (exactly one
+// is set), optionally narrowed to Protocol ("": any) and PortRange
+// (destination port(s), tcp/udp; "": all).
+type PolicyRule struct {
+	Protocol  string `json:"protocol,omitempty"`
+	PortRange string `json:"port_range,omitempty"`
+	CIDR      string `json:"cidr,omitempty"`
+	Set       string `json:"set,omitempty"`
+}
+
+// SetUpdate changes one named address set (e.g. "sg:<id>",
+// "network:<id>"): Full (or appearing in a SecurityPolicy) replaces its
+// members with Members; otherwise Add/Remove apply. Version is the etcd
+// revision it reflects -- see internal/compute-agent/snap's version
+// tracking.
+type SetUpdate struct {
+	Name    string   `json:"name"`
+	Version int64    `json:"version"`
+	Full    bool     `json:"full,omitempty"`
+	Members []string `json:"members,omitempty"`
+	Add     []string `json:"add,omitempty"`
+	Remove  []string `json:"remove,omitempty"`
 }

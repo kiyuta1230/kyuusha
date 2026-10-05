@@ -6,22 +6,16 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/resource"
 )
 
-type FirewallRule struct {
-	Protocol   string
-	PortRange  string
-	SourceCIDR string
-	Action     string
-}
-
 type NetworkInterfaceSpec struct {
 	VMID string
 	// SubnetID pins a Subnet; empty means NetworkID+Zone and kyuusha picks
 	// one at allocation time (Status.SubnetID).
-	SubnetID     string
-	NetworkID    string
-	Zone         string
-	IngressRules []FirewallRule // traffic allowed *into* the VM
-	EgressRules  []FirewallRule // traffic allowed *out of* the VM
+	SubnetID  string
+	NetworkID string
+	Zone      string
+	// SecurityGroupIDs are the attached groups; Create fills in the
+	// Network's default group when none are given.
+	SecurityGroupIDs []string
 }
 
 type NetworkInterfacePhase string

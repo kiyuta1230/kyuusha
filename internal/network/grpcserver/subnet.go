@@ -111,13 +111,13 @@ func (s *SubnetServer) SetStatusValues(ctx context.Context, req *networkv1.SetSu
 func toStatus(err error) error {
 	switch {
 	case errors.Is(err, network.ErrSubnetNotFound), errors.Is(err, network.ErrNetworkInterfaceNotFound),
-		errors.Is(err, network.ErrNetworkNotFound), errors.Is(err, network.ErrNetworkClassNotFound), errors.Is(err, network.ErrAllocationPoolNotFound):
+		errors.Is(err, network.ErrNetworkNotFound), errors.Is(err, network.ErrNetworkClassNotFound), errors.Is(err, network.ErrAllocationPoolNotFound), errors.Is(err, network.ErrSecurityGroupNotFound):
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, network.ErrSubnetConflict), errors.Is(err, network.ErrNetworkInterfaceConflict),
-		errors.Is(err, network.ErrNetworkConflict), errors.Is(err, network.ErrNetworkClassConflict), errors.Is(err, network.ErrAllocationPoolConflict):
+		errors.Is(err, network.ErrNetworkConflict), errors.Is(err, network.ErrNetworkClassConflict), errors.Is(err, network.ErrAllocationPoolConflict), errors.Is(err, network.ErrSecurityGroupConflict):
 		return status.Error(codes.Aborted, err.Error())
 	case errors.Is(err, network.ErrSubnetHistoryPruned), errors.Is(err, network.ErrNetworkInterfaceHistoryPruned),
-		errors.Is(err, network.ErrNetworkHistoryPruned), errors.Is(err, network.ErrNetworkClassHistoryPruned), errors.Is(err, network.ErrAllocationPoolHistoryPruned):
+		errors.Is(err, network.ErrNetworkHistoryPruned), errors.Is(err, network.ErrNetworkClassHistoryPruned), errors.Is(err, network.ErrAllocationPoolHistoryPruned), errors.Is(err, network.ErrSecurityGroupHistoryPruned):
 		return status.Error(codes.OutOfRange, err.Error())
 	case errors.Is(err, network.ErrInUse):
 		return status.Error(codes.FailedPrecondition, err.Error())

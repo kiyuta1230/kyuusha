@@ -31,6 +31,8 @@ message NetworkAttachment {
   string subnet_id = 1;
   bool primary = 2;
   string network_id = 3;
+  // SecurityGroups for this NIC; empty attaches the Network's default group.
+  repeated string security_group_ids = 4;
 }
 
 message VolumeRequest {

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -105,6 +104,7 @@ type Service struct {
 	networks   *resource.Store[Network, *Network]
 	classes    *resource.Store[NetworkClass, *NetworkClass]
 	pools      *resource.Store[AllocationPool, *AllocationPool]
+	secgroups  *resource.Store[SecurityGroup, *SecurityGroup]
 
 	alloc *allocator
 	ips   *ipPool
@@ -122,17 +122,18 @@ type Service struct {
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
 
-	// js is used by publishUpdateACL, to notify whichever hypervisor is
-	// currently running a NetworkInterface's VM that its effective rules
-	// changed: from UpdateFirewallRules (cmd/network), and from a Network's
-	// membership changing (cmd/network-reconciler, see
-	// republishNetworkACLs). nil (most tests) makes it a no-op --
-	// best-effort, never blocks or fails anything (see docs/specs/
-	// network.md「セキュリティバックエンド」).
+	// js is used by publishUpdateACL/publishUpdateSets, to notify
+	// whichever hypervisor is currently running a NetworkInterface's VM
+	// that its SecurityPolicy changed: from SetSecurityGroups
+	// (cmd/network), and from group rule and address-set membership
+	// changes (cmd/network-reconciler, see sgsync.go). nil (most tests)
+	// makes it a no-op -- best-effort, never blocks or fails anything
+	// (see docs/specs/snap.md「ポリシーの変更とホストへの反映」).
 	js jetstream.JetStream
 
 	// AdmissionGate is consulted synchronously before Subnet Create/Update/
-	// Delete and NetworkInterface Create/Update/UpdateFirewallRules (see
+	// Delete, NetworkInterface Create/Update/SetSecurityGroups and
+	// SecurityGroup Create/Update/Delete (see
 	// admit). Zero value (no URLs) allows everything; set by cmd/network's
 	// -admission-webhook-urls.
 	AdmissionGate admissionwebhook.Gate
@@ -173,6 +174,11 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 			NotFound:      ErrAllocationPoolNotFound,
 			Conflict:      ErrAllocationPoolConflict,
 			HistoryPruned: ErrAllocationPoolHistoryPruned,
+		}),
+		secgroups: resource.NewStore[SecurityGroup, *SecurityGroup](etcdClient, "secgroup", resource.StoreErrors{
+			NotFound:      ErrSecurityGroupNotFound,
+			Conflict:      ErrSecurityGroupConflict,
+			HistoryPruned: ErrSecurityGroupHistoryPruned,
 		}),
 		computeClient:  computeClient,
 		identityClient: identityClient,
@@ -327,6 +333,7 @@ func (s *Service) Run(ctx context.Context) error {
 	go s.watchPendingSubnets(ctx)
 	go s.watchPendingNetworkInterfaces(ctx)
 	go s.watchVMPlacement(ctx)
+	go newSGSyncer(s).run(ctx)
 
 	ticker := time.NewTicker(pendingSweepInterval)
 	defer ticker.Stop()
@@ -360,9 +367,6 @@ func (s *Service) watchPendingSubnets(ctx context.Context) {
 	runWatchLoop(ctx, "subnets", func(ctx context.Context, rv int64) (<-chan SubnetEvent, error) { return s.WatchSubnets(ctx, "", rv) }, ErrSubnetHistoryPruned, s.remarkPools, func(e SubnetEvent) {
 		if e.Type == EventDeleted {
 			s.releaseSubnet(e.Object)
-			if len(e.Object.Status.Addresses) > 0 {
-				s.republishNetworkACLs(ctx, e.Object.Meta.TenantID, e.Object.Spec.NetworkID, e.ResourceVersion)
-			}
 			return
 		}
 		if e.Type != EventAdded || e.Object.Status.Phase != SubnetPhasePending {
@@ -686,10 +690,7 @@ func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenant
 	if spec.SubnetID == "" && (spec.NetworkID == "" || spec.Zone == "") {
 		return nil, fmt.Errorf("%w: spec.subnet_id, or spec.network_id and spec.zone, are required", ErrValidation)
 	}
-	if err := validateFirewallRules(spec.IngressRules); err != nil {
-		return nil, err
-	}
-	if err := validateFirewallRules(spec.EgressRules); err != nil {
+	if err := s.validateAttachSecurityGroups(ctx, tenantID, spec.SecurityGroupIDs); err != nil {
 		return nil, err
 	}
 
@@ -736,6 +737,12 @@ func (s *Service) CreateNetworkInterfaceWithMetadata(ctx context.Context, tenant
 	}
 	if network.Meta.DeletedAt != nil {
 		return nil, fmt.Errorf("%w: network %q is being deleted", ErrValidation, network.Meta.ID)
+	}
+	if len(spec.SecurityGroupIDs) == 0 {
+		if network.Status.DefaultSecurityGroupID == "" {
+			return nil, fmt.Errorf("%w: network %q has no default security group yet (not Ready?); name security_group_ids explicitly or retry", ErrValidation, network.Meta.ID)
+		}
+		spec.SecurityGroupIDs = []string{network.Status.DefaultSecurityGroupID}
 	}
 
 	limit, err := lookupQuota(ctx, s.identityClient, tenantID)
@@ -873,14 +880,13 @@ func (s *Service) ListNetworkInterfaces(ctx context.Context, tenantID string) ([
 	return s.interfaces.List(ctx, tenantID)
 }
 
-// UpdateNetworkInterface rejects any request whose spec.ingress_rules/
-// egress_rules differ from the currently-stored value -- UpdateFirewallRules
-// is the only sanctioned path for changing either list (see its own doc
-// comment and the UpdateFirewallRules RPC's doc comment in the proto),
-// since only that path validates the rules and notifies the owning
-// hypervisor via NATS. Without this check, a caller could smuggle a rule
-// change through here and silently desync the enforced host state from
-// etcd.
+// UpdateNetworkInterface rejects any request whose spec.security_group_ids
+// differ from the currently-stored value -- SetSecurityGroups is the only
+// sanctioned path for changing them (see its own doc comment and the RPC's
+// doc comment in the proto), since only that path validates the groups and
+// notifies the owning hypervisor via NATS. Without this check, a caller
+// could smuggle a change through here and silently desync the enforced
+// host state from etcd.
 func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInterface) (*NetworkInterface, error) {
 	if err := resource.ValidateMetadata(resource.Metadata{Labels: iface.Meta.Labels, Annotations: iface.Meta.Annotations}); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
@@ -889,9 +895,8 @@ func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInte
 	if err != nil {
 		return nil, err
 	}
-	if !firewallRulesEqual(current.Spec.IngressRules, iface.Spec.IngressRules) ||
-		!firewallRulesEqual(current.Spec.EgressRules, iface.Spec.EgressRules) {
-		return nil, fmt.Errorf("%w: ingress_rules/egress_rules can only be changed via UpdateFirewallRules", ErrValidation)
+	if !stringsEqual(current.Spec.SecurityGroupIDs, iface.Spec.SecurityGroupIDs) {
+		return nil, fmt.Errorf("%w: security_group_ids can only be changed via SetSecurityGroups", ErrValidation)
 	}
 	finalizers, err := resource.CheckFinalizerMutation(ctx, current.Meta.Finalizers, iface.Meta.Finalizers)
 	if err != nil {
@@ -923,36 +928,26 @@ func (s *Service) UpdateNetworkInterface(ctx context.Context, iface *NetworkInte
 	return &out, nil
 }
 
-// firewallRulesEqual treats nil and empty-but-non-nil as equal (proto
-// decoding of an empty repeated field can go either way depending on the
-// call path) before falling back to reflect.DeepEqual, which does not.
-func firewallRulesEqual(a, b []FirewallRule) bool {
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	return reflect.DeepEqual(a, b)
+// stringsEqual treats nil and empty-but-non-nil as equal (proto decoding
+// of an empty repeated field can go either way depending on the call path).
+func stringsEqual(a, b []string) bool {
+	return len(a) == 0 && len(b) == 0 || slices.Equal(a, b)
 }
 
-// UpdateFirewallRules replaces a NetworkInterface's ingress_rules/
-// egress_rules wholesale (not a delta/merge, same convention as Resize's
-// new_vcpu/new_memory_mb) and best-effort notifies the hypervisor currently
-// running its VM via NATS (see publishUpdateACL) so the change actually
-// takes effect on the host, not just in etcd.
-func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, ingress, egress []FirewallRule) (*NetworkInterface, error) {
-	if err := validateFirewallRules(ingress); err != nil {
+// SetSecurityGroups replaces a NetworkInterface's attached groups
+// wholesale (empty = none, deny all) and best-effort notifies the
+// hypervisor running its VM (see publishUpdateACL); the membership change
+// reaches the other hosts through network-reconciler (sgsync.go).
+func (s *Service) SetSecurityGroups(ctx context.Context, tenantID, id string, ids []string) (*NetworkInterface, error) {
+	if err := s.validateAttachSecurityGroups(ctx, tenantID, ids); err != nil {
 		return nil, err
 	}
-	if err := validateFirewallRules(egress); err != nil {
-		return nil, err
-	}
-
 	n, err := s.interfaces.Get(ctx, tenantID, id)
 	if err != nil {
 		return nil, err
 	}
 	old := n
-	n.Spec.IngressRules = ingress
-	n.Spec.EgressRules = egress
+	n.Spec.SecurityGroupIDs = ids
 	if err := s.admit(ctx, admissionwebhook.Request{
 		Operation: "UPDATE", Resource: "NetworkInterface", TenantID: n.Meta.TenantID, Name: n.Meta.Name, ID: n.Meta.ID,
 		Labels: n.Meta.Labels, Annotations: n.Meta.Annotations, Spec: admissionNetworkInterfaceSpecJSON(n.Spec),
@@ -960,12 +955,10 @@ func (s *Service) UpdateFirewallRules(ctx context.Context, tenantID, id string, 
 	}); err != nil {
 		return nil, err
 	}
-
 	out, err := s.interfaces.Update(ctx, n)
 	if err != nil {
 		return nil, err
 	}
-
 	s.publishUpdateACL(ctx, out, out.Meta.ResourceVersion)
 	return &out, nil
 }
@@ -1006,9 +999,9 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface, vers
 		attach = s.attachContext(ctx, subnet)
 	}
 
-	ingress, egress, err := s.EffectiveFirewallRules(ctx, &n)
+	policy, err := s.SecurityPolicy(ctx, n)
 	if err != nil {
-		slog.Warn("network: resolve effective firewall rules for update_acl failed, skipping notify", "netif_id", n.Meta.ID, "err", err)
+		slog.Warn("network: resolve security policy for update_acl failed, skipping notify", "netif_id", n.Meta.ID, "err", err)
 		return
 	}
 
@@ -1023,8 +1016,7 @@ func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface, vers
 		MACAddress:      n.Status.MACAddress,
 		GatewayIP:       gatewayIP,
 		Attach:          attach,
-		IngressRules:    toFirewallRuleInfos(ingress),
-		EgressRules:     toFirewallRuleInfos(egress),
+		Policy:          policy.ToInfo(),
 		ResourceVersion: max(version, n.Meta.ResourceVersion),
 	}
 	payload, err := json.Marshal(cmd)

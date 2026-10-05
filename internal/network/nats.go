@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -16,9 +17,9 @@ import (
 // itself).
 const cmdStreamName = "NETWORK_CMD"
 
-// CmdSubjectUpdateACL is where UpdateFirewallRules notifies the hypervisor
-// currently running a NetworkInterface's VM that its ingress_rules/
-// egress_rules changed -- see internal/compute-agent/snap and
+// CmdSubjectUpdateACL is where the hypervisor currently running a
+// NetworkInterface's VM is told the interface's SecurityPolicy changed (its
+// groups, or a group's rules) -- see internal/compute-agent/snap and
 // docs/specs/snap.md.
 func CmdSubjectUpdateACL(hypervisor string) string {
 	return fmt.Sprintf("ms.network.cmd.%s.network_interface.update_acl", hypervisor)
@@ -39,25 +40,71 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 	return nil
 }
 
-// FirewallRuleInfo is UpdateACLCommand's JSON-shaped mirror of FirewallRule
-// (same "mirror type, no dependency on the proto package" convention as
-// vmm.NetIface elsewhere in this codebase).
-type FirewallRuleInfo struct {
-	Protocol   string `json:"protocol"`
-	PortRange  string `json:"port_range,omitempty"`
-	SourceCIDR string `json:"source_cidr"`
-	Action     string `json:"action"`
+// PolicyRuleInfo/AddressSetInfo/SecurityPolicyInfo are SecurityPolicy's
+// JSON mirrors (same "mirror type, no dependency on the proto package"
+// convention as vmm.NetIface elsewhere) -- the wire shape docs/specs/snap.md
+// documents.
+type PolicyRuleInfo struct {
+	Protocol  string `json:"protocol,omitempty"`
+	PortRange string `json:"port_range,omitempty"`
+	CIDR      string `json:"cidr,omitempty"`
+	Set       string `json:"set,omitempty"`
 }
 
-func toFirewallRuleInfos(rules []FirewallRule) []FirewallRuleInfo {
-	if len(rules) == 0 {
-		return nil
+type AddressSetInfo struct {
+	Name    string   `json:"name"`
+	Version int64    `json:"version"`
+	Members []string `json:"members"`
+}
+
+type SecurityPolicyInfo struct {
+	SecurityGroupIDs []string         `json:"security_group_ids,omitempty"`
+	IngressRules     []PolicyRuleInfo `json:"ingress_rules,omitempty"`
+	EgressRules      []PolicyRuleInfo `json:"egress_rules,omitempty"`
+	Sets             []AddressSetInfo `json:"sets,omitempty"`
+}
+
+// ToInfo converts p to its wire shape.
+func (p SecurityPolicy) ToInfo() SecurityPolicyInfo {
+	out := SecurityPolicyInfo{SecurityGroupIDs: p.SecurityGroupIDs}
+	for _, r := range p.IngressRules {
+		out.IngressRules = append(out.IngressRules, PolicyRuleInfo(r))
 	}
-	out := make([]FirewallRuleInfo, len(rules))
-	for i, r := range rules {
-		out[i] = FirewallRuleInfo{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action}
+	for _, r := range p.EgressRules {
+		out.EgressRules = append(out.EgressRules, PolicyRuleInfo(r))
+	}
+	for _, a := range p.Sets {
+		out.Sets = append(out.Sets, AddressSetInfo{Name: a.Name, Version: a.Version, Members: a.Members})
 	}
 	return out
+}
+
+// CmdSubjectUpdateSets is where network-reconciler sends a Hypervisor the
+// membership changes of the address sets its interfaces' rules reference
+// (see sgsync.go and docs/specs/snap.md).
+func CmdSubjectUpdateSets(hypervisor string) string {
+	return fmt.Sprintf("ms.network.cmd.%s.security_group.update_sets", hypervisor)
+}
+
+// SetUpdate changes one address set: Full replaces its members with
+// Members; otherwise Add/Remove are applied. Version is the etcd revision
+// the change reflects -- a host ignores anything not newer than what it
+// last applied to that set.
+type SetUpdate struct {
+	Name    string   `json:"name"`
+	Version int64    `json:"version"`
+	Full    bool     `json:"full,omitempty"`
+	Members []string `json:"members,omitempty"`
+	Add     []string `json:"add,omitempty"`
+	Remove  []string `json:"remove,omitempty"`
+}
+
+// UpdateSetsCommand is CmdSubjectUpdateSets' payload. ObservedAt is when
+// network-reconciler saw the change, for the host's propagation-delay
+// metric.
+type UpdateSetsCommand struct {
+	Sets       []SetUpdate `json:"sets"`
+	ObservedAt time.Time   `json:"observed_at"`
 }
 
 // AttachContext is everything about a NetworkInterface's Network,
@@ -77,11 +124,10 @@ type AttachContext struct {
 	MTU                    int32             `json:"mtu,omitempty"`
 }
 
-// UpdateACLCommand is CmdSubjectUpdateACL's payload. Always carries the
-// interface's *complete* current rule sets (never a delta) -- so whichever
-// copy a compute-agent ends up applying (including a stale, redelivered
-// one -- see ResourceVersion below) converges to a valid state, never a
-// partial one.
+// UpdateACLCommand is CmdSubjectUpdateACL's payload: the interface's
+// complete current SecurityPolicy (never a delta), so whichever copy a
+// compute-agent ends up applying (including a stale, redelivered one --
+// see ResourceVersion) converges to a valid state.
 type UpdateACLCommand struct {
 	IfaceID      string            `json:"iface_id"`
 	VMID         string            `json:"vm_id"`
@@ -100,11 +146,10 @@ type UpdateACLCommand struct {
 	// fields compute hands compute-agent at boot (see AttachContext).
 	Attach AttachContext `json:"attach"`
 
-	IngressRules []FirewallRuleInfo `json:"ingress_rules,omitempty"`
-	EgressRules  []FirewallRuleInfo `json:"egress_rules,omitempty"`
+	Policy SecurityPolicyInfo `json:"policy"`
 
 	// ResourceVersion lets a compute-agent reject a stale/out-of-order
-	// redelivery (e.g. two UpdateFirewallRules calls racing) rather than
+	// redelivery (e.g. two SetSecurityGroups calls racing) rather than
 	// clobber a newer already-applied state with an older one -- see
 	// internal/compute-agent/agent.go's handleUpdateACL.
 	ResourceVersion int64 `json:"resource_version"`

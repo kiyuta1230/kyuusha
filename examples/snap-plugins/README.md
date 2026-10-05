@@ -2,15 +2,16 @@
 
 Reference implementations of the security-backend contract
 (`-security-backend-bin`, a compute-agent flag) lets an operator use to
-delegate ingress_rules/egress_rules enforcement to an external binary
+delegate SecurityGroup enforcement to an external binary
 instead of `internal/compute-agent/nftacl`'s built-in bridge-family
 nftables implementation. See:
 
 - `docs/architecture.md`「ACL強制もVNAPと同じ発想でプラガブルにすべきか」for why
   this exists as a separate contract from VNAP (`-network-attach-bin`),
   even though the exec/stdin-JSON/exit-code mechanics are identical
-- `docs/specs/network.md`「セキュリティバックエンド」for the full wire
-  contract (JSON payloads, exit codes, timeout, idempotency requirements)
+- `docs/specs/snap.md` for the full wire contract (`attach`/`detach`/
+  `update_sets`, JSON payloads, exit codes, timeout, idempotency
+  requirements)
 - `internal/compute-agent/snap` for the Go-side contract these mirror
 
 These are meant to be read and adapted to your own environment, not

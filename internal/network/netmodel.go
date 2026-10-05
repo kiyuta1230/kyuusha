@@ -201,6 +201,9 @@ type NetworkStatus struct {
 	Values      map[string]int64
 	Attributes  map[string]string
 	Allocations []Allocation
+	// DefaultSecurityGroupID is created along with the Network (before it
+	// turns Ready) -- see ensureDefaultSecurityGroup.
+	DefaultSecurityGroupID string
 }
 
 type Network struct {

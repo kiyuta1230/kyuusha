@@ -10,13 +10,6 @@ import "kyuusha/resource/v1/common.proto";
 // See docs/architecture.md "networkサービスのリソース: Subnet / NetworkInterface"
 // and docs/specs/network.md.
 
-message FirewallRule {
-  string protocol = 1;     // tcp/udp/icmp
-  string port_range = 2;   // e.g. "22", "2379-2380"
-  string source_cidr = 3;
-  string action = 4;       // allow/deny
-}
-
 message NetworkInterfaceSpec {
   string vm_id = 1;
   // Optional: pin the interface to this Subnet. Empty: network_id+zone, and
@@ -24,10 +17,13 @@ message NetworkInterfaceSpec {
   // at allocation time (status.subnet_id). Set: network_id/zone are filled
   // in from the Subnet.
   string subnet_id = 2;
-  repeated FirewallRule ingress_rules = 3; // traffic allowed *into* the VM; default-deny outside the Subnet's own CIDR; no separate SecurityGroup-like resource
-  repeated FirewallRule egress_rules = 4;  // traffic allowed *out of* the VM; same default-deny-outside-CIDR baseline
+  reserved 3, 4; // ingress_rules/egress_rules, replaced by SecurityGroups
   string network_id = 5; // required unless subnet_id is set
   string zone = 6;       // required unless subnet_id is set
+  // SecurityGroups attached to the interface (allow-only, union). Empty at
+  // Create attaches the Network's default group; afterwards only
+  // SetSecurityGroups changes it (an empty list there means deny all).
+  repeated string security_group_ids = 7;
 }
 
 message NetworkInterfaceStatus {
@@ -36,17 +32,7 @@ message NetworkInterfaceStatus {
   string ip_address = 3;
   string mac_address = 4;
   string hypervisor = 5; // the Hypervisor a tap is currently wired on, if any
-  // effective_ingress_rules/egress_rules are spec.ingress_rules/egress_rules
-  // plus any implicit mesh_group-derived allow entries (see
-  // docs/specs/network.md「spec.mesh_group」) -- this is what actually gets
-  // enforced on the host (see docs/specs/snap.md), not necessarily what's
-  // written to spec. Only populated by Create/Get (the two RPCs whose
-  // response is actually consumed for enforcement, at VM Boot and via
-  // UpdateFirewallRules's NATS propagation respectively) -- List/Watch/
-  // Update/UpdateFirewallRules's own response leave these empty, a
-  // deliberate scope decision (see docs/open-questions.md history).
-  repeated FirewallRule effective_ingress_rules = 6;
-  repeated FirewallRule effective_egress_rules = 7;
+  reserved 6, 7; // effective_ingress_rules/effective_egress_rules
   string subnet_id = 8; // the Subnet the address was allocated from (spec.subnet_id, or the one kyuusha picked)
 }
 
@@ -85,18 +71,38 @@ message UpdateNetworkInterfaceRequest {
   string tenant_id = 3; // mirrors network_interface.meta.tenant_id; see vm.proto's UpdateVirtualMachineRequest for why this stays top-level
 }
 
-message UpdateFirewallRulesRequest {
+message SetSecurityGroupsRequest {
   string tenant_id = 1;
   string id = 2; // network_interface id
-  // Both lists replace the stored value wholesale (not a delta/merge), same
-  // convention as ResizeVirtualMachineRequest's new_vcpu/new_memory_mb --
-  // no resource_version: this does its own Get-then-mutate-then-Update
-  // internally, relying on resource.Store.Update's own CAS rather than
-  // asking the caller to supply one (see vm.proto's ResizeVirtualMachineRequest
-  // for the same rationale). A caller that only wants to change one
-  // direction must resend the other direction's current value too.
-  repeated FirewallRule ingress_rules = 3;
-  repeated FirewallRule egress_rules = 4;
+  // Replaces the attached groups wholesale; empty means none (deny all).
+  repeated string security_group_ids = 3;
+}
+
+// SecurityPolicy is what a host enforces for one NetworkInterface: its
+// SecurityGroups' rules, merged, with group/Network peers left as
+// references to named address sets, plus a versioned snapshot of each set
+// (see docs/specs/snap.md). Internal: compute reads it at boot; not served
+// through api-gateway.
+message SecurityPolicyRule {
+  string protocol = 1;   // "" (any) / tcp / udp / icmp
+  string port_range = 2; // "" = all ports
+  string cidr = 3;       // exactly one of cidr/set
+  string set = 4;        // "sg:<id>" / "network:<id>"
+}
+message AddressSet {
+  string name = 1;
+  int64 version = 2; // etcd revision the snapshot reflects
+  repeated string members = 3;
+}
+message SecurityPolicy {
+  repeated string security_group_ids = 1;
+  repeated SecurityPolicyRule ingress_rules = 2;
+  repeated SecurityPolicyRule egress_rules = 3;
+  repeated AddressSet sets = 4;
+}
+message GetSecurityPolicyRequest {
+  string tenant_id = 1;
+  string id = 2; // network_interface id
 }
 
 message DeleteNetworkInterfaceRequest {
@@ -128,12 +134,11 @@ service NetworkInterfaceService {
   rpc Get(GetNetworkInterfaceRequest) returns (NetworkInterface);
   rpc List(ListNetworkInterfacesRequest) returns (ListNetworkInterfacesResponse);
   rpc Update(UpdateNetworkInterfaceRequest) returns (NetworkInterface);
-  // UpdateFirewallRules is the only sanctioned way to change ingress_rules/
-  // egress_rules after Create -- Update (above) rejects any request whose
-  // spec.ingress_rules/egress_rules differ from the stored value, so this
-  // path's validation and NATS-based host propagation (see
+  // SetSecurityGroups is the only way to change security_group_ids after
+  // Create (Update rejects a change), so the host-side re-apply (see
   // docs/specs/snap.md) can't be bypassed.
-  rpc UpdateFirewallRules(UpdateFirewallRulesRequest) returns (NetworkInterface);
+  rpc SetSecurityGroups(SetSecurityGroupsRequest) returns (NetworkInterface);
+  rpc GetSecurityPolicy(GetSecurityPolicyRequest) returns (SecurityPolicy);
   rpc Delete(DeleteNetworkInterfaceRequest) returns (google.protobuf.Empty);
   rpc Watch(WatchNetworkInterfacesRequest) returns (stream NetworkInterfaceEvent);
 }

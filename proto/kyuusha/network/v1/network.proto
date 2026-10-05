@@ -265,6 +265,7 @@ message NetworkStatus {
   map<string, int64> values = 3;      // Network-level allocated values, e.g. {"route_target": 65001}
   map<string, string> attributes = 4; // merged from the pools/entries they came from
   repeated Allocation allocations = 5;
+  string default_security_group_id = 6; // created with the Network; see SecurityGroupStatus.default_for_network_id
 }
 
 message Network {

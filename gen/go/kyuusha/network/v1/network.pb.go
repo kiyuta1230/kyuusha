@@ -2196,14 +2196,15 @@ func (x *NetworkSpec) GetSharedWithTenantIds() []string {
 }
 
 type NetworkStatus struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending (allocating) / Ready
-	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	Values        map[string]int64       `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`        // Network-level allocated values, e.g. {"route_target": 65001}
-	Attributes    map[string]string      `protobuf:"bytes,4,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // merged from the pools/entries they came from
-	Allocations   []*Allocation          `protobuf:"bytes,5,rep,name=allocations,proto3" json:"allocations,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Phase                  string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending (allocating) / Ready
+	Conditions             []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
+	Values                 map[string]int64       `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`        // Network-level allocated values, e.g. {"route_target": 65001}
+	Attributes             map[string]string      `protobuf:"bytes,4,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // merged from the pools/entries they came from
+	Allocations            []*Allocation          `protobuf:"bytes,5,rep,name=allocations,proto3" json:"allocations,omitempty"`
+	DefaultSecurityGroupId string                 `protobuf:"bytes,6,opt,name=default_security_group_id,json=defaultSecurityGroupId,proto3" json:"default_security_group_id,omitempty"` // created with the Network; see SecurityGroupStatus.default_for_network_id
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *NetworkStatus) Reset() {
@@ -2269,6 +2270,13 @@ func (x *NetworkStatus) GetAllocations() []*Allocation {
 		return x.Allocations
 	}
 	return nil
+}
+
+func (x *NetworkStatus) GetDefaultSecurityGroupId() string {
+	if x != nil {
+		return x.DefaultSecurityGroupId
+	}
+	return ""
 }
 
 type Network struct {
@@ -3004,7 +3012,7 @@ const file_kyuusha_network_v1_network_proto_rawDesc = "" +
 	"\n" +
 	"visibility\x18\x03 \x01(\x0e2\x1e.kyuusha.network.v1.VisibilityR\n" +
 	"visibility\x123\n" +
-	"\x16shared_with_tenant_ids\x18\x04 \x03(\tR\x13sharedWithTenantIds\"\xbb\x03\n" +
+	"\x16shared_with_tenant_ids\x18\x04 \x03(\tR\x13sharedWithTenantIds\"\xf6\x03\n" +
 	"\rNetworkStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -3014,7 +3022,8 @@ const file_kyuusha_network_v1_network_proto_rawDesc = "" +
 	"\n" +
 	"attributes\x18\x04 \x03(\v21.kyuusha.network.v1.NetworkStatus.AttributesEntryR\n" +
 	"attributes\x12@\n" +
-	"\vallocations\x18\x05 \x03(\v2\x1e.kyuusha.network.v1.AllocationR\vallocations\x1a9\n" +
+	"\vallocations\x18\x05 \x03(\v2\x1e.kyuusha.network.v1.AllocationR\vallocations\x129\n" +
+	"\x19default_security_group_id\x18\x06 \x01(\tR\x16defaultSecurityGroupId\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\x1a=\n" +

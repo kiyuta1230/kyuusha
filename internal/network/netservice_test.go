@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/resource"
-	"github.com/kiyuta1230/kyuusha/internal/resourcetest"
 )
 
 func mustPool(t *testing.T, ctx context.Context, svc *Service, name string, spec AllocationPoolSpec) string {
@@ -282,57 +281,5 @@ func TestNetworkInterface_NetworkOnlyPicksASubnetWithRoom(t *testing.T) {
 		if n.Meta.Name == "n3" && n.Status.SubnetID != s3.Meta.ID {
 			t.Fatalf("n3 after adding s3 = %+v", n.Status)
 		}
-	}
-}
-
-func TestEffectiveRules_SameNetworkSubnetsReachEachOther(t *testing.T) {
-	svc, ctx := newTestService(t)
-	a := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "a", userSubnet(t, ctx, svc, "tenant-a", "z", "10.1.0.0/24", ""))
-	mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "b", userSubnet(t, ctx, svc, "tenant-a", "y", "10.2.0.0/24", ""))
-	mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-b", "other", userSubnet(t, ctx, svc, "tenant-b", "z", "10.3.0.0/24", ""))
-	nic := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic", NetworkInterfaceSpec{VMID: "vm", SubnetID: a.Meta.ID}, a)
-	ingress, egress, err := svc.EffectiveFirewallRules(ctx, nic)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []FirewallRule{{SourceCIDR: "10.2.0.0/24", Action: "allow"}}
-	if !slices.Equal(ingress, want) || !slices.Equal(egress, want) {
-		t.Fatalf("effective rules = %v / %v, want just the sibling Subnet %v", ingress, egress, want)
-	}
-}
-
-// TestRepublishOnNetworkMembershipChange (B4): a NIC already running gets
-// a fresh update_acl -- with a version newer than anything it saw -- when
-// its Network gains a Subnet.
-func TestRepublishOnNetworkMembershipChange(t *testing.T) {
-	ctx := context.Background()
-	js := startTestNATS(t)
-	computeClient := &FakeVirtualMachineClient{Existing: map[string]bool{"vm-1": true}, Hypervisor: map[string]string{"vm-1": "hypervisor-1"}}
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, computeClient, js)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "a", userSubnet(t, ctx, svc, "tenant-a", "z", "10.1.0.0/24", ""))
-	nic := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "nic", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: a.Meta.ID}, a)
-	received := subscribeUpdateACLCommands(t, ctx, js, "hypervisor-1")
-
-	mustCreateAndAllocateSubnet(t, ctx, svc, "tenant-a", "b", userSubnet(t, ctx, svc, "tenant-a", "y", "10.2.0.0/24", ""))
-	deadline := time.After(2 * time.Second)
-	for len(*received) == 0 {
-		select {
-		case <-deadline:
-			t.Fatal("no update_acl after the Network gained a Subnet")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	cmd := (*received)[0]
-	if cmd.IfaceID != nic.Meta.ID || cmd.ResourceVersion <= nic.Meta.ResourceVersion {
-		t.Fatalf("update_acl = iface %s rv %d, want %s with rv > %d", cmd.IfaceID, cmd.ResourceVersion, nic.Meta.ID, nic.Meta.ResourceVersion)
-	}
-	if !slices.ContainsFunc(cmd.IngressRules, func(r FirewallRuleInfo) bool { return r.SourceCIDR == "10.2.0.0/24" }) {
-		t.Fatalf("update_acl ingress = %v, want the new sibling 10.2.0.0/24", cmd.IngressRules)
-	}
-	if cmd.Attach.NetworkID != a.Spec.NetworkID || cmd.Attach.NetworkClass != "test-user" {
-		t.Fatalf("update_acl attach = %+v", cmd.Attach)
 	}
 }

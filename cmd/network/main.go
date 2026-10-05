@@ -8,7 +8,7 @@
 // and only runs from Run, which this binary never calls.
 //
 // This binary does, however, dial compute and NATS/JetStream -- purely so
-// UpdateFirewallRules can resolve which hypervisor is running a
+// SetSecurityGroups can resolve which hypervisor is running a
 // NetworkInterface's VM and notify it (see internal/network/nats.go's
 // publishUpdateACL). This is the same exception cmd/compute/main.go already
 // documents for itself (StreamConsole/live-hotplug: a synchronous
@@ -58,8 +58,8 @@ import (
 func main() {
 	grpcAddr := flag.String("grpc-addr", ":8084", "address to serve SubnetService/NetworkInterfaceService on")
 	identityAddr := flag.String("identity-addr", "localhost:8082", "identity service address, for Create-time Quota checks")
-	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for UpdateFirewallRules to resolve which hypervisor is running a NetworkInterface's VM")
-	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL, for UpdateFirewallRules to notify the owning hypervisor")
+	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for SetSecurityGroups to resolve which hypervisor is running a NetworkInterface's VM")
+	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL, for SetSecurityGroups to notify the owning hypervisor")
 	metricsAddr := flag.String("metrics-addr", ":9096", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented to callers (see internal/mtls)")
@@ -137,7 +137,7 @@ func main() {
 	}
 	defer etcdClient.Close()
 
-	// See this package's doc comment: this is UpdateFirewallRules'
+	// See this package's doc comment: this is SetSecurityGroups'
 	// notify-the-owning-hypervisor path only, not the reconciler's
 	// allocation state.
 	nc, err := nats.Connect(*natsURL)
@@ -192,6 +192,7 @@ func main() {
 	networkv1.RegisterNetworkServiceServer(grpcServer, grpcserver.NewNetworkServer(svc))
 	networkv1.RegisterNetworkClassServiceServer(grpcServer, grpcserver.NewNetworkClassServer(svc))
 	networkv1.RegisterAllocationPoolServiceServer(grpcServer, grpcserver.NewAllocationPoolServer(svc))
+	networkv1.RegisterSecurityGroupServiceServer(grpcServer, grpcserver.NewSecurityGroupServer(svc))
 
 	go func() {
 		<-ctx.Done()

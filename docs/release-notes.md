@@ -7,6 +7,34 @@
 
 ## 2026-10-05
 
+- **NIC単位のACL（`ingress_rules`/`egress_rules`）を廃止し、`SecurityGroup`に置き換えた**
+  （kyuusha-vpcからの変更依頼A10）。設計: [architecture.md「SecurityGroup」](architecture.md)、
+  仕様: [network.md「SecurityGroup」](specs/network.md)・[snap.md](specs/snap.md)
+  - テナント所有の`SecurityGroup`（allowのみ、既定は両方向とも拒否、ルールの相手は
+    CIDR／SecurityGroup（`self`可）／Network、`shared_with_tenant_ids`で他テナントに共有）を
+    追加。NICの`spec.security_group_ids`で明示的に付け、作成後は`SetSecurityGroups`で
+    付け替える。VM作成時のNICの指定（`NetworkAttachment.security_group_ids`）でも付けられ、
+    起動した瞬間から効く。ラベル・アノテーション、Admission Webhook、全テナント横断の
+    List/Watchも他のリソースと同じ
+  - Networkを作るとその既定のグループ（着信: 同じNetworkから全て、送信: 全て）が一緒に
+    作られ、グループを指定しないNICに付く。同じNetwork内の暗黙の疎通（A9で入れたもの）と
+    nftaclの「自Subnet内は常に許可」は廃止した。グループと無関係に常に通るのは
+    ゲートウェイとの通信とARPだけ。既存のNetworkには定期スイープが既定のグループを後から
+    作る（既存のNICにはグループが付かないので、全て拒否になる——付けるには`SetSecurityGroups`）
+  - SNAPの契約を変えた: ルールの相手がグループ・Networkのものは名前付きのアドレス集合
+    （`sg:<id>`/`network:<id>`）への参照のまま渡し、集合の中身は新しい動詞`update_sets`で
+    差分を配る。network-reconcilerが参照しているホストにだけ差分を送り、30秒ごとに全量で
+    突き合わせる。集合のメンバーは`Running`中のVMのNICのアドレスだけ。nftacl（名前付き
+    set）・`cmd/nftacl-snap`・ebpf-snap（共有ハッシュマップ）を新しい契約で作り直した。
+    反映の遅れは`kyuusha_compute_agent_sg_set_propagation_seconds`で見える
+  - CLI: `kyuusha secgroup`、`kyuusha netif set-security-groups`、`kyuusha vm create
+    -security-groups`。`netif set-firewall-rules`は削除
+  - playgroundで確認: 既定のグループで同じNetworkのVM同士が疎通する、片方のグループを
+    全て外すと拒否される、`self`を許すグループに後から参加したVMが約2秒（ゲスト側の
+    probe間隔込み）で相手に届くようになる、VMを削除すると別ホストのsetから0.4秒で消える、
+    別ホストのVMの起動が0.06秒でsetに入る（ゲストの`/init`に、同じ/24への到達性の変化を
+    コンソールへ出すprobeを足して確認した）。nftacl・ebpf-snapはnetns＋vethの実通信テストで
+    集合への追加・削除が着信の可否に反映されることを確認
 - **`HostAggregate`とNetworkClassの`host_aggregate_selector`によるVM配置の絞り込みを
   追加した**（変更依頼A9の実装順序6）。computeにクラスタ単位・管理者専用の
   `HostAggregate`（zone・ラベル・メンバーのHypervisor）を追加し、スケジューラはVMのNICの

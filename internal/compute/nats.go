@@ -228,15 +228,12 @@ type NetworkInterfaceInfo struct {
 	// docker/fc-guest-init.sh) -- a VM with several NICs would otherwise
 	// end up with an ambiguous or last-one-wins default gateway.
 	Primary bool `json:"primary,omitempty"`
-	// IngressRules/EgressRules are the NetworkInterface's own spec fields,
-	// verbatim -- compute-agent's internal/compute-agent/snap (default
-	// nftacl) enforces them at boot time; see docs/specs/snap.md. A later
-	// UpdateFirewallRules call
-	// travels a separate path (network's own NATS command, not this one --
-	// see internal/network/nats.go), so these only need to be correct as
-	// of Boot time, not kept in sync afterward.
-	IngressRules []FirewallRuleInfo `json:"ingress_rules,omitempty"`
-	EgressRules  []FirewallRuleInfo `json:"egress_rules,omitempty"`
+	// Policy is what the host's SNAP backend enforces for the interface
+	// from boot on (its SecurityGroups' merged rules plus snapshots of the
+	// address sets they reference -- see docs/specs/snap.md). Later
+	// changes travel network's own NATS commands (update_acl/update_sets,
+	// internal/network/nats.go), so this only needs to be right at boot.
+	Policy SecurityPolicyInfo `json:"policy"`
 }
 
 // AttachInfo mirrors network.AttachContext (same JSON) -- see
@@ -253,14 +250,28 @@ type AttachInfo struct {
 	MTU                    int32             `json:"mtu,omitempty"`
 }
 
-// FirewallRuleInfo mirrors network.FirewallRule/network.FirewallRuleInfo --
-// its own copy, not an import, same "no cross-service wire-type sharing"
-// convention as VolumeAttachInfo/NetworkInterfaceInfo themselves.
-type FirewallRuleInfo struct {
-	Protocol   string `json:"protocol"`
-	PortRange  string `json:"port_range,omitempty"`
-	SourceCIDR string `json:"source_cidr"`
-	Action     string `json:"action"`
+// SecurityPolicyInfo/PolicyRuleInfo/AddressSetInfo mirror
+// network.SecurityPolicyInfo (same JSON) -- their own copy, not an import,
+// same "no cross-service wire-type sharing" convention as
+// NetworkInterfaceInfo itself.
+type PolicyRuleInfo struct {
+	Protocol  string `json:"protocol,omitempty"`
+	PortRange string `json:"port_range,omitempty"`
+	CIDR      string `json:"cidr,omitempty"`
+	Set       string `json:"set,omitempty"`
+}
+
+type AddressSetInfo struct {
+	Name    string   `json:"name"`
+	Version int64    `json:"version"`
+	Members []string `json:"members"`
+}
+
+type SecurityPolicyInfo struct {
+	SecurityGroupIDs []string         `json:"security_group_ids,omitempty"`
+	IngressRules     []PolicyRuleInfo `json:"ingress_rules,omitempty"`
+	EgressRules      []PolicyRuleInfo `json:"egress_rules,omitempty"`
+	Sets             []AddressSetInfo `json:"sets,omitempty"`
 }
 
 type CreateResult struct {

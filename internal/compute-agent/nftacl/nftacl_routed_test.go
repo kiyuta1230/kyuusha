@@ -57,9 +57,9 @@ func TestTrafficRouted(t *testing.T) {
 	})
 	mustRun(t, "sysctl", "-qw", "net.ipv4.ip_forward=1")
 	mustRun(t, "ip", "link", "set", "lo", "up")
-	apply := func(vm struct{ ns, tap, bridge, cidr, gw, ip, mac string }, ingress, egress []FirewallRule) {
+	apply := func(vm struct{ ns, tap, bridge, cidr, gw, ip, mac string }, ingress, egress []Rule) {
 		t.Helper()
-		if err := Apply(Interface{TapName: vm.tap, SubnetCIDR: vm.cidr, GatewayIP: vm.gw, IPAddress: vm.ip, MACAddress: vm.mac, IngressRules: ingress, EgressRules: egress}); err != nil {
+		if err := Apply(Interface{TapName: vm.tap, GatewayIP: vm.gw, IPAddress: vm.ip, MACAddress: vm.mac, IngressRules: ingress, EgressRules: egress}); err != nil {
 			t.Fatalf("Apply %s: %v", vm.tap, err)
 		}
 	}
@@ -88,8 +88,8 @@ func TestTrafficRouted(t *testing.T) {
 	}
 
 	// An explicit allow on both ends opens the routed path.
-	apply(a, nil, []FirewallRule{{Protocol: "icmp", SourceCIDR: b.cidr, Action: "allow"}})
-	apply(b, []FirewallRule{{Protocol: "icmp", SourceCIDR: a.cidr, Action: "allow"}}, nil)
+	apply(a, nil, []Rule{{Protocol: "icmp", CIDR: b.cidr}})
+	apply(b, []Rule{{Protocol: "icmp", CIDR: a.cidr}}, nil)
 	if err := ping(a.ns, "", b.ip); err != nil {
 		t.Fatalf("A -> B with matching egress/ingress allows failed: %v", err)
 	}

@@ -78,19 +78,26 @@ func TestService_AdmissionWebhookGatesNetworkWrites(t *testing.T) {
 		t.Fatalf("UPDATE request = %+v", req)
 	}
 
-	// UpdateFirewallRules is an UPDATE of the NetworkInterface, old rules in old_object.
+	// SetSecurityGroups is an UPDATE of the NetworkInterface, old groups in old_object.
 	ready, _ := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
 	n := mustCreateAndAllocateNetworkInterface(t, ctx, svc, "tenant-a", "netif", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, ready)
 	if req := hook.last(t); req.Operation != "CREATE" || req.Resource != "NetworkInterface" {
 		t.Fatalf("NetworkInterface CREATE request = %+v", req)
 	}
-	if _, err := svc.UpdateFirewallRules(ctx, "tenant-a", n.Meta.ID, []FirewallRule{{Protocol: "tcp", PortRange: "22", SourceCIDR: "0.0.0.0/0", Action: "allow"}}, nil); err != nil {
-		t.Fatalf("UpdateFirewallRules: %v", err)
+	web, err := svc.CreateSecurityGroup(ctx, "tenant-a", "web", SecurityGroupSpec{IngressRules: []SecurityGroupRule{{Protocol: "tcp", PortRange: "22", Peer: SecurityGroupPeer{CIDR: "0.0.0.0/0"}}}}, resource.Metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req := hook.last(t); req.Operation != "CREATE" || req.Resource != "SecurityGroup" || !strings.Contains(string(req.Spec), `"port_range":"22"`) {
+		t.Fatalf("SecurityGroup CREATE request = %+v (spec %s)", req, req.Spec)
+	}
+	if _, err := svc.SetSecurityGroups(ctx, "tenant-a", n.Meta.ID, []string{web.Meta.ID}); err != nil {
+		t.Fatalf("SetSecurityGroups: %v", err)
 	}
 	req = hook.last(t)
-	if req.Operation != "UPDATE" || req.Resource != "NetworkInterface" || !strings.Contains(string(req.Spec), `"port_range":"22"`) ||
-		req.OldObject == nil || strings.Contains(string(req.OldObject.Spec), "port_range") {
-		t.Fatalf("UpdateFirewallRules request = %+v (spec %s)", req, req.Spec)
+	if req.Operation != "UPDATE" || req.Resource != "NetworkInterface" || !strings.Contains(string(req.Spec), web.Meta.ID) ||
+		req.OldObject == nil || strings.Contains(string(req.OldObject.Spec), web.Meta.ID) {
+		t.Fatalf("SetSecurityGroups request = %+v (spec %s)", req, req.Spec)
 	}
 
 	// A denied DELETE leaves the Subnet in place.

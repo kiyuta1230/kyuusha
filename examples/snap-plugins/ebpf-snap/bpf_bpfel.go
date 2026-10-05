@@ -27,12 +27,18 @@ type bpfRule struct {
 	_        structs.HostLayout
 	CidrAddr uint32
 	CidrMask uint32
+	SetId    uint32
 	PortLo   uint16
 	PortHi   uint16
 	Protocol uint8
-	Action   uint8
 	Active   uint8
-	Pad      uint8
+	Pad      [2]uint8
+}
+
+type bpfSetMemberKey struct {
+	_     structs.HostLayout
+	SetId uint32
+	Addr  uint32
 }
 
 type bpfSpoofCfg struct {
@@ -50,6 +56,7 @@ const (
 	bpfMapConntrack         = "conntrack"
 	bpfMapRulesEgress       = "rules_egress"
 	bpfMapRulesIngress      = "rules_ingress"
+	bpfMapSetMembers        = "set_members"
 	bpfMapSpoof             = "spoof"
 	bpfProgEnforceVmEgress  = "enforce_vm_egress"
 	bpfProgEnforceVmIngress = "enforce_vm_ingress"
@@ -108,6 +115,7 @@ type bpfMapSpecs struct {
 	Conntrack    *ebpf.MapSpec `ebpf:"conntrack"`
 	RulesEgress  *ebpf.MapSpec `ebpf:"rules_egress"`
 	RulesIngress *ebpf.MapSpec `ebpf:"rules_ingress"`
+	SetMembers   *ebpf.MapSpec `ebpf:"set_members"`
 	Spoof        *ebpf.MapSpec `ebpf:"spoof"`
 }
 
@@ -140,6 +148,7 @@ type bpfMaps struct {
 	Conntrack    *ebpf.Map `ebpf:"conntrack"`
 	RulesEgress  *ebpf.Map `ebpf:"rules_egress"`
 	RulesIngress *ebpf.Map `ebpf:"rules_ingress"`
+	SetMembers   *ebpf.Map `ebpf:"set_members"`
 	Spoof        *ebpf.Map `ebpf:"spoof"`
 }
 
@@ -148,6 +157,7 @@ func (m *bpfMaps) Close() error {
 		m.Conntrack,
 		m.RulesEgress,
 		m.RulesIngress,
+		m.SetMembers,
 		m.Spoof,
 	)
 }

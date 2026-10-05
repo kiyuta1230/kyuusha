@@ -289,17 +289,9 @@ func (m *Manager) ApplyACL(vmID string, u vmm.ACLUpdate) (bool, error) {
 		Attach:   u.Attach,
 		SubnetID: u.SubnetID, SubnetLabels: u.SubnetLabels, SubnetCIDR: u.SubnetCIDR, GatewayIP: u.GatewayIP,
 		IPAddress: u.IPAddress, MACAddress: u.MACAddress,
-		IngressRules: toSnapRules(u.IngressRules), EgressRules: toSnapRules(u.EgressRules),
+		Policy: u.Policy,
 	}, m.SecurityBackendBin)
 	return true, err
-}
-
-func toSnapRules(rules []vmm.FirewallRule) []snap.FirewallRule {
-	var out []snap.FirewallRule
-	for _, r := range rules {
-		out = append(out, snap.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
-	}
-	return out
 }
 
 // ConsoleLogPath is where Boot(vmID's spec) captures Firecracker's stdout/
@@ -583,7 +575,7 @@ func (m *Manager) Boot(ctx context.Context, spec BootSpec) ([]vmm.AttachedVolume
 			Attach:   ni.Attach,
 			SubnetID: ni.SubnetID, SubnetLabels: ni.SubnetLabels, SubnetCIDR: ni.SubnetCIDR, GatewayIP: ni.GatewayIP,
 			IPAddress: ni.IPAddress, MACAddress: wired.MACAddress,
-			IngressRules: toSnapRules(ni.IngressRules), EgressRules: toSnapRules(ni.EgressRules),
+			Policy: ni.Policy,
 		}, m.SecurityBackendBin); err != nil {
 			cleanup()
 			return nil, fmt.Errorf("fcvmm: apply ACL for network interface %d (%s): %w", i, ni.IfaceID, err)

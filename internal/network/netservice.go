@@ -531,6 +531,7 @@ func (s *Service) watchPendingNetworks(ctx context.Context) {
 	}, ErrNetworkHistoryPruned, s.remarkPools, func(e resource.Event[Network]) {
 		if e.Type == EventDeleted {
 			s.alloc.release(e.Object.Status.Allocations)
+			s.deleteDefaultSecurityGroup(ctx, e.Object)
 			return
 		}
 		if e.Type == EventAdded && e.Object.Status.Phase == NetworkPhasePending {
@@ -546,8 +547,11 @@ func (s *Service) retryPendingNetworks(ctx context.Context) {
 		return
 	}
 	for i := range networks {
-		if networks[i].Status.Phase == NetworkPhasePending {
+		switch {
+		case networks[i].Status.Phase == NetworkPhasePending:
 			s.tryAllocateNetwork(ctx, &networks[i])
+		case networks[i].Status.DefaultSecurityGroupID == "" && networks[i].Meta.DeletedAt == nil:
+			s.backfillDefaultSecurityGroup(ctx, networks[i]) // a Network from before default groups existed
 		}
 	}
 }
@@ -567,11 +571,17 @@ func (s *Service) tryAllocateNetwork(ctx context.Context, n *Network) {
 	if err != nil {
 		return
 	}
+	sgID, err := s.ensureDefaultSecurityGroup(ctx, *n)
+	if err != nil {
+		s.setNetworkPending(ctx, n, fmt.Sprintf("default security group: %v", err))
+		return
+	}
 	res, err := s.alloc.allocateAll(pools, class.Spec.Network, allocRequest{})
 	if err != nil {
 		s.setNetworkPending(ctx, n, err.Error())
 		return
 	}
+	n.Status.DefaultSecurityGroupID = sgID
 	n.Status.Phase = NetworkPhaseReady
 	n.Status.Values, n.Status.Attributes, n.Status.Allocations = res.values, res.attributes, res.allocations
 	n.Status.Conditions = upsertCondition(n.Status.Conditions, resource.Condition{Type: "AllocationPending", Status: resource.ConditionFalse, LastTransitionAt: time.Now()})
@@ -581,6 +591,18 @@ func (s *Service) tryAllocateNetwork(ctx context.Context, n *Network) {
 		return
 	}
 	*n = updated
+}
+
+func (s *Service) backfillDefaultSecurityGroup(ctx context.Context, n Network) {
+	sgID, err := s.ensureDefaultSecurityGroup(ctx, n)
+	if err != nil {
+		slog.Warn("network: create default security group failed", "network_id", n.Meta.ID, "err", err)
+		return
+	}
+	n.Status.DefaultSecurityGroupID = sgID
+	if _, err := s.networks.Update(ctx, n); err != nil {
+		slog.Warn("network: record default security group failed", "network_id", n.Meta.ID, "err", err)
+	}
 }
 
 func (s *Service) setNetworkPending(ctx context.Context, n *Network, msg string) {
@@ -754,9 +776,6 @@ func (s *Service) tryAllocateSubnet(ctx context.Context, sn *Subnet) {
 		return
 	}
 	*sn = updated
-	// A new Subnet in the Network: every NIC already in it now
-	// default-allows this CIDR too (see EffectiveFirewallRules).
-	s.republishNetworkACLs(ctx, sn.Meta.TenantID, sn.Spec.NetworkID, updated.Meta.ResourceVersion)
 }
 
 func (s *Service) setSubnetPending(ctx context.Context, sn *Subnet, msg string) {
@@ -792,39 +811,6 @@ func (s *Service) SetSubnetStatusValues(ctx context.Context, tenantID, id string
 		return &out, nil
 	}
 	return nil, ErrSubnetConflict
-}
-
-// republishNetworkACLs re-sends update_acl to every NetworkInterface on
-// any Subnet of the Network: the Network's membership changed, so
-// everyone's same-Network default allow did too (see
-// EffectiveFirewallRules). version is the revision of the triggering
-// change, so compute-agent doesn't drop the re-send as stale.
-func (s *Service) republishNetworkACLs(ctx context.Context, ownerTenantID, networkID string, rv int64) {
-	if s.js == nil {
-		return
-	}
-	subnets, err := s.subnets.List(ctx, ownerTenantID)
-	if err != nil {
-		return
-	}
-	members := map[string]bool{}
-	for _, sn := range subnets {
-		if sn.Spec.NetworkID == networkID {
-			members[sn.Meta.ID] = true
-		}
-	}
-	ifaces, err := s.interfaces.List(ctx, "") // a shared Network has other tenants' NICs too
-	if err != nil {
-		return
-	}
-	count := 0
-	for _, n := range ifaces {
-		if members[n.SubnetID()] && n.Status.IPAddress != "" {
-			s.publishUpdateACL(ctx, n, rv)
-			count++
-		}
-	}
-	slog.Info("network: re-sent update_acl after a Network membership change", "network_id", networkID, "interfaces", count)
 }
 
 // attachContext is subnet's Network/NetworkClass context for VNAP/SNAP.

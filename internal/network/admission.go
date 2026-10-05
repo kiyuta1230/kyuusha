@@ -64,10 +64,59 @@ type admissionClassSpec struct {
 }
 
 type admissionNetworkInterfaceSpec struct {
-	VMID         string             `json:"vm_id"`
-	SubnetID     string             `json:"subnet_id"`
-	IngressRules []FirewallRuleInfo `json:"ingress_rules,omitempty"`
-	EgressRules  []FirewallRuleInfo `json:"egress_rules,omitempty"`
+	VMID             string   `json:"vm_id"`
+	SubnetID         string   `json:"subnet_id,omitempty"`
+	NetworkID        string   `json:"network_id,omitempty"`
+	Zone             string   `json:"zone,omitempty"`
+	SecurityGroupIDs []string `json:"security_group_ids,omitempty"`
+}
+
+type admissionSecurityGroupPeer struct {
+	CIDR            string `json:"cidr,omitempty"`
+	SecurityGroupID string `json:"security_group_id,omitempty"`
+	NetworkID       string `json:"network_id,omitempty"`
+}
+
+type admissionSecurityGroupRule struct {
+	Protocol    string                     `json:"protocol,omitempty"`
+	PortRange   string                     `json:"port_range,omitempty"`
+	Peer        admissionSecurityGroupPeer `json:"peer"`
+	Description string                     `json:"description,omitempty"`
+}
+
+type admissionSecurityGroupSpec struct {
+	Description         string                       `json:"description,omitempty"`
+	IngressRules        []admissionSecurityGroupRule `json:"ingress_rules,omitempty"`
+	EgressRules         []admissionSecurityGroupRule `json:"egress_rules,omitempty"`
+	SharedWithTenantIDs []string                     `json:"shared_with_tenant_ids,omitempty"`
+}
+
+type admissionSecurityGroupStatus struct {
+	DefaultForNetworkID string `json:"default_for_network_id,omitempty"`
+}
+
+func toAdmissionSGRules(rules []SecurityGroupRule) []admissionSecurityGroupRule {
+	var out []admissionSecurityGroupRule
+	for _, r := range rules {
+		out = append(out, admissionSecurityGroupRule{Protocol: r.Protocol, PortRange: r.PortRange, Peer: admissionSecurityGroupPeer(r.Peer), Description: r.Description})
+	}
+	return out
+}
+
+func admissionSecurityGroupSpecJSON(s SecurityGroupSpec) json.RawMessage {
+	return mustJSON(admissionSecurityGroupSpec{
+		Description: s.Description, IngressRules: toAdmissionSGRules(s.IngressRules), EgressRules: toAdmissionSGRules(s.EgressRules),
+		SharedWithTenantIDs: s.SharedWithTenantIDs,
+	})
+}
+
+func admissionSecurityGroupObject(g SecurityGroup) *admissionwebhook.Object {
+	return &admissionwebhook.Object{
+		ID: g.Meta.ID, Name: g.Meta.Name, TenantID: g.Meta.TenantID,
+		Labels: g.Meta.Labels, Annotations: g.Meta.Annotations,
+		Spec:   admissionSecurityGroupSpecJSON(g.Spec),
+		Status: mustJSON(admissionSecurityGroupStatus{DefaultForNetworkID: g.Status.DefaultForNetworkID}),
+	}
 }
 
 type admissionNetworkInterfaceStatus struct {
@@ -142,8 +191,7 @@ func admissionClassObject(c NetworkClass) *admissionwebhook.Object {
 
 func admissionNetworkInterfaceSpecJSON(s NetworkInterfaceSpec) json.RawMessage {
 	return mustJSON(admissionNetworkInterfaceSpec{
-		VMID: s.VMID, SubnetID: s.SubnetID,
-		IngressRules: toFirewallRuleInfos(s.IngressRules), EgressRules: toFirewallRuleInfos(s.EgressRules),
+		VMID: s.VMID, SubnetID: s.SubnetID, NetworkID: s.NetworkID, Zone: s.Zone, SecurityGroupIDs: s.SecurityGroupIDs,
 	})
 }
 

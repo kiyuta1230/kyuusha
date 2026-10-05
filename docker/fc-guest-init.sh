@@ -93,6 +93,10 @@ while [ $i -lt 8 ]; do
     fi
     ip link set "eth$i" up
     ip addr add "$ip_val" dev "eth$i"
+    if [ "$i" = 0 ]; then
+      probe_self=${ip_val%/*}
+      probe_prefix=${probe_self%.*}
+    fi
     echo "kyuusha: eth$i configured ip=$ip_val mtu=$(cat /sys/class/net/eth$i/mtu)"
     # Resolver settings ride on the primary interface only (one
     # /etc/resolv.conf per guest).
@@ -119,6 +123,33 @@ while [ $i -lt 8 ]; do
 
   i=$((i + 1))
 done
+
+# Neighbor probe (playground diagnostics): every couple of seconds, ping
+# the first few addresses of eth0's /24 and log each one whose
+# reachability changed, so SecurityGroup behavior between VMs -- which only
+# a peer inside the guest can observe -- shows up in `kyuusha vm console`
+# as "kyuusha: neighbor <ip> reachable|unreachable".
+if [ -n "$probe_prefix" ]; then
+  (
+    while true; do
+      for h in $(seq 2 30); do
+        addr="$probe_prefix.$h"
+        [ "$addr" = "$probe_self" ] && continue
+        (
+          if ping -c 1 -W 1 "$addr" >/dev/null 2>&1; then state=reachable; else state=unreachable; fi
+          prev=$(cat "/tmp/probe.$addr" 2>/dev/null)
+          if [ "$state" != "$prev" ]; then
+            echo "$state" > "/tmp/probe.$addr"
+            # A never-seen address that's unreachable is just empty space: stay quiet.
+            [ -n "$prev" ] || [ "$state" = reachable ] && echo "kyuusha: neighbor $addr $state"
+          fi
+        ) &
+      done
+      wait
+      sleep 2
+    done
+  ) &
+fi
 
 while true; do
   sleep 3600

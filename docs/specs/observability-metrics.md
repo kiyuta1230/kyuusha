@@ -99,6 +99,8 @@ Watchに触れる話ではなく、既存のgRPCレート等と同じ「制御�
 | `kyuusha_volumeattachments_total` | Gauge | `tenant_id`, `phase` | block-storage-reconciler | 同上 VolumeAttachment |
 | `kyuusha_subnets_total` | Gauge | `tenant_id`, `phase` | network-reconciler | `internal/network` SubnetのList集計 |
 | `kyuusha_networkinterfaces_total` | Gauge | `tenant_id`, `phase` | network-reconciler | 同上 NetworkInterface |
+| `kyuusha_network_sg_set_updates_total` | Counter | `kind`（`delta`\|`full`） | network-reconciler | SecurityGroupのアドレス集合の更新をホストへ送った数（[SNAP仕様](snap.md)「アドレス集合の配布」） |
+| `kyuusha_compute_agent_sg_set_propagation_seconds` | Histogram | `kind`（`delta`\|`full`） | compute-agent（`/metrics`） | アドレス集合の変化をnetwork-reconcilerが見てから、そのホストで適用し終えるまでの時間（同上。目標は数秒以内） |
 | `kyuusha_tenant_quota_used` | Gauge | `tenant_id`, `resource`（`vcpu`\|`memory_mb`\|`vms`はcompute、`volume_gb`はblock-storageが公開） | compute-reconciler / block-storage-reconciler | 各サービスが元々持つ`tenant_usage`のin-memoryアカウンティング（Quota強制ロジックそのもの、`docs/architecture.md`「Quota設計」参照） |
 | `kyuusha_tenant_quota_limit` | Gauge | `tenant_id`, `resource`（`vcpu`\|`memory_mb`\|`volume_gb`\|`vms`） | identity | `Tenant.spec.quota`（Quota上限の一次情報源はidentityなので、cross-service RPC無しで直接公開できる） |
 

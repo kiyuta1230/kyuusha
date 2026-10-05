@@ -30,7 +30,6 @@ func TestTrafficAntiSpoof(t *testing.T) {
 
 	const (
 		bridge = "nftaclbr0"
-		cidr   = "10.123.46.0/24"
 		gw     = "10.123.46.1"
 	)
 	vms := []struct{ ns, tap, ip, mac string }{
@@ -38,6 +37,7 @@ func TestTrafficAntiSpoof(t *testing.T) {
 		{"nftacl-b", "nftacltb", "10.123.46.20", "02:00:00:7e:00:0b"},
 	}
 	a, b := vms[0], vms[1]
+	memberIPs := []string{a.ip, b.ip}
 
 	cleanup := func() {
 		for _, vm := range vms {
@@ -60,7 +60,13 @@ func TestTrafficAntiSpoof(t *testing.T) {
 		mustRun(t, "ip", "-n", vm.ns, "link", "set", "eth0", "address", vm.mac, "up")
 		mustRun(t, "ip", "-n", vm.ns, "link", "set", "lo", "up")
 		mustRun(t, "ip", "-n", vm.ns, "addr", "add", vm.ip+"/24", "dev", "eth0")
-		if err := Apply(Interface{TapName: vm.tap, SubnetCIDR: cidr, GatewayIP: gw, IPAddress: vm.ip, MACAddress: vm.mac}); err != nil {
+		if err := Apply(Interface{
+			TapName: vm.tap, GatewayIP: gw, IPAddress: vm.ip, MACAddress: vm.mac,
+			// What a Network's default SecurityGroup amounts to: in from
+			// the Network's members, anything out.
+			IngressRules: []Rule{{Set: "network:test"}}, EgressRules: []Rule{{CIDR: "0.0.0.0/0"}},
+			Sets: []SetUpdate{{Name: "network:test", Full: true, Members: memberIPs}},
+		}); err != nil {
 			t.Fatalf("Apply %s: %v", vm.tap, err)
 		}
 	}

@@ -477,7 +477,7 @@ func fromNetworkSpec(s *networkv1.NetworkSpec) network.NetworkSpec {
 }
 
 func toNetwork(n network.Network) *networkv1.Network {
-	st := &networkv1.NetworkStatus{Phase: string(n.Status.Phase), Values: n.Status.Values, Attributes: n.Status.Attributes, Allocations: toAllocationsProto(n.Status.Allocations)}
+	st := &networkv1.NetworkStatus{Phase: string(n.Status.Phase), Values: n.Status.Values, Attributes: n.Status.Attributes, Allocations: toAllocationsProto(n.Status.Allocations), DefaultSecurityGroupId: n.Status.DefaultSecurityGroupID}
 	for _, c := range n.Status.Conditions {
 		st.Conditions = append(st.Conditions, toConditionProto(c))
 	}

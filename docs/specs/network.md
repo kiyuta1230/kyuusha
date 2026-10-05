@@ -17,12 +17,13 @@ AllocationPool（管理者）  払い出し元。組の一覧（静的）／整�
 NetworkClass（管理者）    「どのプールから、どの単位で払い出すか」の定義
   ▲ 参照（1つ・変更不可）
 Network（テナント）       ルーティングドメイン兼分離の境界。AZをまたぐ
-  └─ Subnet（テナントが依頼、kyuushaが払い出す）  AZに閉じる。CIDR 1つ＝gateway 1つ（アドレスファミリごと）
-       └─ NetworkInterface（VMのNIC）
+  ├─ Subnet（テナントが依頼、kyuushaが払い出す）  AZに閉じる。CIDR 1つ＝gateway 1つ（アドレスファミリごと）
+  │    └─ NetworkInterface（VMのNIC）── SecurityGroup（テナント）を明示的に付ける
+  └─ 既定のSecurityGroup（Networkと一緒に作られる）
 ```
 
 フィールドの詳細はproto（`proto/kyuusha/network/v1/network.proto`・`subnet.proto`・
-`networkinterface.proto`）参照。
+`networkinterface.proto`・`securitygroup.proto`）参照。
 
 - **AllocationPool**（クラスタ単位、`tenant_id`は常に空）: 管理者専用——テナントは作れず、
   見ることもできない（テナントに見えるのは自分のNetwork/Subnetに払い出された値だけ）。
@@ -55,7 +56,8 @@ Network（テナント）       ルーティングドメイン兼分離の境界
   使えるClassだけを見られる
 - **Network**（テナント所有）: `network_class`（必須・変更不可）、`dns_suffix`、
   `visibility`/`shared_with_tenant_ids`。`status`にNetwork単位で払い出された値
-  （例: `route_target`）と属性。Subnetが残っている間は削除できない
+  （例: `route_target`）と属性、既定のSecurityGroup（`default_security_group_id`）。
+  Subnetが残っている間は削除できない
 - **Subnet**: `spec`は利用者が書く依頼——`network_id`・`zone`（必須・変更不可）、
   `requested_addresses`（ClassのCIDRプールが利用者指定の場合だけ。変更不可）、
   `dns_servers`（空ならClassのそのzoneの既定）、`allocatable_ip_ranges`。`status`は
@@ -64,7 +66,10 @@ Network（テナント）       ルーティングドメイン兼分離の境界
 - **NetworkInterface**: VirtualMachineとSubnetの結びつき（`VolumeAttachment`と同じ
   「結びつきそのものをリソースにする」パターン）。`spec.subnet_id`で固定するか、
   `spec.network_id`＋`spec.zone`を指定し、払い出し時にnetworkサービスがSubnetを選ぶ
-  （`status.subnet_id`）
+  （`status.subnet_id`）。`spec.security_group_ids`は付けるSecurityGroup（下記）で、
+  作成時に空ならNetworkの既定のグループが付く。作成後は`SetSecurityGroups`でだけ変えられる
+  （空にすると全て拒否）
+- **SecurityGroup**（テナント所有）: 下記「SecurityGroup」
 
 ## 払い出し（`internal/network/alloc.go`、`ipam.go`）
 
@@ -127,27 +132,47 @@ Quota（[Quota仕様](quota.md)参照）とは異なり、プール枯渇は**Cr
   時点に1回だけ減算する。削除中（`deleted_at`付き）のNetwork/Subnetには新しい
   Subnet/NetworkInterfaceを作れない（VM Createも拒否）
 
-## 同じNetwork内の既定の疎通
+## SecurityGroup
 
-**同じNetworkのSubnet同士は既定で疎通し、別のNetwork同士は既定で疎通しない**。
-`Service.EffectiveFirewallRules`（`internal/network/firewallrule.go`）が、対象
-NetworkInterfaceのSubnetと同じNetworkの他の全Subnetについて`{source_cidr: <そのSubnetの
-IPv4 CIDR>, action: allow, protocol: ""（=プロトコル問わず）}`という暗黙のルールを
-`ingress_rules`/`egress_rules`両方の末尾に追加する。**`spec`には混ぜない**——実際に
-compute-agentへ送る最終ルール一覧（`status.effective_ingress_rules`/
-`effective_egress_rules`）を組み立てる時にだけ合成する。
+NICに付けるallowのみのルールの集まり（設計の理由は[architecture.md「SecurityGroup」](../architecture.md)）。
 
-**Networkの配下が変わったら配下の全NIC
-のホスト側ACLを配り直す**: Subnetが`Ready`になった時、またはSubnetが実際に消えた時、
-network-reconcilerがそのNetworkの全Subnet上の全NetworkInterface（Networkを共有された
-他テナントのNICも含む）について`update_acl`を発行する（`republishNetworkACLs`）。
-compute-agentは古い版の`update_acl`を捨てるので、NIC自体は変わっていない配り直しは
-「NICの`resource_version`」と「きっかけになった変更のrevision」の大きい方を版にする。
+- **ルール**: `ingress_rules`（VMへの着信）/`egress_rules`（VMからの送信）の各要素は
+  `protocol`（空=全て／`tcp`／`udp`／`icmp`）、`port_range`（宛先ポート、`tcp`/`udp`のみ、
+  空=全ポート。`"22"`や`"2379-2380"`）、`peer`（相手。着信なら送信元、送信なら宛先）。
+  `peer`はちょうど1つ:
+  - `cidr`: IPv4/IPv6のCIDR
+  - `security_group_id`: そのグループが付いているNICのアドレス全部。`"self"`はこのグループ自身
+  - `network_id`: そのNetworkのNICのアドレス全部
+- **評価**: NICに付いたグループのどれかのルールが許せば通る（和集合、順番に意味は無い）。
+  どれにも当たらなければ着信・送信とも拒否。ステートフル（許された通信の戻りは通る）。
+  グループが1つも付いていないNICは全て拒否。グループと無関係に常に通るのはゲートウェイ
+  （Subnetの`gateway_ip`）との通信とARPだけで、アンチスプーフィングは別の層として常に効く
+  （[SNAP仕様](snap.md)）
+- **既定のグループ**: Networkが`Ready`になる前に、network-reconcilerが`default-<network id>`
+  という名前のグループを所有テナントに作り、Networkの`status.default_security_group_id`に
+  記録する。ルールは「着信: 同じNetworkから全て」「送信: `0.0.0.0/0`と`::/0`へ全て」で、
+  変えてよい。`status.default_for_network_id`を持ち、Networkがある間は削除できない。
+  Networkが消えると一緒に消える。既定のグループが無いまま`Ready`になっているNetwork
+  （この機能より前に作られたもの）には、定期スイープが後から作る
+- **使える人**: 所有テナント、`shared_with_tenant_ids`に入っているテナント、既定のグループ
+  ならそのNetworkを使えるテナント。それ以外のテナントからは`Get`でもNotFound。付ける
+  （NICの`security_group_ids`）・ルールの`peer`として参照する、のどちらにもこの条件が要る
+- **検証**: 上記の形、参照するグループ／Networkが存在して所有テナントが使えること。
+  NIC1つに付けられるのは16個まで
+- **削除**: NICに付いている間、他のグループのルールが参照している間、既定のグループで
+  Networkがある間は`FailedPrecondition`
+- **アドレス集合のメンバー**: NICのアドレスが`sg:<id>`（付いているグループごと）と
+  `network:<id>`の集合に入るのは、アドレスが払い出されていて、VMがどこかで`Running`の
+  間（`status.hypervisor`が空でない間）だけ。VMの停止・削除と同時に抜ける
+
+ホストでの強制とアドレス集合の配り方は[SNAP仕様](snap.md)参照。List/Watchは`tenant_id`を
+空にすると全テナント分（テナント横断のロールのみ）。ラベル・アノテーション、Admission
+Webhook（リソース名`SecurityGroup`）は他のリソースと同じ。
 
 Network同士の分離をどう実現するかはデータプレーン次第: VRF系（VLAN＋ファブリックのVRF、
 EVPN、VRF-lite、ホストのVRF）では経路そのものが分かれ、VRFを持たないIP一意のpure L3では
-全てが1つの経路表に載るためACLの既定拒否で分ける（SNAPの責務）。ルーティングドメインの
-値（Route Target、L3 VNI等）はNetwork単位で払い出す（Classの`network`参照）。
+全てが1つの経路表に載るためSecurityGroupの既定拒否で分ける（SNAPの責務）。ルーティング
+ドメインの値（Route Target、L3 VNI等）はNetwork単位で払い出す（Classの`network`参照）。
 
 ## Network/NetworkClassの共有と公開
 
@@ -201,8 +226,9 @@ Quota（`Tenant.spec.quota.max_subnets`/`max_network_interfaces`）判定を同�
   CIDR・各NICのIP・稼働中のゲストとホストのブリッジのgatewayは全てそこから決まっている
   ため。`status`は常に保存済みの値が残る——呼び出し側が指定した`vlan_id`等を受け入れると、
   そのテナントのVMを別テナントのVLANへ配線できてしまうため
-- **NetworkInterface**: `meta`のみ。`spec.ingress_rules`/`egress_rules`は
-  `UpdateFirewallRules`経由でしか変えられず（差分があるとエラー）、`spec.vm_id`/
+- **SecurityGroup**: `meta`と`spec`。`status`は常に保存済みの値が残る
+- **NetworkInterface**: `meta`のみ。`spec.security_group_ids`は
+  `SetSecurityGroups`経由でしか変えられず（差分があるとエラー）、`spec.vm_id`/
   `subnet_id`/`network_id`/`zone`の変更はエラー、`status`（`ip_address`/`mac_address`/
   `hypervisor`/`subnet_id`等）は常に保存済みの値が残る——SNAPのアンチスプーフィングは
   この`ip_address`/`mac_address`を信用するため
@@ -244,7 +270,7 @@ Getするついでに同期し直す。
   レプリカ）——`-compute-addr`もこちらが持つ。VMが存在する限り触らず、`Get`が`NotFound`
   を返した場合のみ削除する（一時的な疎通不可などその他のエラーは「わからないので消さない」
   で次回ティックに委ねる）。`network`本体（gRPC APIバイナリ）も別の理由で同じ
-  `computeClient`を独自に持つ——`UpdateFirewallRules`がACL変更を通知すべきHypervisorを
+  `computeClient`を独自に持つ——`SetSecurityGroups`がポリシーの変更を通知すべきHypervisorを
   解決するためで、こちらはオーファンGCとは無関係（[SNAP仕様](snap.md)参照）
 
 ## compute側の統合
@@ -258,6 +284,10 @@ Subnetに固定したい場合は`subnet_id`を指定する。VMの`spec.zone`�
 Network/Subnetの存在・利用可否・削除中でないことを検証し、決まったzoneを`spec.zone`に
 保存する。スケジュールの瞬間（`Reconciler.reconcile`）にも同じ検証をやり直し、zoneを
 `scheduleVM`のzoneフィルタ（[vm-scheduling.md](vm-scheduling.md)参照）に渡す。
+各要素の`security_group_ids`はそのNICに付けるSecurityGroupで、空ならNetworkの既定の
+グループ（上記）。computeはNICのIPが払い出された後で`NetworkInterfaceService.GetSecurityPolicy`
+（api-gatewayは中継しない内部RPC）を読み、ルールとアドレス集合の写しを起動コマンドに載せる
+——VMは起動した瞬間から正しいルールで動く。
 
 実際のNetworkInterfaceオブジェクトの作成は、VMがPhaseScheduledになった時点で行う
 （まだ一度もスケジュールされていないVMのために作るとオーファンになるため）。`name`は
@@ -310,7 +340,10 @@ MTU（`mtu`）とリゾルバ（`nameservers`）を書く。設定が終わる�
 `/init`はそのインタフェースのgateway_ip（＝ホスト側ブリッジのIP）へpingを打ち、結果を
 シリアルコンソールに書く（`kyuusha vm console`で確認できる）——tap配線が実際に機能して
 いることを、2台目のVMを用意しなくても1台のコンソール出力だけで確認できるようにする
-ための自己診断。
+ための自己診断。さらに`/init`は2秒ごとにeth0の/24の先頭の数十アドレスへpingを打ち、到達性が変わった
+アドレスだけを`kyuusha: neighbor <ip> reachable|unreachable`としてコンソールに書く——
+VM同士の通信をSecurityGroupが許しているか、ゲストの中からしか見えない挙動をplaygroundで
+確かめるための診断。
 
 **`user_data`注入(cloud-init NoCloud seed disk)とは別物**: `spec.user_data`全体を
 ゲストへ注入する仕組みは実装済み（[Firecracker起動仕様](firecracker-boot.md)
@@ -331,8 +364,8 @@ compute-agentコンテナ・ゲストrootfsのどちらもbusybox `ip`しか持�
 
 ## VNAP・SNAP（プラガブルなtap配線・ACL強制プラグイン契約）
 
-tapのローカルスイッチへの配線は[VNAP仕様](vnap.md)、`ingress_rules`/`egress_rules`
-のホスト側ACL強制は[SNAP仕様](snap.md)を参照——両者は同じ「バイナリ+stdin JSON+
+tapのローカルスイッチへの配線は[VNAP仕様](vnap.md)、SecurityGroupの
+ホスト側での強制は[SNAP仕様](snap.md)を参照——両者は同じ「バイナリ+stdin JSON+
 exit code」という呼び出し規約を共有するが、配線とACL強制は直交する別々の関心事のため
 独立したプラグイン契約になっている（それぞれ`-network-attach-bin`/
 `-security-backend-bin`）。
@@ -340,7 +373,7 @@ exit code」という呼び出し規約を共有するが、配線とACL強制�
 ## エンドポイント
 
 `network :8084`（`AllocationPoolService`, `NetworkClassService`, `NetworkService`,
-`SubnetService`, `NetworkInterfaceService`）。api-gateway経由でのみ到達可能
+`SubnetService`, `NetworkInterfaceService`, `SecurityGroupService`）。api-gateway経由でのみ到達可能
 （[システム構成仕様](system-overview.md)参照）——`SubnetService`/
 `NetworkInterfaceService`は組み込みのプロキシで、残りはapi-gatewayの外部バックエンドと
 同じ汎用転送（[外部システム連携仕様](external-integration.md)「外部バックエンドの登録」）で

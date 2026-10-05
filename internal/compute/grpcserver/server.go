@@ -268,6 +268,8 @@ func fromSpec(s *computev1.VirtualMachineSpec) compute.VirtualMachineSpec {
 			SubnetID:  n.GetSubnetId(),
 			NetworkID: n.GetNetworkId(),
 			Primary:   n.GetPrimary(),
+
+			SecurityGroupIDs: n.GetSecurityGroupIds(),
 		})
 	}
 	for _, v := range s.GetVolumes() {
@@ -301,6 +303,8 @@ func toSpec(s compute.VirtualMachineSpec) *computev1.VirtualMachineSpec {
 			SubnetId:  n.SubnetID,
 			NetworkId: n.NetworkID,
 			Primary:   n.Primary,
+
+			SecurityGroupIds: n.SecurityGroupIDs,
 		})
 	}
 	for _, v := range s.Volumes {

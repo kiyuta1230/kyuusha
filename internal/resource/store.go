@@ -309,23 +309,31 @@ func (s *Store[T, PT]) Get(ctx context.Context, tenantID, id string) (T, error) 
 // tenant roles only -- see docs/specs/authn-authz.md); that cross-tenant
 // List/Watch is a supported contract, not an internal-only shortcut.
 func (s *Store[T, PT]) List(ctx context.Context, tenantID string) ([]T, error) {
+	out, _, err := s.ListWithRevision(ctx, tenantID)
+	return out, err
+}
+
+// ListWithRevision is List plus the etcd revision the result is a
+// consistent snapshot of: every change at or before it is reflected, none
+// after it.
+func (s *Store[T, PT]) ListWithRevision(ctx context.Context, tenantID string) ([]T, int64, error) {
 	prefix := s.objectPrefix()
 	if tenantID != "" {
 		prefix = s.tenantPrefix(tenantID)
 	}
 	resp, err := s.client.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	out := make([]T, 0, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		obj, err := s.decode(kv.Value, kv.ModRevision)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, obj)
 	}
-	return out, nil
+	return out, resp.Header.Revision, nil
 }
 
 // Update requires obj's resource_version to match the stored value

@@ -20,10 +20,13 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/kiyuta1230/kyuusha/internal/compute-agent/snap"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
 
@@ -122,6 +125,11 @@ type Agent struct {
 	// with no entry (or a nil map), so tests that don't set this keep
 	// working.
 	Drivers map[string]vmm.VMM
+
+	// SecurityBackendBin is the SNAP plugin address-set updates go to
+	// (empty: built-in nftacl) -- the same -security-backend-bin the
+	// drivers get, see handleUpdateSets.
+	SecurityBackendBin string
 
 	// lastAppliedACL tracks, per iface_id, the resource_version of the
 	// last network.UpdateACLCommand this Agent actually applied (see
@@ -267,7 +275,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	defer verifyConsumeCtx.Stop()
 
-	// network's UpdateFirewallRules-triggered ACL update -- same "a
+	// network's SecurityPolicy updates (update_acl) -- same "a
 	// separate stream the other service owns/creates" shape as
 	// BLOCKSTORAGE_CMD above.
 	if err := network.EnsureStreams(ctx, a.JS); err != nil {
@@ -299,6 +307,22 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	defer updateACLConsumeCtx.Stop()
+
+	// Address-set membership changes (see handleUpdateSets): always Acked,
+	// so no MaxDeliver tuning is needed.
+	updateSetsCons, err := networkStream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:       "compute-agent-" + a.Hypervisor + "-update-sets",
+		FilterSubject: network.CmdSubjectUpdateSets(a.Hypervisor),
+		AckPolicy:     jetstream.AckExplicitPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	updateSetsConsumeCtx, err := updateSetsCons.Consume(a.handleUpdateSets)
+	if err != nil {
+		return err
+	}
+	defer updateSetsConsumeCtx.Stop()
 
 	// Plain NATS core subscription, not JetStream: console access is
 	// ephemeral/live, not a durable work-queue command -- see
@@ -486,8 +510,7 @@ func (a *Agent) handleStop(msg jetstream.Msg) {
 	}
 }
 
-// handleUpdateACL re-applies a NetworkInterface's current ingress_rules/
-// egress_rules (see internal/compute-agent/snap) once the VM they belong
+// handleUpdateACL re-applies a NetworkInterface's current SecurityPolicy (see internal/compute-agent/snap) once the VM they belong
 // to has actually finished booting on this host. Unlike every other
 // handleX above, this deliberately does NOT Ack on receipt: only once some
 // driver reports the tap as wired (ApplyACL's applied=true) does it Ack --
@@ -511,8 +534,7 @@ func (a *Agent) handleUpdateACL(msg jetstream.Msg) {
 		Attach:  vmm.AttachInfo(cmd.Attach),
 		IfaceID: cmd.IfaceID, SubnetID: cmd.SubnetID, SubnetLabels: cmd.SubnetLabels, SubnetCIDR: cmd.SubnetCIDR, GatewayIP: cmd.GatewayIP,
 		IPAddress: cmd.IPAddress, MACAddress: cmd.MACAddress,
-		IngressRules: toVMMFirewallRulesFromNetwork(cmd.IngressRules),
-		EgressRules:  toVMMFirewallRulesFromNetwork(cmd.EgressRules),
+		Policy: viaJSON[vmm.SecurityPolicy](cmd.Policy),
 	}
 	for _, driver := range a.Drivers {
 		applied, err := driver.ApplyACL(cmd.VMID, update)
@@ -545,15 +567,52 @@ func (a *Agent) recordAppliedACL(ifaceID string, resourceVersion int64) {
 	a.lastAppliedACL[ifaceID] = resourceVersion
 }
 
-// toVMMFirewallRulesFromNetwork mirrors toVMMFirewallRules (defined below,
-// for compute.FirewallRuleInfo) but for network.FirewallRuleInfo -- a
-// separate wire type from a separate service, same shape, not unified into
-// one conversion since the two source types aren't related by anything
-// other than coincidence.
-func toVMMFirewallRulesFromNetwork(rules []network.FirewallRuleInfo) []vmm.FirewallRule {
-	var out []vmm.FirewallRule
-	for _, r := range rules {
-		out = append(out, vmm.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
+// handleUpdateSets applies network-reconciler's address-set changes (see
+// internal/network/sgsync.go) through the SNAP backend. Always Acked:
+// sets no local interface references are simply skipped, and anything
+// missed is repaired by the next periodic full copy.
+func (a *Agent) handleUpdateSets(msg jetstream.Msg) {
+	defer func() { _ = msg.Ack() }()
+	var cmd network.UpdateSetsCommand
+	if err := json.Unmarshal(msg.Data(), &cmd); err != nil {
+		slog.Error("compute-agent: bad update_sets command", "err", err)
+		return
+	}
+	updates := viaJSON[[]vmm.SetUpdate](cmd.Sets)
+	applied, err := snap.UpdateSets(updates, a.SecurityBackendBin)
+	if err != nil {
+		slog.Error("compute-agent: apply address-set updates failed", "err", err)
+		return
+	}
+	if !cmd.ObservedAt.IsZero() {
+		delay := time.Since(cmd.ObservedAt).Seconds()
+		for _, u := range applied {
+			kind := "delta"
+			if u.Full {
+				kind = "full"
+			}
+			setPropagationSeconds.WithLabelValues(kind).Observe(delay)
+		}
+	}
+}
+
+// setPropagationSeconds is how long an address-set change took from
+// network-reconciler noticing it to this host applying it -- the delay
+// docs/specs/snap.md promises to keep to seconds.
+var setPropagationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "kyuusha_compute_agent_sg_set_propagation_seconds",
+	Help:    "Delay from network-reconciler observing an address-set change to this host applying it, by kind (delta/full).",
+	Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60},
+}, []string{"kind"})
+
+// viaJSON converts between two types sharing one JSON shape -- the
+// network/compute wire mirrors and vmm's own (same "no cross-service type
+// sharing" convention, without a field-by-field copy for every nesting).
+func viaJSON[T any](v any) T {
+	var out T
+	b, err := json.Marshal(v)
+	if err == nil {
+		_ = json.Unmarshal(b, &out)
 	}
 	return out
 }
@@ -626,17 +685,8 @@ func buildNetIfaces(vmID string, infos []compute.NetworkInterfaceInfo) []vmm.Net
 			DNSSearch:    ni.DNSSearch,
 			Primary:      ni.Primary,
 			SubnetCIDR:   ni.CIDR,
-			IngressRules: toVMMFirewallRules(ni.IngressRules),
-			EgressRules:  toVMMFirewallRules(ni.EgressRules),
+			Policy:       viaJSON[vmm.SecurityPolicy](ni.Policy),
 		})
-	}
-	return out
-}
-
-func toVMMFirewallRules(rules []compute.FirewallRuleInfo) []vmm.FirewallRule {
-	var out []vmm.FirewallRule
-	for _, r := range rules {
-		out = append(out, vmm.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
 	}
 	return out
 }

@@ -120,7 +120,7 @@ func (s *Service) validateNetworkInterfaces(ctx context.Context, tenantID, vmZon
 func (s *Service) createNetworkInterfaces(ctx context.Context, tenantID, vmID, zone string, attachments []NetworkAttachment) ([]NetworkInterfaceInfo, error) {
 	infos := make([]NetworkInterfaceInfo, 0, len(attachments))
 	for i, a := range attachments {
-		spec := &networkv1.NetworkInterfaceSpec{VmId: vmID, SubnetId: a.SubnetID, NetworkId: a.NetworkID}
+		spec := &networkv1.NetworkInterfaceSpec{VmId: vmID, SubnetId: a.SubnetID, NetworkId: a.NetworkID, SecurityGroupIds: a.SecurityGroupIDs}
 		if a.SubnetID == "" {
 			spec.Zone = zone
 		}
@@ -142,12 +142,15 @@ func (s *Service) createNetworkInterfaces(ctx context.Context, tenantID, vmID, z
 			IPAddress:  n.GetStatus().GetIpAddress(),
 			MACAddress: n.GetStatus().GetMacAddress(),
 			Primary:    a.Primary,
-			// Effective, not spec: includes any same-Network implicit
-			// allow entries alongside what the tenant actually declared --
-			// see NetworkInterfaceStatus's own doc comment in the proto.
-			IngressRules: toFirewallRuleInfos(n.GetStatus().GetEffectiveIngressRules()),
-			EgressRules:  toFirewallRuleInfos(n.GetStatus().GetEffectiveEgressRules()),
 		}
+		// Read after allocation, so the address-set snapshots are as
+		// fresh as possible; network-reconciler sends the host whatever
+		// changes after this once the VM is Running there.
+		policy, err := s.netifClient.GetSecurityPolicy(ctx, &networkv1.GetSecurityPolicyRequest{TenantId: tenantID, Id: info.IfaceID})
+		if err != nil {
+			return infos, fmt.Errorf("security policy for %s: %w", info.IfaceID, err)
+		}
+		info.Policy = toSecurityPolicyInfo(policy)
 		if info.IPAddress != "" && info.SubnetID != "" {
 			sn, err := s.subnetClient.Get(ctx, &networkv1.GetSubnetRequest{TenantId: tenantID, Id: info.SubnetID})
 			if err != nil {
@@ -230,13 +233,18 @@ func waitForAllocation(ctx context.Context, netifClient networkv1.NetworkInterfa
 	}
 }
 
-func toFirewallRuleInfos(rules []*networkv1.FirewallRule) []FirewallRuleInfo {
-	var out []FirewallRuleInfo
-	for _, r := range rules {
-		out = append(out, FirewallRuleInfo{
-			Protocol: r.GetProtocol(), PortRange: r.GetPortRange(),
-			SourceCIDR: r.GetSourceCidr(), Action: r.GetAction(),
-		})
+func toSecurityPolicyInfo(p *networkv1.SecurityPolicy) SecurityPolicyInfo {
+	out := SecurityPolicyInfo{SecurityGroupIDs: p.GetSecurityGroupIds()}
+	conv := func(rs []*networkv1.SecurityPolicyRule) []PolicyRuleInfo {
+		var o []PolicyRuleInfo
+		for _, r := range rs {
+			o = append(o, PolicyRuleInfo{Protocol: r.GetProtocol(), PortRange: r.GetPortRange(), CIDR: r.GetCidr(), Set: r.GetSet()})
+		}
+		return o
+	}
+	out.IngressRules, out.EgressRules = conv(p.GetIngressRules()), conv(p.GetEgressRules())
+	for _, a := range p.GetSets() {
+		out.Sets = append(out.Sets, AddressSetInfo{Name: a.GetName(), Version: a.GetVersion(), Members: a.GetMembers()})
 	}
 	return out
 }

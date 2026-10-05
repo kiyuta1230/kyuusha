@@ -66,6 +66,9 @@ type NetworkAttachment struct {
 	SubnetID  string
 	NetworkID string
 	Primary   bool
+	// SecurityGroupIDs for the NIC; empty attaches the Network's default
+	// group.
+	SecurityGroupIDs []string
 }
 
 type VolumeRequest struct {

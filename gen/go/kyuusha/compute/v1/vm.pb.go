@@ -138,12 +138,14 @@ func (VirtualMachineEvent_Type) EnumDescriptor() ([]byte, []int) {
 // VM's zone; the network service picks a Subnet with a free address.
 // subnet_id instead pins a specific Subnet (its zone must be the VM's).
 type NetworkAttachment struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SubnetId      string                 `protobuf:"bytes,1,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"`
-	Primary       bool                   `protobuf:"varint,2,opt,name=primary,proto3" json:"primary,omitempty"`
-	NetworkId     string                 `protobuf:"bytes,3,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SubnetId  string                 `protobuf:"bytes,1,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"`
+	Primary   bool                   `protobuf:"varint,2,opt,name=primary,proto3" json:"primary,omitempty"`
+	NetworkId string                 `protobuf:"bytes,3,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	// SecurityGroups for this NIC; empty attaches the Network's default group.
+	SecurityGroupIds []string `protobuf:"bytes,4,rep,name=security_group_ids,json=securityGroupIds,proto3" json:"security_group_ids,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *NetworkAttachment) Reset() {
@@ -195,6 +197,13 @@ func (x *NetworkAttachment) GetNetworkId() string {
 		return x.NetworkId
 	}
 	return ""
+}
+
+func (x *NetworkAttachment) GetSecurityGroupIds() []string {
+	if x != nil {
+		return x.SecurityGroupIds
+	}
+	return nil
 }
 
 type VolumeRequest struct {
@@ -1641,12 +1650,13 @@ var File_kyuusha_compute_v1_vm_proto protoreflect.FileDescriptor
 
 const file_kyuusha_compute_v1_vm_proto_rawDesc = "" +
 	"\n" +
-	"\x1bkyuusha/compute/v1/vm.proto\x12\x12kyuusha.compute.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"i\n" +
+	"\x1bkyuusha/compute/v1/vm.proto\x12\x12kyuusha.compute.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\x97\x01\n" +
 	"\x11NetworkAttachment\x12\x1b\n" +
 	"\tsubnet_id\x18\x01 \x01(\tR\bsubnetId\x12\x18\n" +
 	"\aprimary\x18\x02 \x01(\bR\aprimary\x12\x1d\n" +
 	"\n" +
-	"network_id\x18\x03 \x01(\tR\tnetworkId\"M\n" +
+	"network_id\x18\x03 \x01(\tR\tnetworkId\x12,\n" +
+	"\x12security_group_ids\x18\x04 \x03(\tR\x10securityGroupIds\"M\n" +
 	"\rVolumeRequest\x12\x1b\n" +
 	"\tvolume_id\x18\x01 \x01(\tR\bvolumeId\x12\x1f\n" +
 	"\vdevice_hint\x18\x02 \x01(\tR\n" +

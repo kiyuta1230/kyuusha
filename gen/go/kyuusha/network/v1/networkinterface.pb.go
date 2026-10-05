@@ -75,75 +75,7 @@ func (x NetworkInterfaceEvent_Type) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NetworkInterfaceEvent_Type.Descriptor instead.
 func (NetworkInterfaceEvent_Type) EnumDescriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{12, 0}
-}
-
-type FirewallRule struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Protocol      string                 `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`                    // tcp/udp/icmp
-	PortRange     string                 `protobuf:"bytes,2,opt,name=port_range,json=portRange,proto3" json:"port_range,omitempty"` // e.g. "22", "2379-2380"
-	SourceCidr    string                 `protobuf:"bytes,3,opt,name=source_cidr,json=sourceCidr,proto3" json:"source_cidr,omitempty"`
-	Action        string                 `protobuf:"bytes,4,opt,name=action,proto3" json:"action,omitempty"` // allow/deny
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FirewallRule) Reset() {
-	*x = FirewallRule{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FirewallRule) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FirewallRule) ProtoMessage() {}
-
-func (x *FirewallRule) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FirewallRule.ProtoReflect.Descriptor instead.
-func (*FirewallRule) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *FirewallRule) GetProtocol() string {
-	if x != nil {
-		return x.Protocol
-	}
-	return ""
-}
-
-func (x *FirewallRule) GetPortRange() string {
-	if x != nil {
-		return x.PortRange
-	}
-	return ""
-}
-
-func (x *FirewallRule) GetSourceCidr() string {
-	if x != nil {
-		return x.SourceCidr
-	}
-	return ""
-}
-
-func (x *FirewallRule) GetAction() string {
-	if x != nil {
-		return x.Action
-	}
-	return ""
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{15, 0}
 }
 
 type NetworkInterfaceSpec struct {
@@ -153,18 +85,20 @@ type NetworkInterfaceSpec struct {
 	// kyuusha picks a Subnet of that Network in that zone with a free address
 	// at allocation time (status.subnet_id). Set: network_id/zone are filled
 	// in from the Subnet.
-	SubnetId      string          `protobuf:"bytes,2,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"`
-	IngressRules  []*FirewallRule `protobuf:"bytes,3,rep,name=ingress_rules,json=ingressRules,proto3" json:"ingress_rules,omitempty"` // traffic allowed *into* the VM; default-deny outside the Subnet's own CIDR; no separate SecurityGroup-like resource
-	EgressRules   []*FirewallRule `protobuf:"bytes,4,rep,name=egress_rules,json=egressRules,proto3" json:"egress_rules,omitempty"`    // traffic allowed *out of* the VM; same default-deny-outside-CIDR baseline
-	NetworkId     string          `protobuf:"bytes,5,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`          // required unless subnet_id is set
-	Zone          string          `protobuf:"bytes,6,opt,name=zone,proto3" json:"zone,omitempty"`                                     // required unless subnet_id is set
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SubnetId  string `protobuf:"bytes,2,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"`
+	NetworkId string `protobuf:"bytes,5,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"` // required unless subnet_id is set
+	Zone      string `protobuf:"bytes,6,opt,name=zone,proto3" json:"zone,omitempty"`                            // required unless subnet_id is set
+	// SecurityGroups attached to the interface (allow-only, union). Empty at
+	// Create attaches the Network's default group; afterwards only
+	// SetSecurityGroups changes it (an empty list there means deny all).
+	SecurityGroupIds []string `protobuf:"bytes,7,rep,name=security_group_ids,json=securityGroupIds,proto3" json:"security_group_ids,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *NetworkInterfaceSpec) Reset() {
 	*x = NetworkInterfaceSpec{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[1]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -176,7 +110,7 @@ func (x *NetworkInterfaceSpec) String() string {
 func (*NetworkInterfaceSpec) ProtoMessage() {}
 
 func (x *NetworkInterfaceSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[1]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -189,7 +123,7 @@ func (x *NetworkInterfaceSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkInterfaceSpec.ProtoReflect.Descriptor instead.
 func (*NetworkInterfaceSpec) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{1}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *NetworkInterfaceSpec) GetVmId() string {
@@ -206,20 +140,6 @@ func (x *NetworkInterfaceSpec) GetSubnetId() string {
 	return ""
 }
 
-func (x *NetworkInterfaceSpec) GetIngressRules() []*FirewallRule {
-	if x != nil {
-		return x.IngressRules
-	}
-	return nil
-}
-
-func (x *NetworkInterfaceSpec) GetEgressRules() []*FirewallRule {
-	if x != nil {
-		return x.EgressRules
-	}
-	return nil
-}
-
 func (x *NetworkInterfaceSpec) GetNetworkId() string {
 	if x != nil {
 		return x.NetworkId
@@ -234,32 +154,28 @@ func (x *NetworkInterfaceSpec) GetZone() string {
 	return ""
 }
 
+func (x *NetworkInterfaceSpec) GetSecurityGroupIds() []string {
+	if x != nil {
+		return x.SecurityGroupIds
+	}
+	return nil
+}
+
 type NetworkInterfaceStatus struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	Phase      string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Binding(IPAM割当+tap配線中) / Ready / Rebinding(SELF_HEAL再バインド中) / Deleting / Error
-	Conditions []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	IpAddress  string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
-	MacAddress string                 `protobuf:"bytes,4,opt,name=mac_address,json=macAddress,proto3" json:"mac_address,omitempty"`
-	Hypervisor string                 `protobuf:"bytes,5,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"` // the Hypervisor a tap is currently wired on, if any
-	// effective_ingress_rules/egress_rules are spec.ingress_rules/egress_rules
-	// plus any implicit mesh_group-derived allow entries (see
-	// docs/specs/network.md「spec.mesh_group」) -- this is what actually gets
-	// enforced on the host (see docs/specs/snap.md), not necessarily what's
-	// written to spec. Only populated by Create/Get (the two RPCs whose
-	// response is actually consumed for enforcement, at VM Boot and via
-	// UpdateFirewallRules's NATS propagation respectively) -- List/Watch/
-	// Update/UpdateFirewallRules's own response leave these empty, a
-	// deliberate scope decision (see docs/open-questions.md history).
-	EffectiveIngressRules []*FirewallRule `protobuf:"bytes,6,rep,name=effective_ingress_rules,json=effectiveIngressRules,proto3" json:"effective_ingress_rules,omitempty"`
-	EffectiveEgressRules  []*FirewallRule `protobuf:"bytes,7,rep,name=effective_egress_rules,json=effectiveEgressRules,proto3" json:"effective_egress_rules,omitempty"`
-	SubnetId              string          `protobuf:"bytes,8,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"` // the Subnet the address was allocated from (spec.subnet_id, or the one kyuusha picked)
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // Pending / Binding(IPAM割当+tap配線中) / Ready / Rebinding(SELF_HEAL再バインド中) / Deleting / Error
+	Conditions    []*v1.Condition        `protobuf:"bytes,2,rep,name=conditions,proto3" json:"conditions,omitempty"`
+	IpAddress     string                 `protobuf:"bytes,3,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	MacAddress    string                 `protobuf:"bytes,4,opt,name=mac_address,json=macAddress,proto3" json:"mac_address,omitempty"`
+	Hypervisor    string                 `protobuf:"bytes,5,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`             // the Hypervisor a tap is currently wired on, if any
+	SubnetId      string                 `protobuf:"bytes,8,opt,name=subnet_id,json=subnetId,proto3" json:"subnet_id,omitempty"` // the Subnet the address was allocated from (spec.subnet_id, or the one kyuusha picked)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *NetworkInterfaceStatus) Reset() {
 	*x = NetworkInterfaceStatus{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[2]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -271,7 +187,7 @@ func (x *NetworkInterfaceStatus) String() string {
 func (*NetworkInterfaceStatus) ProtoMessage() {}
 
 func (x *NetworkInterfaceStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[2]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -284,7 +200,7 @@ func (x *NetworkInterfaceStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkInterfaceStatus.ProtoReflect.Descriptor instead.
 func (*NetworkInterfaceStatus) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{2}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *NetworkInterfaceStatus) GetPhase() string {
@@ -322,20 +238,6 @@ func (x *NetworkInterfaceStatus) GetHypervisor() string {
 	return ""
 }
 
-func (x *NetworkInterfaceStatus) GetEffectiveIngressRules() []*FirewallRule {
-	if x != nil {
-		return x.EffectiveIngressRules
-	}
-	return nil
-}
-
-func (x *NetworkInterfaceStatus) GetEffectiveEgressRules() []*FirewallRule {
-	if x != nil {
-		return x.EffectiveEgressRules
-	}
-	return nil
-}
-
 func (x *NetworkInterfaceStatus) GetSubnetId() string {
 	if x != nil {
 		return x.SubnetId
@@ -354,7 +256,7 @@ type NetworkInterface struct {
 
 func (x *NetworkInterface) Reset() {
 	*x = NetworkInterface{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[3]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -366,7 +268,7 @@ func (x *NetworkInterface) String() string {
 func (*NetworkInterface) ProtoMessage() {}
 
 func (x *NetworkInterface) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[3]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -379,7 +281,7 @@ func (x *NetworkInterface) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkInterface.ProtoReflect.Descriptor instead.
 func (*NetworkInterface) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{3}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *NetworkInterface) GetMeta() *v1.ObjectMeta {
@@ -418,7 +320,7 @@ type CreateNetworkInterfaceRequest struct {
 
 func (x *CreateNetworkInterfaceRequest) Reset() {
 	*x = CreateNetworkInterfaceRequest{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[4]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -430,7 +332,7 @@ func (x *CreateNetworkInterfaceRequest) String() string {
 func (*CreateNetworkInterfaceRequest) ProtoMessage() {}
 
 func (x *CreateNetworkInterfaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[4]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -443,7 +345,7 @@ func (x *CreateNetworkInterfaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateNetworkInterfaceRequest.ProtoReflect.Descriptor instead.
 func (*CreateNetworkInterfaceRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{4}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CreateNetworkInterfaceRequest) GetTenantId() string {
@@ -498,7 +400,7 @@ type GetNetworkInterfaceRequest struct {
 
 func (x *GetNetworkInterfaceRequest) Reset() {
 	*x = GetNetworkInterfaceRequest{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[5]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -510,7 +412,7 @@ func (x *GetNetworkInterfaceRequest) String() string {
 func (*GetNetworkInterfaceRequest) ProtoMessage() {}
 
 func (x *GetNetworkInterfaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[5]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -523,7 +425,7 @@ func (x *GetNetworkInterfaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNetworkInterfaceRequest.ProtoReflect.Descriptor instead.
 func (*GetNetworkInterfaceRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{5}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GetNetworkInterfaceRequest) GetTenantId() string {
@@ -549,7 +451,7 @@ type ListNetworkInterfacesRequest struct {
 
 func (x *ListNetworkInterfacesRequest) Reset() {
 	*x = ListNetworkInterfacesRequest{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[6]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -561,7 +463,7 @@ func (x *ListNetworkInterfacesRequest) String() string {
 func (*ListNetworkInterfacesRequest) ProtoMessage() {}
 
 func (x *ListNetworkInterfacesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[6]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -574,7 +476,7 @@ func (x *ListNetworkInterfacesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNetworkInterfacesRequest.ProtoReflect.Descriptor instead.
 func (*ListNetworkInterfacesRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{6}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListNetworkInterfacesRequest) GetTenantId() string {
@@ -593,7 +495,7 @@ type ListNetworkInterfacesResponse struct {
 
 func (x *ListNetworkInterfacesResponse) Reset() {
 	*x = ListNetworkInterfacesResponse{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[7]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -605,7 +507,7 @@ func (x *ListNetworkInterfacesResponse) String() string {
 func (*ListNetworkInterfacesResponse) ProtoMessage() {}
 
 func (x *ListNetworkInterfacesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[7]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -618,7 +520,7 @@ func (x *ListNetworkInterfacesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNetworkInterfacesResponse.ProtoReflect.Descriptor instead.
 func (*ListNetworkInterfacesResponse) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{7}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListNetworkInterfacesResponse) GetItems() []*NetworkInterface {
@@ -639,7 +541,7 @@ type UpdateNetworkInterfaceRequest struct {
 
 func (x *UpdateNetworkInterfaceRequest) Reset() {
 	*x = UpdateNetworkInterfaceRequest{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[8]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -651,7 +553,7 @@ func (x *UpdateNetworkInterfaceRequest) String() string {
 func (*UpdateNetworkInterfaceRequest) ProtoMessage() {}
 
 func (x *UpdateNetworkInterfaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[8]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -664,7 +566,7 @@ func (x *UpdateNetworkInterfaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNetworkInterfaceRequest.ProtoReflect.Descriptor instead.
 func (*UpdateNetworkInterfaceRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{8}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *UpdateNetworkInterfaceRequest) GetNetworkInterface() *NetworkInterface {
@@ -688,37 +590,96 @@ func (x *UpdateNetworkInterfaceRequest) GetTenantId() string {
 	return ""
 }
 
-type UpdateFirewallRulesRequest struct {
+type SetSecurityGroupsRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Id       string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"` // network_interface id
-	// Both lists replace the stored value wholesale (not a delta/merge), same
-	// convention as ResizeVirtualMachineRequest's new_vcpu/new_memory_mb --
-	// no resource_version: this does its own Get-then-mutate-then-Update
-	// internally, relying on resource.Store.Update's own CAS rather than
-	// asking the caller to supply one (see vm.proto's ResizeVirtualMachineRequest
-	// for the same rationale). A caller that only wants to change one
-	// direction must resend the other direction's current value too.
-	IngressRules  []*FirewallRule `protobuf:"bytes,3,rep,name=ingress_rules,json=ingressRules,proto3" json:"ingress_rules,omitempty"`
-	EgressRules   []*FirewallRule `protobuf:"bytes,4,rep,name=egress_rules,json=egressRules,proto3" json:"egress_rules,omitempty"`
+	// Replaces the attached groups wholesale; empty means none (deny all).
+	SecurityGroupIds []string `protobuf:"bytes,3,rep,name=security_group_ids,json=securityGroupIds,proto3" json:"security_group_ids,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SetSecurityGroupsRequest) Reset() {
+	*x = SetSecurityGroupsRequest{}
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSecurityGroupsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSecurityGroupsRequest) ProtoMessage() {}
+
+func (x *SetSecurityGroupsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSecurityGroupsRequest.ProtoReflect.Descriptor instead.
+func (*SetSecurityGroupsRequest) Descriptor() ([]byte, []int) {
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SetSecurityGroupsRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *SetSecurityGroupsRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SetSecurityGroupsRequest) GetSecurityGroupIds() []string {
+	if x != nil {
+		return x.SecurityGroupIds
+	}
+	return nil
+}
+
+// SecurityPolicy is what a host enforces for one NetworkInterface: its
+// SecurityGroups' rules, merged, with group/Network peers left as
+// references to named address sets, plus a versioned snapshot of each set
+// (see docs/specs/snap.md). Internal: compute reads it at boot; not served
+// through api-gateway.
+type SecurityPolicyRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Protocol      string                 `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`                    // "" (any) / tcp / udp / icmp
+	PortRange     string                 `protobuf:"bytes,2,opt,name=port_range,json=portRange,proto3" json:"port_range,omitempty"` // "" = all ports
+	Cidr          string                 `protobuf:"bytes,3,opt,name=cidr,proto3" json:"cidr,omitempty"`                            // exactly one of cidr/set
+	Set           string                 `protobuf:"bytes,4,opt,name=set,proto3" json:"set,omitempty"`                              // "sg:<id>" / "network:<id>"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *UpdateFirewallRulesRequest) Reset() {
-	*x = UpdateFirewallRulesRequest{}
+func (x *SecurityPolicyRule) Reset() {
+	*x = SecurityPolicyRule{}
 	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *UpdateFirewallRulesRequest) String() string {
+func (x *SecurityPolicyRule) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*UpdateFirewallRulesRequest) ProtoMessage() {}
+func (*SecurityPolicyRule) ProtoMessage() {}
 
-func (x *UpdateFirewallRulesRequest) ProtoReflect() protoreflect.Message {
+func (x *SecurityPolicyRule) ProtoReflect() protoreflect.Message {
 	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -730,37 +691,217 @@ func (x *UpdateFirewallRulesRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use UpdateFirewallRulesRequest.ProtoReflect.Descriptor instead.
-func (*UpdateFirewallRulesRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use SecurityPolicyRule.ProtoReflect.Descriptor instead.
+func (*SecurityPolicyRule) Descriptor() ([]byte, []int) {
 	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *UpdateFirewallRulesRequest) GetTenantId() string {
+func (x *SecurityPolicyRule) GetProtocol() string {
 	if x != nil {
-		return x.TenantId
+		return x.Protocol
 	}
 	return ""
 }
 
-func (x *UpdateFirewallRulesRequest) GetId() string {
+func (x *SecurityPolicyRule) GetPortRange() string {
 	if x != nil {
-		return x.Id
+		return x.PortRange
 	}
 	return ""
 }
 
-func (x *UpdateFirewallRulesRequest) GetIngressRules() []*FirewallRule {
+func (x *SecurityPolicyRule) GetCidr() string {
+	if x != nil {
+		return x.Cidr
+	}
+	return ""
+}
+
+func (x *SecurityPolicyRule) GetSet() string {
+	if x != nil {
+		return x.Set
+	}
+	return ""
+}
+
+type AddressSet struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Version       int64                  `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"` // etcd revision the snapshot reflects
+	Members       []string               `protobuf:"bytes,3,rep,name=members,proto3" json:"members,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddressSet) Reset() {
+	*x = AddressSet{}
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddressSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddressSet) ProtoMessage() {}
+
+func (x *AddressSet) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddressSet.ProtoReflect.Descriptor instead.
+func (*AddressSet) Descriptor() ([]byte, []int) {
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *AddressSet) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *AddressSet) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *AddressSet) GetMembers() []string {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+type SecurityPolicy struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	SecurityGroupIds []string               `protobuf:"bytes,1,rep,name=security_group_ids,json=securityGroupIds,proto3" json:"security_group_ids,omitempty"`
+	IngressRules     []*SecurityPolicyRule  `protobuf:"bytes,2,rep,name=ingress_rules,json=ingressRules,proto3" json:"ingress_rules,omitempty"`
+	EgressRules      []*SecurityPolicyRule  `protobuf:"bytes,3,rep,name=egress_rules,json=egressRules,proto3" json:"egress_rules,omitempty"`
+	Sets             []*AddressSet          `protobuf:"bytes,4,rep,name=sets,proto3" json:"sets,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SecurityPolicy) Reset() {
+	*x = SecurityPolicy{}
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecurityPolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecurityPolicy) ProtoMessage() {}
+
+func (x *SecurityPolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecurityPolicy.ProtoReflect.Descriptor instead.
+func (*SecurityPolicy) Descriptor() ([]byte, []int) {
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SecurityPolicy) GetSecurityGroupIds() []string {
+	if x != nil {
+		return x.SecurityGroupIds
+	}
+	return nil
+}
+
+func (x *SecurityPolicy) GetIngressRules() []*SecurityPolicyRule {
 	if x != nil {
 		return x.IngressRules
 	}
 	return nil
 }
 
-func (x *UpdateFirewallRulesRequest) GetEgressRules() []*FirewallRule {
+func (x *SecurityPolicy) GetEgressRules() []*SecurityPolicyRule {
 	if x != nil {
 		return x.EgressRules
 	}
 	return nil
+}
+
+func (x *SecurityPolicy) GetSets() []*AddressSet {
+	if x != nil {
+		return x.Sets
+	}
+	return nil
+}
+
+type GetSecurityPolicyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Id            string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"` // network_interface id
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSecurityPolicyRequest) Reset() {
+	*x = GetSecurityPolicyRequest{}
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSecurityPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSecurityPolicyRequest) ProtoMessage() {}
+
+func (x *GetSecurityPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSecurityPolicyRequest.ProtoReflect.Descriptor instead.
+func (*GetSecurityPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetSecurityPolicyRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetSecurityPolicyRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
 }
 
 type DeleteNetworkInterfaceRequest struct {
@@ -774,7 +915,7 @@ type DeleteNetworkInterfaceRequest struct {
 
 func (x *DeleteNetworkInterfaceRequest) Reset() {
 	*x = DeleteNetworkInterfaceRequest{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[10]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -786,7 +927,7 @@ func (x *DeleteNetworkInterfaceRequest) String() string {
 func (*DeleteNetworkInterfaceRequest) ProtoMessage() {}
 
 func (x *DeleteNetworkInterfaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[10]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -799,7 +940,7 @@ func (x *DeleteNetworkInterfaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteNetworkInterfaceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteNetworkInterfaceRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{10}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DeleteNetworkInterfaceRequest) GetTenantId() string {
@@ -833,7 +974,7 @@ type WatchNetworkInterfacesRequest struct {
 
 func (x *WatchNetworkInterfacesRequest) Reset() {
 	*x = WatchNetworkInterfacesRequest{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[11]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -845,7 +986,7 @@ func (x *WatchNetworkInterfacesRequest) String() string {
 func (*WatchNetworkInterfacesRequest) ProtoMessage() {}
 
 func (x *WatchNetworkInterfacesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[11]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -858,7 +999,7 @@ func (x *WatchNetworkInterfacesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchNetworkInterfacesRequest.ProtoReflect.Descriptor instead.
 func (*WatchNetworkInterfacesRequest) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{11}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *WatchNetworkInterfacesRequest) GetTenantId() string {
@@ -886,7 +1027,7 @@ type NetworkInterfaceEvent struct {
 
 func (x *NetworkInterfaceEvent) Reset() {
 	*x = NetworkInterfaceEvent{}
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[12]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -898,7 +1039,7 @@ func (x *NetworkInterfaceEvent) String() string {
 func (*NetworkInterfaceEvent) ProtoMessage() {}
 
 func (x *NetworkInterfaceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[12]
+	mi := &file_kyuusha_network_v1_networkinterface_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -911,7 +1052,7 @@ func (x *NetworkInterfaceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NetworkInterfaceEvent.ProtoReflect.Descriptor instead.
 func (*NetworkInterfaceEvent) Descriptor() ([]byte, []int) {
-	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{12}
+	return file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *NetworkInterfaceEvent) GetType() NetworkInterfaceEvent_Type {
@@ -939,22 +1080,14 @@ var File_kyuusha_network_v1_networkinterface_proto protoreflect.FileDescriptor
 
 const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"\n" +
-	")kyuusha/network/v1/networkinterface.proto\x12\x12kyuusha.network.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\x82\x01\n" +
-	"\fFirewallRule\x12\x1a\n" +
-	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12\x1d\n" +
-	"\n" +
-	"port_range\x18\x02 \x01(\tR\tportRange\x12\x1f\n" +
-	"\vsource_cidr\x18\x03 \x01(\tR\n" +
-	"sourceCidr\x12\x16\n" +
-	"\x06action\x18\x04 \x01(\tR\x06action\"\x87\x02\n" +
+	")kyuusha/network/v1/networkinterface.proto\x12\x12kyuusha.network.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xb5\x01\n" +
 	"\x14NetworkInterfaceSpec\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x1b\n" +
-	"\tsubnet_id\x18\x02 \x01(\tR\bsubnetId\x12E\n" +
-	"\ringress_rules\x18\x03 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\fingressRules\x12C\n" +
-	"\fegress_rules\x18\x04 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\vegressRules\x12\x1d\n" +
+	"\tsubnet_id\x18\x02 \x01(\tR\bsubnetId\x12\x1d\n" +
 	"\n" +
 	"network_id\x18\x05 \x01(\tR\tnetworkId\x12\x12\n" +
-	"\x04zone\x18\x06 \x01(\tR\x04zone\"\x9d\x03\n" +
+	"\x04zone\x18\x06 \x01(\tR\x04zone\x12,\n" +
+	"\x12security_group_ids\x18\a \x03(\tR\x10securityGroupIdsJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05\"\xf7\x01\n" +
 	"\x16NetworkInterfaceStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12>\n" +
 	"\n" +
@@ -966,10 +1099,8 @@ const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"macAddress\x12\x1e\n" +
 	"\n" +
 	"hypervisor\x18\x05 \x01(\tR\n" +
-	"hypervisor\x12X\n" +
-	"\x17effective_ingress_rules\x18\x06 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\x15effectiveIngressRules\x12V\n" +
-	"\x16effective_egress_rules\x18\a \x03(\v2 .kyuusha.network.v1.FirewallRuleR\x14effectiveEgressRules\x12\x1b\n" +
-	"\tsubnet_id\x18\b \x01(\tR\bsubnetId\"\xc9\x01\n" +
+	"hypervisor\x12\x1b\n" +
+	"\tsubnet_id\x18\b \x01(\tR\bsubnetIdJ\x04\b\x06\x10\aJ\x04\b\a\x10\b\"\xc9\x01\n" +
 	"\x10NetworkInterface\x123\n" +
 	"\x04meta\x18\x01 \x01(\v2\x1f.kyuusha.resource.v1.ObjectMetaR\x04meta\x12<\n" +
 	"\x04spec\x18\x02 \x01(\v2(.kyuusha.network.v1.NetworkInterfaceSpecR\x04spec\x12B\n" +
@@ -997,12 +1128,30 @@ const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"\x1dUpdateNetworkInterfaceRequest\x12Q\n" +
 	"\x11network_interface\x18\x01 \x01(\v2$.kyuusha.network.v1.NetworkInterfaceR\x10networkInterface\x12\x17\n" +
 	"\adry_run\x18\x02 \x01(\bR\x06dryRun\x12\x1b\n" +
-	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"\xd5\x01\n" +
-	"\x1aUpdateFirewallRulesRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"u\n" +
+	"\x18SetSecurityGroupsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
-	"\x02id\x18\x02 \x01(\tR\x02id\x12E\n" +
-	"\ringress_rules\x18\x03 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\fingressRules\x12C\n" +
-	"\fegress_rules\x18\x04 \x03(\v2 .kyuusha.network.v1.FirewallRuleR\vegressRules\"e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12,\n" +
+	"\x12security_group_ids\x18\x03 \x03(\tR\x10securityGroupIds\"u\n" +
+	"\x12SecurityPolicyRule\x12\x1a\n" +
+	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12\x1d\n" +
+	"\n" +
+	"port_range\x18\x02 \x01(\tR\tportRange\x12\x12\n" +
+	"\x04cidr\x18\x03 \x01(\tR\x04cidr\x12\x10\n" +
+	"\x03set\x18\x04 \x01(\tR\x03set\"T\n" +
+	"\n" +
+	"AddressSet\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x03R\aversion\x12\x18\n" +
+	"\amembers\x18\x03 \x03(\tR\amembers\"\x8a\x02\n" +
+	"\x0eSecurityPolicy\x12,\n" +
+	"\x12security_group_ids\x18\x01 \x03(\tR\x10securityGroupIds\x12K\n" +
+	"\ringress_rules\x18\x02 \x03(\v2&.kyuusha.network.v1.SecurityPolicyRuleR\fingressRules\x12I\n" +
+	"\fegress_rules\x18\x03 \x03(\v2&.kyuusha.network.v1.SecurityPolicyRuleR\vegressRules\x122\n" +
+	"\x04sets\x18\x04 \x03(\v2\x1e.kyuusha.network.v1.AddressSetR\x04sets\"G\n" +
+	"\x18GetSecurityPolicyRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\"e\n" +
 	"\x1dDeleteNetworkInterfaceRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x17\n" +
@@ -1019,13 +1168,14 @@ const file_kyuusha_network_v1_networkinterface_proto_rawDesc = "" +
 	"\x05ADDED\x10\x01\x12\f\n" +
 	"\bMODIFIED\x10\x02\x12\v\n" +
 	"\aDELETED\x10\x03\x12\f\n" +
-	"\bBOOKMARK\x10\x042\xd4\x05\n" +
+	"\bBOOKMARK\x10\x042\xb7\x06\n" +
 	"\x17NetworkInterfaceService\x12a\n" +
 	"\x06Create\x121.kyuusha.network.v1.CreateNetworkInterfaceRequest\x1a$.kyuusha.network.v1.NetworkInterface\x12[\n" +
 	"\x03Get\x12..kyuusha.network.v1.GetNetworkInterfaceRequest\x1a$.kyuusha.network.v1.NetworkInterface\x12k\n" +
 	"\x04List\x120.kyuusha.network.v1.ListNetworkInterfacesRequest\x1a1.kyuusha.network.v1.ListNetworkInterfacesResponse\x12a\n" +
-	"\x06Update\x121.kyuusha.network.v1.UpdateNetworkInterfaceRequest\x1a$.kyuusha.network.v1.NetworkInterface\x12k\n" +
-	"\x13UpdateFirewallRules\x12..kyuusha.network.v1.UpdateFirewallRulesRequest\x1a$.kyuusha.network.v1.NetworkInterface\x12S\n" +
+	"\x06Update\x121.kyuusha.network.v1.UpdateNetworkInterfaceRequest\x1a$.kyuusha.network.v1.NetworkInterface\x12g\n" +
+	"\x11SetSecurityGroups\x12,.kyuusha.network.v1.SetSecurityGroupsRequest\x1a$.kyuusha.network.v1.NetworkInterface\x12e\n" +
+	"\x11GetSecurityPolicy\x12,.kyuusha.network.v1.GetSecurityPolicyRequest\x1a\".kyuusha.network.v1.SecurityPolicy\x12S\n" +
 	"\x06Delete\x121.kyuusha.network.v1.DeleteNetworkInterfaceRequest\x1a\x16.google.protobuf.Empty\x12g\n" +
 	"\x05Watch\x121.kyuusha.network.v1.WatchNetworkInterfacesRequest\x1a).kyuusha.network.v1.NetworkInterfaceEvent0\x01BCZAgithub.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1b\x06proto3"
 
@@ -1042,65 +1192,67 @@ func file_kyuusha_network_v1_networkinterface_proto_rawDescGZIP() []byte {
 }
 
 var file_kyuusha_network_v1_networkinterface_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kyuusha_network_v1_networkinterface_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_kyuusha_network_v1_networkinterface_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_kyuusha_network_v1_networkinterface_proto_goTypes = []any{
 	(NetworkInterfaceEvent_Type)(0),       // 0: kyuusha.network.v1.NetworkInterfaceEvent.Type
-	(*FirewallRule)(nil),                  // 1: kyuusha.network.v1.FirewallRule
-	(*NetworkInterfaceSpec)(nil),          // 2: kyuusha.network.v1.NetworkInterfaceSpec
-	(*NetworkInterfaceStatus)(nil),        // 3: kyuusha.network.v1.NetworkInterfaceStatus
-	(*NetworkInterface)(nil),              // 4: kyuusha.network.v1.NetworkInterface
-	(*CreateNetworkInterfaceRequest)(nil), // 5: kyuusha.network.v1.CreateNetworkInterfaceRequest
-	(*GetNetworkInterfaceRequest)(nil),    // 6: kyuusha.network.v1.GetNetworkInterfaceRequest
-	(*ListNetworkInterfacesRequest)(nil),  // 7: kyuusha.network.v1.ListNetworkInterfacesRequest
-	(*ListNetworkInterfacesResponse)(nil), // 8: kyuusha.network.v1.ListNetworkInterfacesResponse
-	(*UpdateNetworkInterfaceRequest)(nil), // 9: kyuusha.network.v1.UpdateNetworkInterfaceRequest
-	(*UpdateFirewallRulesRequest)(nil),    // 10: kyuusha.network.v1.UpdateFirewallRulesRequest
-	(*DeleteNetworkInterfaceRequest)(nil), // 11: kyuusha.network.v1.DeleteNetworkInterfaceRequest
-	(*WatchNetworkInterfacesRequest)(nil), // 12: kyuusha.network.v1.WatchNetworkInterfacesRequest
-	(*NetworkInterfaceEvent)(nil),         // 13: kyuusha.network.v1.NetworkInterfaceEvent
-	nil,                                   // 14: kyuusha.network.v1.CreateNetworkInterfaceRequest.LabelsEntry
-	nil,                                   // 15: kyuusha.network.v1.CreateNetworkInterfaceRequest.AnnotationsEntry
-	(*v1.Condition)(nil),                  // 16: kyuusha.resource.v1.Condition
-	(*v1.ObjectMeta)(nil),                 // 17: kyuusha.resource.v1.ObjectMeta
-	(*emptypb.Empty)(nil),                 // 18: google.protobuf.Empty
+	(*NetworkInterfaceSpec)(nil),          // 1: kyuusha.network.v1.NetworkInterfaceSpec
+	(*NetworkInterfaceStatus)(nil),        // 2: kyuusha.network.v1.NetworkInterfaceStatus
+	(*NetworkInterface)(nil),              // 3: kyuusha.network.v1.NetworkInterface
+	(*CreateNetworkInterfaceRequest)(nil), // 4: kyuusha.network.v1.CreateNetworkInterfaceRequest
+	(*GetNetworkInterfaceRequest)(nil),    // 5: kyuusha.network.v1.GetNetworkInterfaceRequest
+	(*ListNetworkInterfacesRequest)(nil),  // 6: kyuusha.network.v1.ListNetworkInterfacesRequest
+	(*ListNetworkInterfacesResponse)(nil), // 7: kyuusha.network.v1.ListNetworkInterfacesResponse
+	(*UpdateNetworkInterfaceRequest)(nil), // 8: kyuusha.network.v1.UpdateNetworkInterfaceRequest
+	(*SetSecurityGroupsRequest)(nil),      // 9: kyuusha.network.v1.SetSecurityGroupsRequest
+	(*SecurityPolicyRule)(nil),            // 10: kyuusha.network.v1.SecurityPolicyRule
+	(*AddressSet)(nil),                    // 11: kyuusha.network.v1.AddressSet
+	(*SecurityPolicy)(nil),                // 12: kyuusha.network.v1.SecurityPolicy
+	(*GetSecurityPolicyRequest)(nil),      // 13: kyuusha.network.v1.GetSecurityPolicyRequest
+	(*DeleteNetworkInterfaceRequest)(nil), // 14: kyuusha.network.v1.DeleteNetworkInterfaceRequest
+	(*WatchNetworkInterfacesRequest)(nil), // 15: kyuusha.network.v1.WatchNetworkInterfacesRequest
+	(*NetworkInterfaceEvent)(nil),         // 16: kyuusha.network.v1.NetworkInterfaceEvent
+	nil,                                   // 17: kyuusha.network.v1.CreateNetworkInterfaceRequest.LabelsEntry
+	nil,                                   // 18: kyuusha.network.v1.CreateNetworkInterfaceRequest.AnnotationsEntry
+	(*v1.Condition)(nil),                  // 19: kyuusha.resource.v1.Condition
+	(*v1.ObjectMeta)(nil),                 // 20: kyuusha.resource.v1.ObjectMeta
+	(*emptypb.Empty)(nil),                 // 21: google.protobuf.Empty
 }
 var file_kyuusha_network_v1_networkinterface_proto_depIdxs = []int32{
-	1,  // 0: kyuusha.network.v1.NetworkInterfaceSpec.ingress_rules:type_name -> kyuusha.network.v1.FirewallRule
-	1,  // 1: kyuusha.network.v1.NetworkInterfaceSpec.egress_rules:type_name -> kyuusha.network.v1.FirewallRule
-	16, // 2: kyuusha.network.v1.NetworkInterfaceStatus.conditions:type_name -> kyuusha.resource.v1.Condition
-	1,  // 3: kyuusha.network.v1.NetworkInterfaceStatus.effective_ingress_rules:type_name -> kyuusha.network.v1.FirewallRule
-	1,  // 4: kyuusha.network.v1.NetworkInterfaceStatus.effective_egress_rules:type_name -> kyuusha.network.v1.FirewallRule
-	17, // 5: kyuusha.network.v1.NetworkInterface.meta:type_name -> kyuusha.resource.v1.ObjectMeta
-	2,  // 6: kyuusha.network.v1.NetworkInterface.spec:type_name -> kyuusha.network.v1.NetworkInterfaceSpec
-	3,  // 7: kyuusha.network.v1.NetworkInterface.status:type_name -> kyuusha.network.v1.NetworkInterfaceStatus
-	2,  // 8: kyuusha.network.v1.CreateNetworkInterfaceRequest.spec:type_name -> kyuusha.network.v1.NetworkInterfaceSpec
-	14, // 9: kyuusha.network.v1.CreateNetworkInterfaceRequest.labels:type_name -> kyuusha.network.v1.CreateNetworkInterfaceRequest.LabelsEntry
-	15, // 10: kyuusha.network.v1.CreateNetworkInterfaceRequest.annotations:type_name -> kyuusha.network.v1.CreateNetworkInterfaceRequest.AnnotationsEntry
-	4,  // 11: kyuusha.network.v1.ListNetworkInterfacesResponse.items:type_name -> kyuusha.network.v1.NetworkInterface
-	4,  // 12: kyuusha.network.v1.UpdateNetworkInterfaceRequest.network_interface:type_name -> kyuusha.network.v1.NetworkInterface
-	1,  // 13: kyuusha.network.v1.UpdateFirewallRulesRequest.ingress_rules:type_name -> kyuusha.network.v1.FirewallRule
-	1,  // 14: kyuusha.network.v1.UpdateFirewallRulesRequest.egress_rules:type_name -> kyuusha.network.v1.FirewallRule
-	0,  // 15: kyuusha.network.v1.NetworkInterfaceEvent.type:type_name -> kyuusha.network.v1.NetworkInterfaceEvent.Type
-	4,  // 16: kyuusha.network.v1.NetworkInterfaceEvent.network_interface:type_name -> kyuusha.network.v1.NetworkInterface
-	5,  // 17: kyuusha.network.v1.NetworkInterfaceService.Create:input_type -> kyuusha.network.v1.CreateNetworkInterfaceRequest
-	6,  // 18: kyuusha.network.v1.NetworkInterfaceService.Get:input_type -> kyuusha.network.v1.GetNetworkInterfaceRequest
-	7,  // 19: kyuusha.network.v1.NetworkInterfaceService.List:input_type -> kyuusha.network.v1.ListNetworkInterfacesRequest
-	9,  // 20: kyuusha.network.v1.NetworkInterfaceService.Update:input_type -> kyuusha.network.v1.UpdateNetworkInterfaceRequest
-	10, // 21: kyuusha.network.v1.NetworkInterfaceService.UpdateFirewallRules:input_type -> kyuusha.network.v1.UpdateFirewallRulesRequest
-	11, // 22: kyuusha.network.v1.NetworkInterfaceService.Delete:input_type -> kyuusha.network.v1.DeleteNetworkInterfaceRequest
-	12, // 23: kyuusha.network.v1.NetworkInterfaceService.Watch:input_type -> kyuusha.network.v1.WatchNetworkInterfacesRequest
-	4,  // 24: kyuusha.network.v1.NetworkInterfaceService.Create:output_type -> kyuusha.network.v1.NetworkInterface
-	4,  // 25: kyuusha.network.v1.NetworkInterfaceService.Get:output_type -> kyuusha.network.v1.NetworkInterface
-	8,  // 26: kyuusha.network.v1.NetworkInterfaceService.List:output_type -> kyuusha.network.v1.ListNetworkInterfacesResponse
-	4,  // 27: kyuusha.network.v1.NetworkInterfaceService.Update:output_type -> kyuusha.network.v1.NetworkInterface
-	4,  // 28: kyuusha.network.v1.NetworkInterfaceService.UpdateFirewallRules:output_type -> kyuusha.network.v1.NetworkInterface
-	18, // 29: kyuusha.network.v1.NetworkInterfaceService.Delete:output_type -> google.protobuf.Empty
-	13, // 30: kyuusha.network.v1.NetworkInterfaceService.Watch:output_type -> kyuusha.network.v1.NetworkInterfaceEvent
-	24, // [24:31] is the sub-list for method output_type
-	17, // [17:24] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	19, // 0: kyuusha.network.v1.NetworkInterfaceStatus.conditions:type_name -> kyuusha.resource.v1.Condition
+	20, // 1: kyuusha.network.v1.NetworkInterface.meta:type_name -> kyuusha.resource.v1.ObjectMeta
+	1,  // 2: kyuusha.network.v1.NetworkInterface.spec:type_name -> kyuusha.network.v1.NetworkInterfaceSpec
+	2,  // 3: kyuusha.network.v1.NetworkInterface.status:type_name -> kyuusha.network.v1.NetworkInterfaceStatus
+	1,  // 4: kyuusha.network.v1.CreateNetworkInterfaceRequest.spec:type_name -> kyuusha.network.v1.NetworkInterfaceSpec
+	17, // 5: kyuusha.network.v1.CreateNetworkInterfaceRequest.labels:type_name -> kyuusha.network.v1.CreateNetworkInterfaceRequest.LabelsEntry
+	18, // 6: kyuusha.network.v1.CreateNetworkInterfaceRequest.annotations:type_name -> kyuusha.network.v1.CreateNetworkInterfaceRequest.AnnotationsEntry
+	3,  // 7: kyuusha.network.v1.ListNetworkInterfacesResponse.items:type_name -> kyuusha.network.v1.NetworkInterface
+	3,  // 8: kyuusha.network.v1.UpdateNetworkInterfaceRequest.network_interface:type_name -> kyuusha.network.v1.NetworkInterface
+	10, // 9: kyuusha.network.v1.SecurityPolicy.ingress_rules:type_name -> kyuusha.network.v1.SecurityPolicyRule
+	10, // 10: kyuusha.network.v1.SecurityPolicy.egress_rules:type_name -> kyuusha.network.v1.SecurityPolicyRule
+	11, // 11: kyuusha.network.v1.SecurityPolicy.sets:type_name -> kyuusha.network.v1.AddressSet
+	0,  // 12: kyuusha.network.v1.NetworkInterfaceEvent.type:type_name -> kyuusha.network.v1.NetworkInterfaceEvent.Type
+	3,  // 13: kyuusha.network.v1.NetworkInterfaceEvent.network_interface:type_name -> kyuusha.network.v1.NetworkInterface
+	4,  // 14: kyuusha.network.v1.NetworkInterfaceService.Create:input_type -> kyuusha.network.v1.CreateNetworkInterfaceRequest
+	5,  // 15: kyuusha.network.v1.NetworkInterfaceService.Get:input_type -> kyuusha.network.v1.GetNetworkInterfaceRequest
+	6,  // 16: kyuusha.network.v1.NetworkInterfaceService.List:input_type -> kyuusha.network.v1.ListNetworkInterfacesRequest
+	8,  // 17: kyuusha.network.v1.NetworkInterfaceService.Update:input_type -> kyuusha.network.v1.UpdateNetworkInterfaceRequest
+	9,  // 18: kyuusha.network.v1.NetworkInterfaceService.SetSecurityGroups:input_type -> kyuusha.network.v1.SetSecurityGroupsRequest
+	13, // 19: kyuusha.network.v1.NetworkInterfaceService.GetSecurityPolicy:input_type -> kyuusha.network.v1.GetSecurityPolicyRequest
+	14, // 20: kyuusha.network.v1.NetworkInterfaceService.Delete:input_type -> kyuusha.network.v1.DeleteNetworkInterfaceRequest
+	15, // 21: kyuusha.network.v1.NetworkInterfaceService.Watch:input_type -> kyuusha.network.v1.WatchNetworkInterfacesRequest
+	3,  // 22: kyuusha.network.v1.NetworkInterfaceService.Create:output_type -> kyuusha.network.v1.NetworkInterface
+	3,  // 23: kyuusha.network.v1.NetworkInterfaceService.Get:output_type -> kyuusha.network.v1.NetworkInterface
+	7,  // 24: kyuusha.network.v1.NetworkInterfaceService.List:output_type -> kyuusha.network.v1.ListNetworkInterfacesResponse
+	3,  // 25: kyuusha.network.v1.NetworkInterfaceService.Update:output_type -> kyuusha.network.v1.NetworkInterface
+	3,  // 26: kyuusha.network.v1.NetworkInterfaceService.SetSecurityGroups:output_type -> kyuusha.network.v1.NetworkInterface
+	12, // 27: kyuusha.network.v1.NetworkInterfaceService.GetSecurityPolicy:output_type -> kyuusha.network.v1.SecurityPolicy
+	21, // 28: kyuusha.network.v1.NetworkInterfaceService.Delete:output_type -> google.protobuf.Empty
+	16, // 29: kyuusha.network.v1.NetworkInterfaceService.Watch:output_type -> kyuusha.network.v1.NetworkInterfaceEvent
+	22, // [22:30] is the sub-list for method output_type
+	14, // [14:22] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_kyuusha_network_v1_networkinterface_proto_init() }
@@ -1114,7 +1266,7 @@ func file_kyuusha_network_v1_networkinterface_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kyuusha_network_v1_networkinterface_proto_rawDesc), len(file_kyuusha_network_v1_networkinterface_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   15,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

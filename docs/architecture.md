@@ -403,10 +403,10 @@ Network（テナント）      ルーティングドメイン兼分離の境界�
   見ることになるため
 - **ルーティングドメインはテナントではなくNetwork**: 1つのKaaSクラスタの中に、互いに分離
   されたネットワークを複数持てる（例: サービス用とストレージ用）。Route TargetやL3 VNIの
-  ようなルーティングドメインの値はNetworkごとに1つ払い出す。Network同士は既定で疎通せず、
-  同じNetwork内のSubnet同士は既定で疎通する（「この範囲は互いに許可」を別の宣言フィールドで
-  表すのではなく、Networkという実体のある境界そのもので表す）。Networkの配下が
-  変わったら配下の全NICのホスト側ACLを配り直す
+  ようなルーティングドメインの値はNetworkごとに1つ払い出す。Network同士は既定で疎通しない。
+  同じNetwork内の疎通は、Networkを作ると一緒に作られる既定のSecurityGroupの明示的な
+  ルール（相手: そのNetwork）で表す（下記「SecurityGroup」）。ルールはNetworkを
+  アドレスの集合として参照するので、Subnetが増えてもルールの書き換えは要らない
 - **項目はNetworkかSubnetの片方だけが持つ**: 親の値を子が上書きできる継承は作らない
   （どの値が効いているか分かりにくくなるため）。`dns_suffix`（名前空間はAZに関係なく
   同じであるべき）、共有範囲、Network単位の値はNetwork、`zone`・CIDR/gateway・
@@ -473,8 +473,8 @@ VMの配置先を絞る。HostAggregateをcomputeに置くのは、スケジュ�
 集合に属せる）。selectorはスケジュールの都度NICから引き直し、配置済みのVMは動かさない。
 
 **`NetworkInterface`**: VirtualMachineとSubnetの結びつきそのものをリソースにする
-（`VolumeAttachment`と同じパターン）。NICの単位のACL（`ingress_rules`/`egress_rules`）を
-持つ。Network＋AZを指定されたNICのSubnetを、networkサービスがIPの払い出しと同じ処理の
+（`VolumeAttachment`と同じパターン）。NICには`SecurityGroup`を明示的に付ける（下記）。
+Network＋AZを指定されたNICのSubnetを、networkサービスがIPの払い出しと同じ処理の
 中で原子的に選ぶ——IPAMの持ち主がnetworkなので、選んだ直後に枯渇する競合を避けられる。
 
 **AZはクライアントが決める**: VMの`spec.zone`はKaaS側が選ぶ（kyuushaはAZを選ばない）。
@@ -1617,12 +1617,74 @@ Network同士をつなぐのは、ファブリック側で実現されている�
 ルートリーク、pure L3ならACLの許可、ホスト上で動的に作るVRF/VTEPならkyuusha-vpcのような
 上位のソフトウェアの責務（両方のNetworkにNICを持つbastion型の多足構成はどの構成でも使える）。
 
-**防御層としてのNetworkInterface ACL**: `NetworkInterfaceSpec.ingress_rules`/`egress_rules`
-の既定姿勢を「同じNetworkの外からのトラフィックは既定で拒否」にしておくことで、
-万が一ファブリック側のVRF設定ミスでルートがリークしても、tap deviceのnftablesルールで
-実際には弾かれる。物理ファブリックの設定ミスに対する二重の防御になる。同じNetwork内の
-Subnet同士の既定の許可は、NICのACLへ暗黙のallowとして合成する（[network仕様](specs/network.md)
-「同じNetwork内の既定の疎通」）。
+**防御層としてのSecurityGroup**: ホスト側のACLは、NICに付いたSecurityGroupのどれかが
+許すものだけを通し、それ以外は両方向とも拒否する。既定のSecurityGroupが許すのも同じ
+Networkからの着信だけなので、万が一ファブリック側のVRF設定ミスでルートがリークしても、
+tap deviceのルールで実際には弾かれる。物理ファブリックの設定ミスに対する二重の防御になる。
+
+### SecurityGroup: 独立したリソースをNICに明示的に付ける（AWSのSecurity Group型）
+
+ACLをNICごとのルールとして持つと、同じ役割のVM群に同じルールを持たせるにはNICごとに
+書くしかなく、相手もCIDRでしか指定できないため、Subnetの追加やVMの増減のたびに該当する
+全NICのルールを書き換えることになる。そこで、ルールの集まりをテナント所有の独立した
+リソース`SecurityGroup`にし、NICに複数付けられ、1つを複数のNICで共有できるようにした。
+NIC単位のルールとの併存はしない（どちらが効いているのか分かりにくくなるため）。
+
+- **適用先は明示的に付けて決める**: ラベルのセレクタで選ぶ方式（GCPのタグ、Kubernetesの
+  NetworkPolicy）は採らない。Networkを他テナントと共有できる以上、「誰がこのグループに
+  入れるか」を権限で管理できる方が安全なため（ラベルはテナントが自由に書けるので、共有
+  されたNetworkにいる他テナントのVMが自分にラベルを付けて、所有テナントのルールの対象や
+  許可元に入り込めてしまう）。「このNICにどのグループが付いているか」がそのまま見える。
+  VM作成時のNICの指定で付けられ、NICを作る時点でルールを展開するので、起動した瞬間から
+  正しいルールが効く。付け替えは通常のUpdateと分けた専用RPC（`SetSecurityGroups`）で行い、
+  ホストへの反映経路を必ず通す
+- **ルールはallowのみ、既定は両方向とも拒否、ステートフル**: 複数のグループが付いて
+  いればどれかが許せば通る（和集合、順番に意味は無い）。全許可も`0.0.0.0/0`を明示的に
+  書く（新しいグループに「送信は全許可」を最初から入れておくこともしない）。denyが欲しい
+  典型的な場面は別の手段で扱う: 範囲の一部を除くなら許可するCIDRを分けて書き、侵害された
+  ホストの即時遮断はSecurityGroupの役割ではない（必要になったらNetwork単位の拒否リストを
+  別の概念として足す）
+- **相手はCIDR・SecurityGroup・Network**: SecurityGroupはそれが付いているNICのアドレス
+  全部（自分自身も指定でき、「メンバー同士は許可」を書ける）、NetworkはそのNetworkの
+  NICのアドレス全部。Subnetや個別のVMは指定できない（NetworkとSecurityGroupで足りる）。
+  相手の種類は後から足せる形にしてある（名前付きのCIDRの集合`PrefixList`を足す予定）
+- **暗黙の許可は持たず、Networkごとの既定のSecurityGroupで置き換える**: Networkを作ると、
+  「着信: 同じNetworkから全て」「送信: 全て」を持つ既定のグループが一緒に作られ、NICに
+  グループを指定しなければそれが付く。Network内の疎通は既定で保たれつつ、それが明示的な
+  ルールとして見え、外したり変えたりしてNetwork内も絞れる——「なぜ通るのか」は常に
+  SecurityGroupを見れば分かる。既定のグループはNetworkがある間は消せない（ルールは変えられる）。
+  Networkを共有された他テナントもそのNetworkの既定のグループを使える（Networkへの参加を
+  許した時点で、既定のグループへの参加も許したとみなす）
+- **SecurityGroupの外の基本動作**: ゲートウェイとの通信、ARP、確立済みの通信の戻りは、
+  グループで全てを拒否しても常に通す（でないとVMがそもそも通信できない）。アンチ
+  スプーフィングはテナントが変えられない別の層としてそのまま残す
+- **共有**: グループを付けられる・相手として参照できるのは既定では所有テナントだけで、
+  他テナントには`shared_with_tenant_ids`で明示的に許可する（共有されたNetworkにいる他テナント
+  のVMが所有テナントのグループに入れてしまうと、そのグループに許された通信が全て通るため）
+
+**ホストへの配り方: ルールは集合への参照のまま、集合の中身は差分で**: NICごとに「CIDRに
+展開し終えたルールの全量」を配る形をそのままグループに当てはめると、規模が大きいときに
+破綻する（1,000台が「メンバー同士は許可」のグループに属していると、1台増えるたびに1,000個の
+NICへ約1,000件のアドレスを含むルールを送り直すことになり、1台の起動につき約100万件）。
+そこでSNAPの契約で、ルールの相手は名前付きのアドレス集合（`sg:<id>`/`network:<id>`）への
+参照のまま渡し、集合の中身は別に配る。メンバーの増減は、その集合を参照しているホストへ
+差分（「このアドレスを集合Xに追加/削除」）だけを送るので、1台増えても送るのは「1件の差分×
+参照しているホスト数」になる。nftablesの名前付きset、eBPFのmap、ipsetのどれでも「集合を
+参照するルール」と「集合の中身」を分けて扱える。
+
+- **反映は最終的に揃う方式として受け入れる**: 新しいVMが起動してから他のホストの集合に
+  そのアドレスが入るまでの短い間は、そのVMとの通信が相手側で拒否されうる（AWSも同様）。
+  目標は数秒以内で、遅れはcompute-agentのメトリクスで見えるようにした
+- **取りこぼしは定期的な全量で直す**: 集合ごとに版（etcdのリビジョン）を持たせ、ホストは
+  古い版を捨てる。差分の取りこぼしや順序の入れ替わりは、network-reconcilerが定期的に
+  送る全量で収束する（`update_acl`が常に全量を運ぶので最終的に正しくなる、という既存の
+  考え方を差分にも適用した）
+- **集合のメンバーは稼働中のVMのNICだけ**: NICのアドレスが集合に入るのはVMがどこかの
+  ハイパーバイザーで動いている間だけにした。VMの削除からNICの後始末（孤児の掃除）までは
+  時間があり、その間アドレスを集合に残すと消えたVMの分の許可が残るため
+- **配る主体はnetwork-reconciler**: NIC・SecurityGroupの変化をWatchし、どのホストがどの集合を
+  参照しているかを自分で持てるのは単一レプリカのreconcilerだけなので、差分と全量の配布は
+  そこに置いた。APIの側（`SetSecurityGroups`）はそのNICの全量（`update_acl`）だけを送る
 
 ### テナント間でのNetwork共有: 無目的な共有は禁止、所有テナントが個別に許可した相手だけが参加できる
 
@@ -1631,8 +1693,8 @@ Networkの単一所有（`tenant_id`）は変えないが、`NetworkInterface`�
 `shared_with_tenant_ids`（`kyuusha.image.v1.ImageVisibility`と同じ意味、
 [network仕様](specs/network.md)参照）で明示的に許可した相手だけがこのNetworkへ`NetworkInterface`を
 直接attachできる。共有はNetwork単位で、一部のSubnetだけを共有することはできない
-（必要なら別のNetworkを作る）——共有された相手のNICはそのNetworkに参加し、同じNetwork内の
-既定の疎通に加わる（マネージドサービスをVMごと注入する用途の意図どおり）。
+（必要なら別のNetworkを作る）——共有された相手のNICはそのNetworkに参加し、そのNetworkの
+既定のSecurityGroupも使える（マネージドサービスをVMごと注入する用途の意図どおり）。
 
 同一VLANに複数テナントのVirtualMachineを混在させると、ARP spoofingやbroadcast/multicastの盗聴
 といったL2レベルの攻撃面がテナント間で共有されてしまう。危険なのは**所有テナントが意図せず/
@@ -2671,7 +2733,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
   VNAPの立ち位置は、os-vifの発想（netnsを持ち込まない）を、CNI由来の軽い呼び出し
   規約（バイナリ+JSON+exit code）で実装した形に近い。
 
-- **ACL(`ingress_rules`/`egress_rules`)強制もVNAPと同じ発想でプラガブルにすべきか**
+- **ACL（SecurityGroup）強制もVNAPと同じ発想でプラガブルにすべきか**
   （判断確定・実装済み、2026-09-27）: VNAPが「tap配線」という1つの責務を切り出した
   のに対し、ACL強制は直交する別の関心事（配線先がLinuxブリッジかOVSかeBPFかに関わらず、
   「何を通すか」は独立に選べるべき）と判断し、VNAPとは**別のプラグイン契約**——
@@ -2693,10 +2755,10 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
   ACL実装」は目指さないことにした（詳細な設計・実機確認結果は
   [SNAP仕様](specs/snap.md)参照）。
 
-  ingress_rules自体の更新（`UpdateFirewallRules`、専用RPC）は、対象VMが稼働中の
-  Hypervisorへ`network`独自のNATS JetStreamストリーム（`NETWORK_CMD`）でベスト
-  エフォート通知する形にした——VM起動時のみ有効な静的な設定ではなく、稼働中のVMに
-  対しても実際にホスト側の強制状態を追従させるため。`cmd/network`（ステートレスAPI
+  稼働中のVMのポリシーの変更（`SetSecurityGroups`、グループのルールの変更、アドレス集合の
+  メンバーの増減）は、対象のHypervisorへ`network`独自のNATS JetStreamストリーム
+  （`NETWORK_CMD`）で通知する形にした——VM起動時のみ有効な静的な設定ではなく、稼働中の
+  VMに対しても実際にホスト側の強制状態を追従させるため（上記「SecurityGroup」）。`cmd/network`（ステートレスAPI
   バイナリ）がこの通知のためだけにcompute/NATSへの依存を新たに持つことになったが、
   これは`cmd/compute`が既に持つ「StreamConsole/ライブホットプラグのための同期的な
   NATS利用」と同じ例外（reconcilerの単一レプリカ制約とは無関係、各レプリカが独立に
@@ -2755,7 +2817,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）。`tenant_role=viewer`（テナント内read-only）と`role=storage-admin`（block-storageサービスのみにscopeしたadmin相当）、`role=network-admin`（同形、networkサービスにscope）、`role=viewer`（全テナント・全サービス横断read-only）を実装——静的な列挙のみで、動的カスタムロール定義は見送り
 - Watchの再開設計（resource_version + Bookmarkイベント、履歴保持は有限で古すぎたら再List）
 - Firecrackerのjailer/tapデバイス運用方針
-- ネットワークACL（`NetworkInterfaceSpec.ingress_rules`による最小限のホスト側ファイアウォール。SecurityGroupのような別リソースは導入しない）
+- ネットワークACL（テナント所有の`SecurityGroup`をNICに明示的に付ける。allowのみ・既定は両方向拒否・Networkごとの既定のグループ・相手はCIDR/SecurityGroup/Network、ホストへはアドレス集合の差分で配る。詳細は「SecurityGroup」節参照）
 - テナント間の非疎通性はVLANではなくVRF+ルートリーク禁止で担保する（ACLのデフォルト拒否を二重防御として追加）
 - Image設計（`ImageFormat`: `KERNEL_ROOTFS`(直接カーネルブート系VMM用)/`QCOW2`(QEMU/libvirt/cloud-hypervisor用)、`driver_hint`との対応バリデーション、コンテンツアドレス型blobストア）
 - Flavor/machine_classという固定カタログの廃止（`VirtualMachineSpec.vcpu`/`memory_mb`を直接指定、`driver_hint`でドライバ選択を分離、Quotaにper-VM上限を追加）
@@ -2765,4 +2827,4 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - Imageのストレージ方針（`ImageArtifact{url, digest}`による外部URL参照のみ。kyuushaはblobを一切保管しない。オブジェクトストレージは任意の外部依存に格下げ）
 - ハイパーバイザー間の軽量ピアフェッチ（heartbeatでのキャッシュ済みdigest報告＋同一zone優先の直接HTTP転送。外部依存ではなくkyuusha自身の組み込み機能）
 - インフラ要件の「必須」「任意」の分類軸（必須: DB/NATS/ブロックストレージノード。任意: privateオブジェクトストレージ/Dragonfly）
-- テナント間のSubnet共有方針（L2共有はしない。`shared_with_tenant_ids`による意図宣言＋ingress_rules側のバリデーションで、ルートリーク経由の狭い共有のみ許可）
+- テナント間のSubnet共有方針（L2共有はしない。`shared_with_tenant_ids`による意図宣言＋SecurityGroup側の許可で、ルートリーク経由の狭い共有のみ許可）

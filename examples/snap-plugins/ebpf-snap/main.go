@@ -1,6 +1,6 @@
 // Command ebpf-snap is a reference implementation of kyuusha's
 // security-backend plugin contract (internal/compute-agent/snap),
-// enforcing NetworkInterface ingress_rules/egress_rules natively in eBPF
+// enforcing a NetworkInterface's SecurityGroup rules natively in eBPF
 // (TC-BPF, attached directly to the VM's tap device) instead of nftacl's
 // default bridge-family nftables. Unlike nftacl, this does not require the
 // tap to be a Linux bridge port, so it also works with non-bridge VNAP tap
@@ -13,15 +13,24 @@
 // this package's README for the full trade-off discussion.
 //
 // Same contract as every other security-backend plugin: exec'd as
-// "<bin> attach" or "<bin> detach" with a JSON payload on stdin, success is
-// exit code 0 only. See internal/compute-agent/snap's pluginRequest for
-// the authoritative shape this mirrors.
+// "<bin> attach", "<bin> detach" or "<bin> update_sets" with a JSON payload
+// on stdin, success is exit code 0 only. See docs/specs/snap.md and
+// internal/compute-agent/snap's PluginRequest for the authoritative shape
+// this mirrors.
+//
+// Address sets ("sg:<id>", "network:<id>") live in one host-wide hash map
+// (set_members, keyed by a 32-bit id derived from the set's name -- see
+// setID) that every tap's rules consult, so update_sets is a handful of
+// map writes. Members of sets no tap references any more are not garbage
+// collected (a reference implementation's simplification).
 package main
 
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"os"
@@ -38,35 +47,48 @@ import (
 // conntrack is shared across taps but rules_ingress/rules_egress are not.
 const pinRoot = "/sys/fs/bpf/kyuusha-snap"
 
-// firewallRule mirrors snap.pluginFirewallRule exactly (internal/
-// compute-agent/snap/snap.go) -- the wire shape is part of the
-// contract, not something this plugin gets to redefine.
-type firewallRule struct {
-	Protocol   string `json:"protocol"`
-	PortRange  string `json:"port_range,omitempty"`
-	SourceCIDR string `json:"source_cidr"`
-	Action     string `json:"action"`
+// policyRule/setUpdate/pluginRequest mirror internal/compute-agent/snap's
+// PluginRequest (and vmm.PolicyRule/vmm.SetUpdate) exactly -- the wire
+// shape is part of the contract, not something this plugin gets to
+// redefine.
+type policyRule struct {
+	Protocol  string `json:"protocol,omitempty"`
+	PortRange string `json:"port_range,omitempty"`
+	CIDR      string `json:"cidr,omitempty"`
+	Set       string `json:"set,omitempty"`
 }
 
-// pluginRequest mirrors snap.pluginRequest exactly.
+type setUpdate struct {
+	Name    string   `json:"name"`
+	Version int64    `json:"version"`
+	Full    bool     `json:"full,omitempty"`
+	Members []string `json:"members,omitempty"`
+	Add     []string `json:"add,omitempty"`
+	Remove  []string `json:"remove,omitempty"`
+}
+
 type pluginRequest struct {
-	TapName    string `json:"tap_name"`
-	IfaceID    string `json:"iface_id"`
-	VMID       string `json:"vm_id"`
-	TenantID   string `json:"tenant_id"`
+	TapName    string `json:"tap_name,omitempty"`
+	IfaceID    string `json:"iface_id,omitempty"`
+	VMID       string `json:"vm_id,omitempty"`
+	TenantID   string `json:"tenant_id,omitempty"`
 	SubnetID   string `json:"subnet_id,omitempty"`
 	SubnetCIDR string `json:"subnet_cidr,omitempty"`
 	GatewayIP  string `json:"gateway_ip,omitempty"`
 	IPAddress  string `json:"ip_address,omitempty"`
 	MACAddress string `json:"mac_address,omitempty"`
 
-	IngressRules []firewallRule `json:"ingress_rules,omitempty"`
-	EgressRules  []firewallRule `json:"egress_rules,omitempty"`
+	SecurityGroupIDs []string     `json:"security_group_ids,omitempty"`
+	IngressRules     []policyRule `json:"ingress_rules,omitempty"`
+	EgressRules      []policyRule `json:"egress_rules,omitempty"`
+	// attach: full contents of the sets the rules reference; update_sets:
+	// the changes.
+	Sets []setUpdate `json:"sets,omitempty"`
 }
 
 func main() {
-	if len(os.Args) != 2 || (os.Args[1] != "attach" && os.Args[1] != "detach") {
-		fmt.Fprintln(os.Stderr, "usage: ebpf-snap attach|detach  (JSON payload on stdin)")
+	if len(os.Args) != 2 || (os.Args[1] != "attach" && os.Args[1] != "detach" && os.Args[1] != "update_sets") {
+		fmt.Fprintln(os.Stderr, "usage: ebpf-snap attach|detach|update_sets  (JSON payload on stdin)")
 		os.Exit(2)
 	}
 
@@ -78,7 +100,7 @@ func main() {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		fatalf("parse request: %v", err)
 	}
-	if req.TapName == "" {
+	if req.TapName == "" && os.Args[1] != "update_sets" {
 		fatalf("tap_name is required")
 	}
 
@@ -87,6 +109,8 @@ func main() {
 		err = attach(req)
 	case "detach":
 		err = detach(req)
+	case "update_sets":
+		err = updateSets(req.Sets)
 	}
 	if err != nil {
 		fatalf("%s %s: %v", os.Args[1], req.TapName, err)
@@ -101,7 +125,7 @@ func fatalf(format string, args ...any) {
 func tapPinDir(tapName string) string { return filepath.Join(pinRoot, tapName) }
 
 // attach installs (first call for this tap) or re-populates (every later
-// call, e.g. a UpdateFirewallRules-triggered re-apply) this tap's ACL
+// call, e.g. an update_acl-triggered re-apply) this tap's ACL
 // state. Re-population only rewrites the two rule maps' contents -- the
 // already-attached TC programs keep running throughout, so there is no
 // enforcement gap during an update, unlike detach+reattach would cause.
@@ -123,10 +147,13 @@ func attach(req pluginRequest) error {
 			return fmt.Errorf("load pinned rules_egress: %w", err)
 		}
 		defer rulesEgress.Close()
-		if err := populateRules(rulesIngress, req.SubnetCIDR, req.GatewayIP, req.IngressRules); err != nil {
+		if err := updateSets(fullCopies(req.Sets)); err != nil {
+			return fmt.Errorf("update set_members: %w", err)
+		}
+		if err := populateRules(rulesIngress, req.GatewayIP, req.IngressRules); err != nil {
 			return fmt.Errorf("update rules_ingress: %w", err)
 		}
-		if err := populateRules(rulesEgress, req.SubnetCIDR, req.GatewayIP, req.EgressRules); err != nil {
+		if err := populateRules(rulesEgress, req.GatewayIP, req.EgressRules); err != nil {
 			return fmt.Errorf("update rules_egress: %w", err)
 		}
 		spoof, err := ebpf.LoadPinnedMap(spoofPin, nil)
@@ -150,15 +177,23 @@ func attach(req pluginRequest) error {
 		return fmt.Errorf("load BPF spec: %w", err)
 	}
 
-	conntrackMap, err := loadOrCreateSharedConntrack(spec)
+	conntrackMap, err := loadOrCreateShared(spec, "conntrack")
 	if err != nil {
 		return fmt.Errorf("shared conntrack map: %w", err)
 	}
 	defer conntrackMap.Close()
+	setMembers, err := loadOrCreateShared(spec, "set_members")
+	if err != nil {
+		return fmt.Errorf("shared set_members map: %w", err)
+	}
+	defer setMembers.Close()
+	if err := applySets(setMembers, fullCopies(req.Sets)); err != nil {
+		return fmt.Errorf("populate set_members: %w", err)
+	}
 
 	var objs bpfObjects
 	if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{
-		MapReplacements: map[string]*ebpf.Map{"conntrack": conntrackMap},
+		MapReplacements: map[string]*ebpf.Map{"conntrack": conntrackMap, "set_members": setMembers},
 	}); err != nil {
 		return fmt.Errorf("load collection: %w", err)
 	}
@@ -172,12 +207,12 @@ func attach(req pluginRequest) error {
 		return fmt.Errorf("populate spoof: %w", err)
 	}
 
-	if err := populateRules(objs.RulesIngress, req.SubnetCIDR, req.GatewayIP, req.IngressRules); err != nil {
+	if err := populateRules(objs.RulesIngress, req.GatewayIP, req.IngressRules); err != nil {
 		objs.RulesIngress.Close()
 		objs.RulesEgress.Close()
 		return fmt.Errorf("populate rules_ingress: %w", err)
 	}
-	if err := populateRules(objs.RulesEgress, req.SubnetCIDR, req.GatewayIP, req.EgressRules); err != nil {
+	if err := populateRules(objs.RulesEgress, req.GatewayIP, req.EgressRules); err != nil {
 		objs.RulesIngress.Close()
 		objs.RulesEgress.Close()
 		return fmt.Errorf("populate rules_egress: %w", err)
@@ -228,42 +263,111 @@ func attach(req pluginRequest) error {
 	return nil
 }
 
-// loadOrCreateSharedConntrack loads the host-wide conntrack map if some
-// earlier attach (for any tap) already created it, else creates and pins a
-// fresh one from spec's own map definition.
-func loadOrCreateSharedConntrack(spec *ebpf.CollectionSpec) (*ebpf.Map, error) {
-	pin := filepath.Join(pinRoot, "conntrack")
+// loadOrCreateShared loads the host-wide map name (conntrack or
+// set_members) if some earlier attach (for any tap) already created it,
+// else creates and pins a fresh one from spec's own map definition.
+func loadOrCreateShared(spec *ebpf.CollectionSpec, name string) (*ebpf.Map, error) {
+	pin := filepath.Join(pinRoot, name)
 	if m, err := ebpf.LoadPinnedMap(pin, nil); err == nil {
 		return m, nil
 	}
 	if err := os.MkdirAll(pinRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir pin root: %w", err)
 	}
-	m, err := ebpf.NewMap(spec.Maps["conntrack"])
+	m, err := ebpf.NewMap(spec.Maps[name])
 	if err != nil {
-		return nil, fmt.Errorf("create conntrack map: %w", err)
+		return nil, fmt.Errorf("create %s map: %w", name, err)
 	}
 	if err := m.Pin(pin); err != nil {
 		m.Close()
-		return nil, fmt.Errorf("pin conntrack map: %w", err)
+		return nil, fmt.Errorf("pin %s map: %w", name, err)
 	}
 	return m, nil
 }
 
-// populateRules writes subnetCIDR/gatewayIP as the two implicit baseline
-// allow entries (mirroring nftacl.writeBaseline), then rules in order,
-// then zeroes every remaining slot -- an ebpf.MAP_TYPE_ARRAY always holds
-// a value in every index, so a re-Apply with fewer rules than before must
-// explicitly clear the leftover slots rather than just not writing them.
-func populateRules(m *ebpf.Map, subnetCIDR, gatewayIP string, rules []firewallRule) error {
-	entries := make([]bpfRule, 0, maxRules)
-	if subnetCIDR != "" {
-		r, err := cidrRule(subnetCIDR)
-		if err != nil {
-			return fmt.Errorf("subnet_cidr %q: %w", subnetCIDR, err)
-		}
-		entries = append(entries, r)
+// setID is the 32-bit id an address set is known by in set_members and
+// rules: FNV-1a of its name (0 is reserved for "no set, a CIDR rule").
+// A collision would merge two sets' members -- accepted for a reference
+// implementation.
+func setID(name string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	if id := h.Sum32(); id != 0 {
+		return id
 	}
+	return 1
+}
+
+func fullCopies(sets []setUpdate) []setUpdate {
+	out := make([]setUpdate, len(sets))
+	for i, u := range sets {
+		u.Full = true
+		out[i] = u
+	}
+	return out
+}
+
+// updateSets applies update_sets' changes to the pinned set_members map;
+// nothing to do if no tap has been attached yet (no map).
+func updateSets(updates []setUpdate) error {
+	m, err := ebpf.LoadPinnedMap(filepath.Join(pinRoot, "set_members"), nil)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("load pinned set_members: %w", err)
+	}
+	defer m.Close()
+	return applySets(m, updates)
+}
+
+func applySets(m *ebpf.Map, updates []setUpdate) error {
+	for _, u := range updates {
+		id := setID(u.Name)
+		add, remove := u.Add, u.Remove
+		if u.Full {
+			add = u.Members
+			var key bpfSetMemberKey
+			var val uint8
+			var stale []bpfSetMemberKey
+			it := m.Iterate()
+			for it.Next(&key, &val) {
+				if key.SetId == id {
+					stale = append(stale, key)
+				}
+			}
+			if err := it.Err(); err != nil {
+				return fmt.Errorf("iterate set_members: %w", err)
+			}
+			for _, k := range stale {
+				_ = m.Delete(k)
+			}
+		}
+		for _, a := range remove {
+			if ip := net.ParseIP(a).To4(); ip != nil {
+				_ = m.Delete(bpfSetMemberKey{SetId: id, Addr: binary.NativeEndian.Uint32(ip)})
+			}
+		}
+		for _, a := range add {
+			if ip := net.ParseIP(a).To4(); ip != nil {
+				if err := m.Put(bpfSetMemberKey{SetId: id, Addr: binary.NativeEndian.Uint32(ip)}, uint8(1)); err != nil {
+					return fmt.Errorf("add %s to %s: %w", a, u.Name, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// populateRules writes gatewayIP as the implicit baseline allow entry
+// (mirroring nftacl.writeBaseline), then rules, then zeroes every
+// remaining slot -- an ebpf.MAP_TYPE_ARRAY always holds a value in every
+// index, so a re-apply with fewer rules than before must explicitly clear
+// the leftover slots rather than just not writing them. IPv6 CIDR rules
+// are skipped: this plugin enforces IPv4 only (anti-spoofing drops
+// everything else the VM sends).
+func populateRules(m *ebpf.Map, gatewayIP string, rules []policyRule) error {
+	entries := make([]bpfRule, 0, maxRules)
 	if gatewayIP != "" {
 		r, err := cidrRule(gatewayIP + "/32")
 		if err != nil {
@@ -271,12 +375,14 @@ func populateRules(m *ebpf.Map, subnetCIDR, gatewayIP string, rules []firewallRu
 		}
 		entries = append(entries, r)
 	}
-	for _, fr := range rules {
-		r, err := ruleFromFirewallRule(fr)
+	for _, pr := range rules {
+		r, ok, err := ruleFromPolicyRule(pr)
 		if err != nil {
 			return err
 		}
-		entries = append(entries, r)
+		if ok {
+			entries = append(entries, r)
+		}
 	}
 	if len(entries) > maxRules {
 		return fmt.Errorf("%d rules (including baseline) exceeds the %d-entry limit", len(entries), maxRules)
@@ -344,20 +450,15 @@ func cidrRule(cidr string) (bpfRule, error) {
 		PortLo:   0,
 		PortHi:   65535,
 		Protocol: 0, // any
-		Action:   1, // allow
 		Active:   1,
 	}, nil
 }
 
-func ruleFromFirewallRule(fr firewallRule) (bpfRule, error) {
-	// "" means "any protocol" (bpf/snap.c's rule.protocol == 0 wildcard) --
-	// not reachable from a tenant-submitted rule (internal/network's
-	// validateFirewallRules requires tcp/udp/icmp), but used by
-	// mesh_group-derived synthetic rules (see Service.
-	// EffectiveFirewallRules), which trust a sibling Subnet's entire CIDR,
-	// not just specific protocols/ports.
+// ruleFromPolicyRule converts one wire rule; ok=false for an IPv6 CIDR
+// rule (out of this IPv4-only plugin's scope).
+func ruleFromPolicyRule(pr policyRule) (bpfRule, bool, error) {
 	var protocol uint8
-	switch fr.Protocol {
+	switch pr.Protocol {
 	case "tcp":
 		protocol = 6
 	case "udp":
@@ -367,42 +468,35 @@ func ruleFromFirewallRule(fr firewallRule) (bpfRule, error) {
 	case "":
 		protocol = 0
 	default:
-		return bpfRule{}, fmt.Errorf("unrecognized protocol %q", fr.Protocol)
-	}
-	var action uint8
-	switch fr.Action {
-	case "allow":
-		action = 1
-	case "deny":
-		action = 0
-	default:
-		return bpfRule{}, fmt.Errorf("unrecognized action %q", fr.Action)
+		return bpfRule{}, false, fmt.Errorf("unrecognized protocol %q", pr.Protocol)
 	}
 	portLo, portHi := uint16(0), uint16(65535)
-	if protocol != 1 && protocol != 0 { // not icmp, not "any"
+	if (protocol == 6 || protocol == 17) && pr.PortRange != "" {
 		var err error
-		portLo, portHi, err = parsePortRange(fr.PortRange)
+		portLo, portHi, err = parsePortRange(pr.PortRange)
 		if err != nil {
-			return bpfRule{}, fmt.Errorf("port_range %q: %w", fr.PortRange, err)
+			return bpfRule{}, false, fmt.Errorf("port_range %q: %w", pr.PortRange, err)
 		}
 	}
-	_, ipnet, err := net.ParseCIDR(fr.SourceCIDR)
-	if err != nil {
-		return bpfRule{}, fmt.Errorf("source_cidr %q: %w", fr.SourceCIDR, err)
+	r := bpfRule{PortLo: portLo, PortHi: portHi, Protocol: protocol, Active: 1}
+	switch {
+	case pr.Set != "":
+		r.SetId = setID(pr.Set)
+	case pr.CIDR != "":
+		_, ipnet, err := net.ParseCIDR(pr.CIDR)
+		if err != nil {
+			return bpfRule{}, false, fmt.Errorf("cidr %q: %w", pr.CIDR, err)
+		}
+		ip4 := ipnet.IP.To4()
+		if ip4 == nil {
+			return bpfRule{}, false, nil
+		}
+		r.CidrAddr = binary.NativeEndian.Uint32(ip4)
+		r.CidrMask = binary.NativeEndian.Uint32(ipnet.Mask)
+	default:
+		return bpfRule{}, false, fmt.Errorf("rule has neither cidr nor set")
 	}
-	ip4 := ipnet.IP.To4()
-	if ip4 == nil {
-		return bpfRule{}, fmt.Errorf("only IPv4 is supported, got %q", fr.SourceCIDR)
-	}
-	return bpfRule{
-		CidrAddr: binary.NativeEndian.Uint32(ip4),
-		CidrMask: binary.NativeEndian.Uint32(ipnet.Mask),
-		PortLo:   portLo,
-		PortHi:   portHi,
-		Protocol: protocol,
-		Action:   action,
-		Active:   1,
-	}, nil
+	return r, true, nil
 }
 
 // parsePortRange accepts "22" or "2379-2380", same wire format

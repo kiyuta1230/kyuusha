@@ -256,8 +256,22 @@ func (f *FakeNetworkInterfaceClient) Update(context.Context, *networkv1.UpdateNe
 	panic("FakeNetworkInterfaceClient: Update not implemented; compute.Service never calls it")
 }
 
-func (f *FakeNetworkInterfaceClient) UpdateFirewallRules(context.Context, *networkv1.UpdateFirewallRulesRequest, ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
-	panic("FakeNetworkInterfaceClient: UpdateFirewallRules not implemented; compute.Service never calls it")
+func (f *FakeNetworkInterfaceClient) SetSecurityGroups(context.Context, *networkv1.SetSecurityGroupsRequest, ...grpc.CallOption) (*networkv1.NetworkInterface, error) {
+	panic("FakeNetworkInterfaceClient: SetSecurityGroups not implemented; compute.Service never calls it")
+}
+
+// GetSecurityPolicy returns a fixed policy: tcp/22 from anywhere, and
+// everything from a "network:<id>" set with one member.
+func (f *FakeNetworkInterfaceClient) GetSecurityPolicy(ctx context.Context, req *networkv1.GetSecurityPolicyRequest, opts ...grpc.CallOption) (*networkv1.SecurityPolicy, error) {
+	return &networkv1.SecurityPolicy{
+		SecurityGroupIds: []string{"secgroup-default"},
+		IngressRules: []*networkv1.SecurityPolicyRule{
+			{Protocol: "tcp", PortRange: "22", Cidr: "0.0.0.0/0"},
+			{Set: "network:network-1"},
+		},
+		EgressRules: []*networkv1.SecurityPolicyRule{{Cidr: "0.0.0.0/0"}},
+		Sets:        []*networkv1.AddressSet{{Name: "network:network-1", Version: 7, Members: []string{"10.0.0.5"}}},
+	}, nil
 }
 
 func (f *FakeNetworkInterfaceClient) Delete(context.Context, *networkv1.DeleteNetworkInterfaceRequest, ...grpc.CallOption) (*emptypb.Empty, error) {

@@ -1,11 +1,11 @@
 # ebpf-snap
 
 A reference implementation of kyuusha's security-backend plugin contract
-(`internal/compute-agent/snap`), enforcing `ingress_rules`/`egress_rules`
-natively in eBPF (TC-BPF, attached directly to the VM's tap device) instead
+(`internal/compute-agent/snap`), enforcing a NetworkInterface's
+SecurityGroup rules natively in eBPF (TC-BPF, attached directly to the VM's tap device) instead
 of the default `nftacl` (bridge-family nftables). See
-`../README.md`/`docs/specs/network.md`「セキュリティバックエンド」 for the
-contract itself.
+`../README.md`/`docs/specs/snap.md` for the contract itself (`attach`,
+`detach`, `update_sets`).
 
 **This is the stateful version.** It tracks established flows itself in a
 BPF map (see `bpf/snap.c`'s own doc comment), since TC-BPF hooks have no
@@ -28,36 +28,46 @@ is no shared bridge at all.
 - **Direction naming** mirrors `nftacl` exactly (same tap-centric
   inversion of the ingress_rules/egress_rules naming -- see both files'
   header comments): `enforce_vm_egress` (attached to TC **ingress**,
-  i.e. the VM's own outbound traffic) enforces `EgressRules`;
+  i.e. the VM's own outbound traffic) enforces `egress_rules`;
   `enforce_vm_ingress` (attached to TC **egress**, traffic delivered to
-  the VM) enforces `IngressRules`.
+  the VM) enforces `ingress_rules`.
 - **Statefulness**: a single BPF map (`conntrack`, `BPF_MAP_TYPE_LRU_HASH`)
   keyed by a direction-normalized 5-tuple, **shared across every tap** on
-  the host (not per-tap) -- a new flow that matches an allow rule (explicit
-  or the implicit own-Subnet-CIDR/gateway_ip baseline) records itself
+  the host (not per-tap) -- a new flow that matches an allow rule (a
+  SecurityGroup rule, or the implicit gateway_ip baseline) records itself
   there; any packet in *either* direction matching an existing, unexpired
   entry is accepted immediately without re-checking the rule list. This is
   symmetric: it works whether the VM or the remote peer sends the first
   packet.
   - **Existing flows aren't retroactively re-evaluated.** Same as
-    `nftacl`'s own `ct state` table: changing the rule set (a new
-    `UpdateFirewallRules` call) doesn't tear down a flow that was already
+    `nftacl`'s own `ct state` table: changing the rule set (or removing
+    a peer from an address set) doesn't tear down a flow that was already
     allowed and is still within the conntrack timeout. This was confirmed
     hands-on, not assumed -- see the veth-pair test log this plugin was
     verified with.
   - Timeout is a single fixed constant (`CONNTRACK_TIMEOUT_NS` in
     `bpf/snap.c`), not protocol-aware. Adjust if 120s doesn't fit your
     workload.
-- **Rules**: up to 64 entries per direction per tap (`MAX_RULES`), first
-  match wins, exactly like `nftacl`. The Subnet CIDR and gateway_ip
-  baseline are injected as ordinary entries at the front of each list by
-  `main.go`, reusing the same generic matching code as operator-specified
-  rules (no special-cased C logic for the baseline).
+- **Rules**: allow-only, up to 64 entries per direction per tap
+  (`MAX_RULES`); any match allows, nothing matching drops. The gateway_ip
+  baseline is injected as an ordinary entry at the front of each list by
+  `main.go`, reusing the same generic matching code as the SecurityGroup
+  rules (no special-cased C logic for the baseline). A rule's peer is a
+  CIDR or, when `set_id` is non-zero, any member of that address set.
+- **Address sets** (`sg:<id>`, `network:<id>`): one host-wide
+  `BPF_MAP_TYPE_HASH` (`set_members`, pinned next to `conntrack`), keyed
+  by (set id, IPv4 address), where the set id is FNV-1a of the set's name
+  (0 reserved for "a CIDR rule"; a collision would merge two sets -- a
+  reference implementation's trade-off). `attach` writes the full copies
+  it's handed; `update_sets` applies full copies (drop the set's keys,
+  write the members) and add/remove deltas as map writes, touching no
+  tap's rules. Version checks are compute-agent's, not this plugin's.
+  Members of sets no tap references any more aren't garbage collected.
 - **Attachment**: TCX (`link.AttachTCX`), the modern qdisc-free kernel
   attach point -- no `tc qdisc add ... clsact` needed, unlike classic
   tc-BPF filters.
-- **Re-apply** (a later `UpdateFirewallRules`-triggered `attach` call for
-  the same tap): only rewrites the rule maps' contents. The already-
+- **Re-apply** (a later `update_acl`-triggered `attach` call for the
+  same tap): only rewrites the rule maps' contents. The already-
   attached programs keep running throughout, so there's no enforcement gap
   during an update.
 - **Anti-spoofing** (same rules as `nftacl`'s, see `docs/specs/snap.md`
@@ -69,7 +79,8 @@ is no shared bridge at all.
   tagged frames) is dropped. The expected address lives in the per-tap
   `spoof` map; an `attach` with `ip_address` or `mac_address` empty leaves
   it as it is (a re-apply must never switch the check off).
-- **ACL rules are IPv4 only**, matching `nftacl`'s own scope. Apart from
+- **ACL rules are IPv4 only**: IPv6 CIDR rules are skipped (anti-spoofing
+  drops every non-IPv4 frame the VM sends anyway). Apart from
   the anti-spoofing check above, non-IPv4 traffic (ARP) is passed through
   the rule matching unfiltered (`TC_ACT_OK`).
 - **Upgrading**: a tap attached by an older build has no pinned `spoof`
@@ -103,13 +114,12 @@ compute-agent ... -security-backend-bin=/path/to/ebpf-snap
 ## Verified
 
 Hands-on against a real veth pair + network namespace (simulating a tap
-connected to a VM), not just inspected: baseline (own-Subnet-CIDR/
-gateway_ip) traffic always passes; an explicit `allow` rule for a
-peer/protocol/port passes; a fresh (never-before-seen) flow with no
-matching rule is dropped; the same flow with an explicit `deny` rule is
-dropped; and -- the core statefulness claim -- a VM-initiated flow allowed
-only by an `egress_rules` entry gets its *reply* traffic through with an
-**empty** `ingress_rules` list, purely via the conntrack map. `detach`
+connected to a VM), not just inspected: gateway_ip traffic always passes;
+an `allow` rule for a peer/protocol/port passes; a fresh (never-before-seen)
+flow with no matching rule is dropped; and -- the core statefulness claim
+-- a VM-initiated flow allowed only by an `egress_rules` entry gets its
+*reply* traffic through with an **empty** `ingress_rules` list, purely via
+the conntrack map. `detach`
 was confirmed to remove the TC attachment and this tap's pinned maps
 (`bpftool net show dev <tap>` shows nothing left) while leaving the shared
 `conntrack` map alone, and is safe to call twice.
@@ -125,3 +135,6 @@ It confirms legitimate traffic passes, and that frames with a spoofed
 source IP, a spoofed source MAC, or a spoofed ARP sender IP never get past
 TC ingress (counted with nftables input-hook counters, which run after
 TCX) -- including after a re-attach that carries no address.
+`sets_test.go` does the same for address sets: a host address reaches the
+VM through a set-referencing ingress rule only while `update_sets` has it
+in the set (add, remove, full copy).

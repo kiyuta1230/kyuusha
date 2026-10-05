@@ -19,22 +19,12 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/nftacl"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 )
-
-// FirewallRule mirrors network.FirewallRule/vmm.FirewallRule -- its own
-// copy, not an import, same "each layer has its own mirror struct"
-// convention netsetup.Interface itself already follows for the wiring
-// side.
-type FirewallRule struct {
-	Protocol   string
-	PortRange  string
-	SourceCIDR string
-	Action     string
-}
 
 // Interface is everything Attach/Detach need for one VM network
 // attachment's ACL enforcement, mirroring netsetup.Interface's own shape.
@@ -53,35 +43,79 @@ type Interface struct {
 	IPAddress  string
 	MACAddress string
 
-	IngressRules []FirewallRule
-	EgressRules  []FirewallRule
+	Policy vmm.SecurityPolicy
 }
 
-// Attach applies iface's ingress/egress rules: the built-in nftacl
+// setMu serializes everything that writes address sets (Attach,
+// UpdateSets): the version check and the write must happen together, or a
+// full copy checked as newest could land after a delta checked later.
+var (
+	setMu       sync.Mutex
+	setVersions = map[string]int64{}
+)
+
+// freshSets drops every full copy in sets that's older than what this host
+// already applied to that set, recording the rest. Caller holds setMu.
+func freshSets(sets []vmm.SetUpdate) []vmm.SetUpdate {
+	var out []vmm.SetUpdate
+	for _, u := range sets {
+		if u.Version < setVersions[u.Name] {
+			continue
+		}
+		setVersions[u.Name] = u.Version
+		u.Full = true
+		out = append(out, u)
+	}
+	return out
+}
+
+// Attach applies iface's SecurityPolicy: the built-in nftacl
 // implementation when securityBackendBin is empty (the default -- see
 // nftacl's own doc comment), or an external plugin otherwise. Idempotent
-// either way: safe to call again for a tap whose rules haven't changed, or
-// to re-apply a fresh rule set (see Attach's callers: both Boot's initial
-// wiring and a later UpdateFirewallRules-triggered re-apply call this the
-// same way).
+// either way: Boot's initial wiring and a later update_acl re-apply call
+// it the same way. Set copies older than what the host already has
+// (another interface's newer delta) are left out, so the backend keeps
+// the newer contents.
 func Attach(iface Interface, securityBackendBin string) error {
+	setMu.Lock()
+	defer setMu.Unlock()
+	policy := iface.Policy
+	policy.Sets = freshSets(policy.Sets)
 	if securityBackendBin == "" {
-		return nftacl.Apply(nftacl.Interface{
-			TapName:      iface.TapName,
-			SubnetCIDR:   iface.SubnetCIDR,
-			GatewayIP:    iface.GatewayIP,
-			IPAddress:    iface.IPAddress,
-			MACAddress:   iface.MACAddress,
-			IngressRules: toNftaclRules(iface.IngressRules),
-			EgressRules:  toNftaclRules(iface.EgressRules),
-		})
+		return nftacl.Apply(toNftaclInterface(iface.TapName, iface.GatewayIP, iface.IPAddress, iface.MACAddress, policy))
 	}
 	return runPlugin(securityBackendBin, "attach", PluginRequest{
 		TapName: iface.TapName, IfaceID: iface.IfaceID, VMID: iface.VMID, TenantID: iface.TenantID,
 		SubnetID: iface.SubnetID, SubnetLabels: iface.SubnetLabels, SubnetCIDR: iface.SubnetCIDR, GatewayIP: iface.GatewayIP,
 		IPAddress: iface.IPAddress, MACAddress: iface.MACAddress, AttachInfo: iface.Attach,
-		IngressRules: toPluginRules(iface.IngressRules), EgressRules: toPluginRules(iface.EgressRules),
+		SecurityPolicy: policy,
 	})
+}
+
+// UpdateSets applies address-set changes (network-reconciler's
+// update_sets, see docs/specs/snap.md) and returns those actually passed
+// on: a delta must be newer than what this host last applied to the set,
+// a full copy at least as new. Sets no interface on this host references
+// are the backend's to ignore.
+func UpdateSets(updates []vmm.SetUpdate, securityBackendBin string) ([]vmm.SetUpdate, error) {
+	setMu.Lock()
+	defer setMu.Unlock()
+	var fresh []vmm.SetUpdate
+	for _, u := range updates {
+		cur := setVersions[u.Name]
+		if u.Version < cur || !u.Full && u.Version == cur {
+			continue
+		}
+		setVersions[u.Name] = u.Version
+		fresh = append(fresh, u)
+	}
+	if len(fresh) == 0 {
+		return nil, nil
+	}
+	if securityBackendBin == "" {
+		return fresh, nftacl.UpdateSets(toNftaclSets(fresh))
+	}
+	return fresh, runPlugin(securityBackendBin, "update_sets", PluginRequest{SecurityPolicy: vmm.SecurityPolicy{Sets: fresh}})
 }
 
 // Detach removes whatever ACL state Attach installed for tapName. The tap
@@ -97,24 +131,39 @@ func Detach(ifaceID, vmID, tenantID, tapName, securityBackendBin string) error {
 	})
 }
 
-func toNftaclRules(rules []FirewallRule) []nftacl.FirewallRule {
-	var out []nftacl.FirewallRule
-	for _, r := range rules {
-		out = append(out, nftacl.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
+func toNftaclInterface(tap, gatewayIP, ip, mac string, p vmm.SecurityPolicy) nftacl.Interface {
+	conv := func(rs []vmm.PolicyRule) []nftacl.Rule {
+		var out []nftacl.Rule
+		for _, r := range rs {
+			out = append(out, nftacl.Rule(r))
+		}
+		return out
+	}
+	return nftacl.Interface{
+		TapName: tap, GatewayIP: gatewayIP, IPAddress: ip, MACAddress: mac,
+		IngressRules: conv(p.IngressRules), EgressRules: conv(p.EgressRules), Sets: toNftaclSets(p.Sets),
+	}
+}
+
+func toNftaclSets(us []vmm.SetUpdate) []nftacl.SetUpdate {
+	var out []nftacl.SetUpdate
+	for _, u := range us {
+		out = append(out, nftacl.SetUpdate{Name: u.Name, Full: u.Full, Members: u.Members, Add: u.Add, Remove: u.Remove})
 	}
 	return out
 }
 
 // PluginRequest is the JSON an external security-backend plugin receives on
 // stdin -- exported so cmd/nftacl-snap (ServeBuiltin) decodes exactly the
-// shape this package encodes. Detach only ever sets TapName/IfaceID/VMID/TenantID (omitempty
-// drops the rest), same reasoning as netsetup's own PluginRequest: removing
-// a port never needs to know what it used to be configured with.
+// shape this package encodes. detach only ever sets TapName/IfaceID/VMID/
+// TenantID; update_sets only Sets (omitempty drops the rest), same
+// reasoning as netsetup's own PluginRequest: removing a port never needs
+// to know what it used to be configured with.
 type PluginRequest struct {
-	TapName      string            `json:"tap_name"`
-	IfaceID      string            `json:"iface_id"`
-	VMID         string            `json:"vm_id"`
-	TenantID     string            `json:"tenant_id"`
+	TapName      string            `json:"tap_name,omitempty"`
+	IfaceID      string            `json:"iface_id,omitempty"`
+	VMID         string            `json:"vm_id,omitempty"`
+	TenantID     string            `json:"tenant_id,omitempty"`
 	SubnetID     string            `json:"subnet_id,omitempty"`
 	SubnetLabels map[string]string `json:"subnet_labels,omitempty"`
 	SubnetCIDR   string            `json:"subnet_cidr,omitempty"`
@@ -122,62 +171,43 @@ type PluginRequest struct {
 	IPAddress    string            `json:"ip_address,omitempty"`
 	MACAddress   string            `json:"mac_address,omitempty"`
 
-	IngressRules []PluginFirewallRule `json:"ingress_rules,omitempty"`
-	EgressRules  []PluginFirewallRule `json:"egress_rules,omitempty"`
+	// security_group_ids, ingress_rules, egress_rules and sets (attach:
+	// full contents; update_sets: the changes), flattened into the
+	// payload.
+	vmm.SecurityPolicy
 
 	// Network/NetworkClass context and allocated values, flattened into
 	// the payload (network_id, subnet_values, ...), same as VNAP's.
 	vmm.AttachInfo
 }
 
-type PluginFirewallRule struct {
-	Protocol   string `json:"protocol"`
-	PortRange  string `json:"port_range,omitempty"`
-	SourceCIDR string `json:"source_cidr"`
-	Action     string `json:"action"`
-}
-
-// ServeBuiltin handles one SNAP plugin call ("attach"/"detach" plus its
-// payload) with the built-in nftacl backend -- the same thing Attach/
-// Detach do when -security-backend-bin is empty, reached through the
-// plugin contract instead. cmd/nftacl-snap is a thin main around this, so
-// a SNAP shim (or anyone) can delegate some interfaces to stock nftacl.
+// ServeBuiltin handles one SNAP plugin call ("attach"/"detach"/
+// "update_sets" plus its payload) with the built-in nftacl backend -- the
+// same thing Attach/Detach/UpdateSets do when -security-backend-bin is
+// empty, reached through the plugin contract instead (versions are
+// compute-agent's to check, already done by the caller). cmd/nftacl-snap
+// is a thin main around this, so a SNAP shim (or anyone) can delegate
+// some interfaces to stock nftacl.
 func ServeBuiltin(verb string, req PluginRequest) error {
-	if req.TapName == "" {
-		return fmt.Errorf("snap: tap_name is required")
-	}
 	switch verb {
 	case "attach":
-		return nftacl.Apply(nftacl.Interface{
-			TapName:      req.TapName,
-			SubnetCIDR:   req.SubnetCIDR,
-			GatewayIP:    req.GatewayIP,
-			IPAddress:    req.IPAddress,
-			MACAddress:   req.MACAddress,
-			IngressRules: fromPluginRules(req.IngressRules),
-			EgressRules:  fromPluginRules(req.EgressRules),
-		})
+		if req.TapName == "" {
+			return fmt.Errorf("snap: tap_name is required")
+		}
+		for i := range req.Sets {
+			req.Sets[i].Full = true
+		}
+		return nftacl.Apply(toNftaclInterface(req.TapName, req.GatewayIP, req.IPAddress, req.MACAddress, req.SecurityPolicy))
 	case "detach":
+		if req.TapName == "" {
+			return fmt.Errorf("snap: tap_name is required")
+		}
 		return nftacl.Remove(req.TapName)
+	case "update_sets":
+		return nftacl.UpdateSets(toNftaclSets(req.Sets))
 	default:
-		return fmt.Errorf("snap: unknown verb %q (want attach or detach)", verb)
+		return fmt.Errorf("snap: unknown verb %q (want attach, detach or update_sets)", verb)
 	}
-}
-
-func fromPluginRules(rules []PluginFirewallRule) []nftacl.FirewallRule {
-	var out []nftacl.FirewallRule
-	for _, r := range rules {
-		out = append(out, nftacl.FirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
-	}
-	return out
-}
-
-func toPluginRules(rules []FirewallRule) []PluginFirewallRule {
-	var out []PluginFirewallRule
-	for _, r := range rules {
-		out = append(out, PluginFirewallRule{Protocol: r.Protocol, PortRange: r.PortRange, SourceCIDR: r.SourceCIDR, Action: r.Action})
-	}
-	return out
 }
 
 // pluginTimeout mirrors netsetup's own pluginTimeout constant exactly: a

@@ -52,7 +52,7 @@ kyuushaの上に載る外部ソフトウェア（kyuusha-vpc等）の利用者�
 
 ## ラベルとアノテーション
 
-Network・NetworkClass・AllocationPool・Subnet・NetworkInterface・VirtualMachineは`meta.labels`/`meta.annotations`（任意の
+Network・NetworkClass・AllocationPool・Subnet・NetworkInterface・SecurityGroup・VirtualMachineは`meta.labels`/`meta.annotations`（任意の
 key/value）を持てる。kyuushaの上に載る外部ソフトウェアが「このSubnetはどのVPCに属するか」
 のような自分の情報を記録するためのもので、kyuusha自身は中身を一切解釈しない（`vpc_id`の
 ような専用フィールドを足してkyuushaにVPC等の概念を持ち込まないための仕組み）。
@@ -84,7 +84,7 @@ key/value）を持てる。kyuushaの上に載る外部ソフトウェアが「�
 
 ### 全テナント横断のList/Watch
 
-テナントにスコープを持つリソース（VirtualMachine/Network/Subnet/NetworkInterface等）の
+テナントにスコープを持つリソース（VirtualMachine/Network/Subnet/NetworkInterface/SecurityGroup等）の
 `List`/`Watch`は、`tenant_id`を空にすると**全テナント横断**で返す——1プロセスで
 全テナントを見る外部コントローラー向けの正式な契約で、`resource_version`からの再開も
 テナント単位のWatchと同じく効く（`since_resource_version`は全テナント共通のetcd
@@ -244,7 +244,8 @@ api-gatewayを経由しない内部呼び出しから付いたエントリ）の
 | `network` | NetworkClass | `Create`/`Update`/`Delete` |
 | `network` | Network | `Create`/`Update`/`Delete` |
 | `network` | Subnet | `Create`/`Update`/`Delete` |
-| `network` | NetworkInterface | `Create`/`Update`/`UpdateFirewallRules`（いずれも`UPDATE`として届く） |
+| `network` | NetworkInterface | `Create`/`Update`/`SetSecurityGroups`（後の2つは`UPDATE`として届く） |
+| `network` | SecurityGroup | `Create`/`Update`/`Delete` |
 
 NetworkInterfaceの`Delete`はゲートしない——VM削除時のcompute→networkの後始末や
 networkのorphan GCも同じ経路を通るため、webhookの拒否がVM削除を止めてしまう。

@@ -31,7 +31,7 @@ func (s *NetworkInterfaceServer) Create(ctx context.Context, req *networkv1.Crea
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return s.toNetworkInterfaceWithEffectiveRules(ctx, n), nil
+	return toNetworkInterface(*n), nil
 }
 
 func (s *NetworkInterfaceServer) Get(ctx context.Context, req *networkv1.GetNetworkInterfaceRequest) (*networkv1.NetworkInterface, error) {
@@ -39,28 +39,7 @@ func (s *NetworkInterfaceServer) Get(ctx context.Context, req *networkv1.GetNetw
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return s.toNetworkInterfaceWithEffectiveRules(ctx, n), nil
-}
-
-// toNetworkInterfaceWithEffectiveRules is toNetworkInterface plus
-// status.effective_ingress_rules/effective_egress_rules -- only Create and
-// Get populate these (see NetworkInterfaceStatus's own doc comment in the
-// proto for the scope decision); a resolve failure here just leaves them
-// empty rather than failing the whole RPC, since the etcd write (Create)
-// or read (Get) it's reporting on already succeeded.
-func (s *NetworkInterfaceServer) toNetworkInterfaceWithEffectiveRules(ctx context.Context, n *network.NetworkInterface) *networkv1.NetworkInterface {
-	out := toNetworkInterface(*n)
-	ingress, egress, err := s.svc.EffectiveFirewallRules(ctx, n)
-	if err != nil {
-		return out
-	}
-	for _, r := range ingress {
-		out.Status.EffectiveIngressRules = append(out.Status.EffectiveIngressRules, toFirewallRule(r))
-	}
-	for _, r := range egress {
-		out.Status.EffectiveEgressRules = append(out.Status.EffectiveEgressRules, toFirewallRule(r))
-	}
-	return out
+	return toNetworkInterface(*n), nil
 }
 
 func (s *NetworkInterfaceServer) List(ctx context.Context, req *networkv1.ListNetworkInterfacesRequest) (*networkv1.ListNetworkInterfacesResponse, error) {
@@ -87,15 +66,41 @@ func (s *NetworkInterfaceServer) Update(ctx context.Context, req *networkv1.Upda
 	return toNetworkInterface(*updated), nil
 }
 
-func (s *NetworkInterfaceServer) UpdateFirewallRules(ctx context.Context, req *networkv1.UpdateFirewallRulesRequest) (*networkv1.NetworkInterface, error) {
+func (s *NetworkInterfaceServer) SetSecurityGroups(ctx context.Context, req *networkv1.SetSecurityGroupsRequest) (*networkv1.NetworkInterface, error) {
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	n, err := s.svc.UpdateFirewallRules(ctx, req.GetTenantId(), req.GetId(), fromFirewallRules(req.GetIngressRules()), fromFirewallRules(req.GetEgressRules()))
+	n, err := s.svc.SetSecurityGroups(ctx, req.GetTenantId(), req.GetId(), req.GetSecurityGroupIds())
 	if err != nil {
 		return nil, toStatus(err)
 	}
 	return toNetworkInterface(*n), nil
+}
+
+// GetSecurityPolicy is compute's boot-time read of what the host must
+// enforce (not served through api-gateway).
+func (s *NetworkInterfaceServer) GetSecurityPolicy(ctx context.Context, req *networkv1.GetSecurityPolicyRequest) (*networkv1.SecurityPolicy, error) {
+	n, err := s.svc.GetNetworkInterface(ctx, req.GetTenantId(), req.GetId())
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	p, err := s.svc.SecurityPolicy(ctx, *n)
+	if err != nil {
+		return nil, toStatus(err)
+	}
+	out := &networkv1.SecurityPolicy{SecurityGroupIds: p.SecurityGroupIDs}
+	conv := func(rs []network.PolicyRule) []*networkv1.SecurityPolicyRule {
+		var o []*networkv1.SecurityPolicyRule
+		for _, r := range rs {
+			o = append(o, &networkv1.SecurityPolicyRule{Protocol: r.Protocol, PortRange: r.PortRange, Cidr: r.CIDR, Set: r.Set})
+		}
+		return o
+	}
+	out.IngressRules, out.EgressRules = conv(p.IngressRules), conv(p.EgressRules)
+	for _, a := range p.Sets {
+		out.Sets = append(out.Sets, &networkv1.AddressSet{Name: a.Name, Version: a.Version, Members: a.Members})
+	}
+	return out, nil
 }
 
 func (s *NetworkInterfaceServer) Delete(ctx context.Context, req *networkv1.DeleteNetworkInterfaceRequest) (*emptypb.Empty, error) {
@@ -118,36 +123,14 @@ func (s *NetworkInterfaceServer) Watch(req *networkv1.WatchNetworkInterfacesRequ
 	return stream.Context().Err()
 }
 
-func fromFirewallRule(r *networkv1.FirewallRule) network.FirewallRule {
-	return network.FirewallRule{
-		Protocol:   r.GetProtocol(),
-		PortRange:  r.GetPortRange(),
-		SourceCIDR: r.GetSourceCidr(),
-		Action:     r.GetAction(),
-	}
-}
-
-func toFirewallRule(r network.FirewallRule) *networkv1.FirewallRule {
-	return &networkv1.FirewallRule{
-		Protocol:   r.Protocol,
-		PortRange:  r.PortRange,
-		SourceCidr: r.SourceCIDR,
-		Action:     r.Action,
-	}
-}
-
 func fromNetworkInterfaceSpec(s *networkv1.NetworkInterfaceSpec) network.NetworkInterfaceSpec {
 	spec := network.NetworkInterfaceSpec{
 		VMID:      s.GetVmId(),
 		SubnetID:  s.GetSubnetId(),
 		NetworkID: s.GetNetworkId(),
 		Zone:      s.GetZone(),
-	}
-	for _, r := range s.GetIngressRules() {
-		spec.IngressRules = append(spec.IngressRules, fromFirewallRule(r))
-	}
-	for _, r := range s.GetEgressRules() {
-		spec.EgressRules = append(spec.EgressRules, fromFirewallRule(r))
+
+		SecurityGroupIDs: s.GetSecurityGroupIds(),
 	}
 	return spec
 }
@@ -158,20 +141,8 @@ func toNetworkInterfaceSpec(s network.NetworkInterfaceSpec) *networkv1.NetworkIn
 		SubnetId:  s.SubnetID,
 		NetworkId: s.NetworkID,
 		Zone:      s.Zone,
-	}
-	for _, r := range s.IngressRules {
-		out.IngressRules = append(out.IngressRules, toFirewallRule(r))
-	}
-	for _, r := range s.EgressRules {
-		out.EgressRules = append(out.EgressRules, toFirewallRule(r))
-	}
-	return out
-}
 
-func fromFirewallRules(rs []*networkv1.FirewallRule) []network.FirewallRule {
-	var out []network.FirewallRule
-	for _, r := range rs {
-		out = append(out, fromFirewallRule(r))
+		SecurityGroupIds: s.SecurityGroupIDs,
 	}
 	return out
 }

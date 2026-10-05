@@ -38,9 +38,11 @@ func NewMetricsCollector(svc *Service) *MetricsCollector {
 func (c *MetricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- subnetCountDesc
 	ch <- networkInterfaceCountDesc
+	setUpdatesSent.Describe(ch)
 }
 
 func (c *MetricsCollector) Collect(ch chan<- prometheus.Metric) {
+	setUpdatesSent.Collect(ch)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

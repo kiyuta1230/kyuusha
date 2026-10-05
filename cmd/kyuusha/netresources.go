@@ -231,8 +231,8 @@ func networkCmd(args []string) {
 }
 
 func printNetwork(n *networkv1.Network) {
-	fmt.Printf("id=%s name=%s tenant=%s labels=%s class=%s visibility=%s phase=%s values=%s rv=%d%s\n",
+	fmt.Printf("id=%s name=%s tenant=%s labels=%s class=%s visibility=%s phase=%s values=%s default_security_group=%s rv=%d%s\n",
 		n.GetMeta().GetId(), n.GetMeta().GetName(), n.GetMeta().GetTenantId(), formatKeyValues(n.GetMeta().GetLabels()),
 		n.GetSpec().GetNetworkClass(), n.GetSpec().GetVisibility(), n.GetStatus().GetPhase(), formatIntValues(n.GetStatus().GetValues()),
-		n.GetMeta().GetResourceVersion(), pendingReason(n.GetStatus().GetConditions()))
+		n.GetStatus().GetDefaultSecurityGroupId(), n.GetMeta().GetResourceVersion(), pendingReason(n.GetStatus().GetConditions()))
 }

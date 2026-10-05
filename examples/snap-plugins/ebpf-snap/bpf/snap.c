@@ -13,8 +13,8 @@
 // i.e. packets the VM itself just wrote (the VM's own outbound traffic).
 // TC "egress" fires for packets about to leave OUT of that netdev -- i.e.
 // packets about to be delivered TO the VM. So:
-//   - enforce_vm_egress (attached to TC ingress) enforces EgressRules
-//   - enforce_vm_ingress (attached to TC egress) enforces IngressRules
+//   - enforce_vm_egress (attached to TC ingress) enforces egress_rules
+//   - enforce_vm_ingress (attached to TC egress) enforces ingress_rules
 //
 // # Statefulness
 //
@@ -24,8 +24,8 @@
 // keyed by a direction-normalized 5-tuple (so both legs of one flow hash to
 // the same key), shared across every tap's attached programs (see
 // main.go's MapReplacements use). A new flow that matches an explicit
-// allow rule (or the implicit own-Subnet-CIDR/gateway_ip baseline, encoded
-// as ordinary entries at the front of each rules_* map by main.go) records
+// allow rule (or the implicit gateway_ip baseline, encoded as an ordinary
+// entry at the front of each rules_* map by main.go) records
 // itself in conntrack; any packet -- in EITHER direction -- that matches
 // an existing, unexpired conntrack entry is accepted immediately, without
 // re-checking the rule list. This is symmetric: it doesn't matter whether
@@ -60,8 +60,8 @@
 #define TC_ACT_SHOT 2
 
 // MAX_RULES bounds both rules_ingress/rules_egress: generous for a single
-// NetworkInterface's ACL (2 implicit baseline entries + operator-specified
-// ones), small enough for the verifier's bounded-loop budget with #pragma
+// NetworkInterface's merged SecurityGroup rules (1 gateway baseline entry
+// + the rules), small enough for the verifier's bounded-loop budget with #pragma
 // unroll.
 #define MAX_RULES 64
 // CONNTRACK_TIMEOUT_NS: how long a conntrack entry is honored without a
@@ -71,18 +71,26 @@
 // implementation is a separate, later plugin).
 #define CONNTRACK_TIMEOUT_NS (120ULL * 1000000000ULL)
 
-// rule mirrors snap.FirewallRule plus the SubnetCIDR/GatewayIP baseline
-// main.go injects as the first two entries of each map -- see this
-// package's README for the exact wire-to-map field mapping.
+// rule is one allow rule of the SNAP payload (SecurityGroup rules are
+// allow-only), plus the gateway_ip baseline main.go injects as the first
+// entry of each map -- see this package's README for the exact
+// wire-to-map field mapping. The peer is either a CIDR or, when set_id is
+// non-zero, any member of that address set (set_members).
 struct rule {
 	__u32 cidr_addr; // network byte order
 	__u32 cidr_mask; // network byte order; 0 means "match any address"
+	__u32 set_id;    // non-zero: match set_members instead of the CIDR
 	__u16 port_lo;   // host byte order; ignored for ICMP
 	__u16 port_hi;
 	__u8 protocol;   // IPPROTO_* value; 0 means "match any protocol"
-	__u8 action;     // 1 = allow, 0 = deny
 	__u8 active;     // 0 = unused slot
-	__u8 _pad;
+	__u8 _pad[2];
+};
+
+// set_member_key is one (address set, IPv4 address) membership.
+struct set_member_key {
+	__u32 set_id;
+	__u32 addr; // network byte order
 };
 
 // spoof_cfg is the anti-spoofing input: the VM's own allocated address on
@@ -136,6 +144,16 @@ struct {
 	__type(key, __u32);
 	__type(value, struct spoof_cfg);
 } spoof SEC(".maps");
+
+// set_members holds every address set's members, shared across every
+// tap's programs on this host like conntrack (main.go pins it once): a
+// membership change is one map write, not a rewrite of every tap's rules.
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 65536);
+	__type(key, struct set_member_key);
+	__type(value, __u8);
+} set_members SEC(".maps");
 
 // conntrack is shared across every tap's attached programs on this host
 // (main.go loads/pins it once and reuses it for every subsequent tap via
@@ -230,11 +248,22 @@ static __always_inline void make_conntrack_key(struct flow5 *f, struct conntrack
 	k->_pad[0] = k->_pad[1] = k->_pad[2] = 0;
 }
 
+// peer_matches reports whether peer_addr is r's peer: in its CIDR, or a
+// member of its address set.
+static __always_inline int peer_matches(struct rule *r, __u32 peer_addr)
+{
+	if (r->set_id) {
+		struct set_member_key k = {.set_id = r->set_id, .addr = peer_addr};
+		return bpf_map_lookup_elem(&set_members, &k) != 0;
+	}
+	return (peer_addr & r->cidr_mask) == (r->cidr_addr & r->cidr_mask);
+}
+
 // match_ingress_rules/match_egress_rules are intentionally near-duplicate
 // (not one function taking a map argument): a BPF map helper call must
 // reference a statically-known map object at compile time, so the map
-// can't be a runtime parameter. Returns 1 (allow, stop), -1 (deny, stop),
-// or 0 (no rule matched -- caller applies default-deny).
+// can't be a runtime parameter. Returns 1 (some rule allows) or 0 (none
+// does -- caller applies default-deny).
 static __always_inline int match_ingress_rules(struct flow5 *f, __u32 peer_addr)
 {
 	int verdict = 0;
@@ -246,11 +275,11 @@ static __always_inline int match_ingress_rules(struct flow5 *f, __u32 peer_addr)
 			continue;
 		if (r->protocol != 0 && r->protocol != f->protocol)
 			continue;
-		if ((peer_addr & r->cidr_mask) != (r->cidr_addr & r->cidr_mask))
-			continue;
 		if (f->protocol != IPPROTO_ICMP_ && (f->dport < r->port_lo || f->dport > r->port_hi))
 			continue;
-		verdict = r->action ? 1 : -1;
+		if (!peer_matches(r, peer_addr))
+			continue;
+		verdict = 1;
 		break;
 	}
 	return verdict;
@@ -267,11 +296,11 @@ static __always_inline int match_egress_rules(struct flow5 *f, __u32 peer_addr)
 			continue;
 		if (r->protocol != 0 && r->protocol != f->protocol)
 			continue;
-		if ((peer_addr & r->cidr_mask) != (r->cidr_addr & r->cidr_mask))
-			continue;
 		if (f->protocol != IPPROTO_ICMP_ && (f->dport < r->port_lo || f->dport > r->port_hi))
 			continue;
-		verdict = r->action ? 1 : -1;
+		if (!peer_matches(r, peer_addr))
+			continue;
+		verdict = 1;
 		break;
 	}
 	return verdict;

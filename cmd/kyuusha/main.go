@@ -53,6 +53,8 @@ func main() {
 		networkCmd(os.Args[2:])
 	case "netif":
 		netifCmd(os.Args[2:])
+	case "secgroup":
+		secgroupCmd(os.Args[2:])
 	case "volume":
 		volumeCmd(os.Args[2:])
 	case "volattach":
@@ -80,7 +82,8 @@ func usage() {
   kyuusha netclass <create|get|list|delete> [flags]   (create/delete admin-only; -spec is protojson NetworkClassSpec)
   kyuusha network <create|get|list|delete> [flags]
   kyuusha subnet <create|get|list|watch|delete|add-finalizer|remove-finalizer> [flags]
-  kyuusha netif <create|get|list|watch|set-firewall-rules|delete> [flags]
+  kyuusha netif <create|get|list|watch|set-security-groups|delete> [flags]
+  kyuusha secgroup <create|get|list|update|delete> [flags]   (rules: protocol:port_range:peer, peer = CIDR | sg=<id>|sg=self | net=<network id>)
   kyuusha volume <create|get|list|watch|delete> [flags]
   kyuusha volattach <create|get|list|watch|delete> [flags]
   kyuusha storageconn <create|get|list|watch|delete> [flags]   (admin-only)
@@ -215,6 +218,7 @@ func vmCreate(args []string) {
 	memoryMB := fs.Int64("memory-mb", 1024, "memory in MB")
 	driverHint := fs.String("driver-hint", "", "VMM driver: firecracker|cloud-hypervisor (empty: server default, FIRECRACKER). Must match the Image's format -- KERNEL_ROOTFS accepts either, QCOW2 requires cloud-hypervisor; see docs/specs/image.md")
 	networks := fs.String("networks", "", "comma-separated Network IDs, one NIC each (first one is primary); kyuusha picks each NIC's Subnet in -zone")
+	securityGroups := fs.String("security-groups", "", "comma-separated SecurityGroup IDs attached to every NIC (default: each Network's default group)")
 	subnets := fs.String("subnets", "", "comma-separated Subnet IDs to pin NICs to instead (after any -networks NICs); all must be in the VM's zone")
 	zone := fs.String("zone", "", "availability zone (required with -networks; otherwise taken from -subnets)")
 	volumes := fs.String("volumes", "", "comma-separated Volume IDs to attach at boot (see docs/specs/volume.md; attach-before-boot only -- a Volume added after the VM is already Running is not attached)")
@@ -234,12 +238,12 @@ func vmCreate(args []string) {
 	var netifs []*computev1.NetworkAttachment
 	for _, networkID := range strings.Split(*networks, ",") {
 		if networkID != "" {
-			netifs = append(netifs, &computev1.NetworkAttachment{NetworkId: networkID, Primary: len(netifs) == 0})
+			netifs = append(netifs, &computev1.NetworkAttachment{NetworkId: networkID, Primary: len(netifs) == 0, SecurityGroupIds: splitList(*securityGroups)})
 		}
 	}
 	for _, subnetID := range strings.Split(*subnets, ",") {
 		if subnetID != "" {
-			netifs = append(netifs, &computev1.NetworkAttachment{SubnetId: subnetID, Primary: len(netifs) == 0})
+			netifs = append(netifs, &computev1.NetworkAttachment{SubnetId: subnetID, Primary: len(netifs) == 0, SecurityGroupIds: splitList(*securityGroups)})
 		}
 	}
 

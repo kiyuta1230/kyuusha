@@ -23,7 +23,7 @@
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-driver-hint`(`firecracker`\|`cloud-hypervisor`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`cloud-hypervisor`必須。[Image仕様](image.md)参照) `-networks`(カンマ区切りNetwork ID。NIC1本ずつ、Subnetはnetworkサービスが選ぶ。先頭が`primary`) `-subnets`(カンマ区切りSubnet ID。Subnetに固定したいNIC、`-networks`の後に続く) `-zone`(`-networks`を使うなら必須。`-subnets`だけならそのzone。省略時はネットワークなし) `-volumes`(カンマ区切りVolume ID。起動時にattach——attach-before-bootのみ、[Volume仕様](volume.md)参照) `-pci-devices`(カンマ区切り`vendor_id:device_id[:count]`。`cloud-hypervisor`限定、[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照) `-numa-pinned`(スケジューラが選んだ1つの物理NUMAノードへ全vCPU/メモリを固定する。ドライバを問わず使える、[VirtualMachine仕様](virtual-machine.md)「NUMA/CPUピニング」参照) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-image`(必須、Image ID) `-vcpu`(既定1) `-memory-mb`(既定1024) `-driver-hint`(`firecracker`\|`cloud-hypervisor`、既定は空=サーバー側デフォルト`FIRECRACKER`。Imageの`format`と対応している必要あり——`KERNEL_ROOTFS`はどちらでも可、`QCOW2`は`cloud-hypervisor`必須。[Image仕様](image.md)参照) `-networks`(カンマ区切りNetwork ID。NIC1本ずつ、Subnetはnetworkサービスが選ぶ。先頭が`primary`) `-security-groups`(カンマ区切りSecurityGroup ID。全NICに付ける。省略時は各Networkの既定のグループ) `-subnets`(カンマ区切りSubnet ID。Subnetに固定したいNIC、`-networks`の後に続く) `-zone`(`-networks`を使うなら必須。`-subnets`だけならそのzone。省略時はネットワークなし) `-volumes`(カンマ区切りVolume ID。起動時にattach——attach-before-bootのみ、[Volume仕様](volume.md)参照) `-pci-devices`(カンマ区切り`vendor_id:device_id[:count]`。`cloud-hypervisor`限定、[VirtualMachine仕様](virtual-machine.md)「PCIデバイスパススルー」参照) `-numa-pinned`(スケジューラが選んだ1つの物理NUMAノードへ全vCPU/メモリを固定する。ドライバを問わず使える、[VirtualMachine仕様](virtual-machine.md)「NUMA/CPUピニング」参照) `-user-data-file`(cloud-init user-dataファイルへのパス。省略時は注入しない、[VirtualMachine仕様](virtual-machine.md)「UserData注入」参照) `-wait`(Running/Errorまでブロック) |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` `-finalizer-name`(指定すると`meta.finalizers`にその名前を含むVMだけに絞り込む。[外部システム連携仕様](external-integration.md)「大量Watch対策」参照) |
@@ -157,23 +157,38 @@ network向け（[network仕様](network.md)参照）。値（VLAN ID等）・CID
 `update`はgRPC APIとしては存在するがCLIには未実装（Finalizerの付け外しだけ
 `add-finalizer`/`remove-finalizer`がある）。
 
-## `kyuusha netif <create|get|list|watch|delete>`
+## `kyuusha netif <create|get|list|watch|set-security-groups|delete>`
 
 network向け（[network仕様](network.md)参照）。`NetworkInterfaceService`のCLI名は
 `netif`（プロト上のメッセージ名は`NetworkInterface`）。`ip_address`/`mac_address`は
 実IPAMにより実際に払い出される。`hypervisor`はVMがRunningの間そのHypervisor
 （[network仕様](network.md)参照）。`subnet=`は払い出し元のSubnet（`-network`指定なら
-networkサービスが選んだもの）。
+networkサービスが選んだもの）。`security_groups=`は付いているSecurityGroup。
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-tenant`(必須) `-name`(冪等キー) `-vm`(VM ID、必須) `-subnet`(Subnet ID) または `-network`＋`-zone`(networkサービスがSubnetを選ぶ) `-ingress-rules` `-egress-rules` `-labels` `-annotations` |
+| `create` | `-tenant`(必須) `-name`(冪等キー) `-vm`(VM ID、必須) `-subnet`(Subnet ID) または `-network`＋`-zone`(networkサービスがSubnetを選ぶ) `-security-groups`(カンマ区切り。省略時はNetworkの既定のグループ) `-labels` `-annotations` |
 | `get` | `-tenant`(必須) `-id`(必須) |
 | `list` | `-tenant`(必須) |
 | `watch` | `-tenant`(必須) `-since-resource-version` |
+| `set-security-groups` | `-tenant`(必須) `-id`(必須) `-security-groups`(カンマ区切り。丸ごと置き換え、空なら全て外す＝全て拒否) |
 | `delete` | `-tenant`(必須) `-id`(必須) |
 
 `update`はgRPC APIとしては存在するがCLIには未実装（同上の理由）。
+
+## `kyuusha secgroup <create|get|list|update|delete>`
+
+SecurityGroup（[network仕様](network.md)「SecurityGroup」）。ルールは
+`protocol:port_range:peer`をカンマ区切りで書く——`protocol`は`tcp`/`udp`/`icmp`か空
+（全て）、`port_range`は空で全ポート、`peer`はCIDR、`sg=<id>`（`sg=self`はこのグループ）、
+`net=<network id>`のどれか（例: `tcp:22:0.0.0.0/0,::sg=self,icmp::net=network-1`）。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-tenant` `-name`(必須、冪等キー) `-description` `-ingress` `-egress` `-shared-with-tenant-ids` `-labels` |
+| `get` / `delete` | `-tenant` `-id`(必須) |
+| `list` | `-tenant`、または`-all-tenants`(テナント横断のロールのみ) |
+| `update` | `-tenant` `-id`(必須) `-description` `-ingress` `-egress` `-shared-with-tenant-ids` `-labels`。明示的に指定したフラグだけをGet→Updateで丸ごと置き換える |
 
 ## `kyuusha volume <create|get|list|watch|delete>`
 
