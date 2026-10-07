@@ -150,6 +150,7 @@ func main() {
 	networkv1.RegisterNetworkClassServiceServer(grpcServer, grpcserver.NewNetworkClassServer(svc))
 	networkv1.RegisterAllocationPoolServiceServer(grpcServer, grpcserver.NewAllocationPoolServer(svc))
 	networkv1.RegisterSecurityGroupServiceServer(grpcServer, grpcserver.NewSecurityGroupServer(svc))
+	networkv1.RegisterIPReservationServiceServer(grpcServer, grpcserver.NewIPReservationServer(svc))
 	// compute-agents' policy streams (east-west; see network.PolicyHub).
 	// Every replica runs its own hub from etcd -- nothing here is shared
 	// state, so an agent may connect to any replica.

@@ -103,6 +103,33 @@ func toAdmissionSGRules(rules []SecurityGroupRule) []admissionSecurityGroupRule 
 	return out
 }
 
+type admissionIPReservationSpec struct {
+	NetworkID          string   `json:"network_id,omitempty"`
+	Zone               string   `json:"zone,omitempty"`
+	SubnetID           string   `json:"subnet_id,omitempty"`
+	RequestedAddresses []string `json:"requested_addresses,omitempty"`
+}
+
+type admissionIPReservationStatus struct {
+	Phase     string   `json:"phase"`
+	Addresses []string `json:"addresses,omitempty"`
+	SubnetID  string   `json:"subnet_id,omitempty"`
+	Zone      string   `json:"zone,omitempty"`
+}
+
+func admissionIPReservationSpecJSON(s IPReservationSpec) json.RawMessage {
+	return mustJSON(admissionIPReservationSpec(s))
+}
+
+func admissionIPReservationObject(r IPReservation) *admissionwebhook.Object {
+	return &admissionwebhook.Object{
+		ID: r.Meta.ID, Name: r.Meta.Name, TenantID: r.Meta.TenantID,
+		Labels: r.Meta.Labels, Annotations: r.Meta.Annotations,
+		Spec:   admissionIPReservationSpecJSON(r.Spec),
+		Status: mustJSON(admissionIPReservationStatus{Phase: string(r.Status.Phase), Addresses: r.Status.Addresses, SubnetID: r.Status.SubnetID, Zone: r.Status.Zone}),
+	}
+}
+
 func admissionSecurityGroupSpecJSON(s SecurityGroupSpec) json.RawMessage {
 	return mustJSON(admissionSecurityGroupSpec{
 		Description: s.Description, IngressRules: toAdmissionSGRules(s.IngressRules), EgressRules: toAdmissionSGRules(s.EgressRules),

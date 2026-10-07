@@ -39,6 +39,7 @@ message QuotaSpec {
   int32 max_images = 8;
   int32 max_subnets = 9;
   int32 max_network_interfaces = 10;
+  int32 max_ip_reservations = 11; // network's IPReservation count, same +1 check
 }
 
 message PciDeviceQuota {

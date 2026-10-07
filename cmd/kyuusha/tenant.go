@@ -54,6 +54,7 @@ func tenantCreate(args []string) {
 	maxImages := fs.Int("max-images", 0, "quota: tenant-total Image count")
 	maxSubnets := fs.Int("max-subnets", 0, "quota: tenant-total Subnet count")
 	maxNetworkInterfaces := fs.Int("max-network-interfaces", 0, "quota: tenant-total NetworkInterface count")
+	maxIPReservations := fs.Int("max-ip-reservations", 0, "quota: tenant-total IPReservation count")
 	fs.Parse(args)
 
 	if *name == "" {
@@ -78,6 +79,7 @@ func tenantCreate(args []string) {
 				MaxImages:            int32(*maxImages),
 				MaxSubnets:           int32(*maxSubnets),
 				MaxNetworkInterfaces: int32(*maxNetworkInterfaces),
+				MaxIpReservations:    int32(*maxIPReservations),
 			},
 		},
 	})
@@ -183,6 +185,7 @@ func tenantUpdate(args []string) {
 	maxImages := fs.Int("max-images", 0, "quota: tenant-total Image count")
 	maxSubnets := fs.Int("max-subnets", 0, "quota: tenant-total Subnet count")
 	maxNetworkInterfaces := fs.Int("max-network-interfaces", 0, "quota: tenant-total NetworkInterface count")
+	maxIPReservations := fs.Int("max-ip-reservations", 0, "quota: tenant-total IPReservation count")
 	fs.Parse(args)
 
 	if *id == "" {
@@ -232,6 +235,9 @@ func tenantUpdate(args []string) {
 	if set["max-network-interfaces"] {
 		q.MaxNetworkInterfaces = int32(*maxNetworkInterfaces)
 	}
+	if set["max-ip-reservations"] {
+		q.MaxIpReservations = int32(*maxIPReservations)
+	}
 
 	updated, err := client.Update(ctx, &identityv1.UpdateTenantRequest{TenantId: *id, Tenant: tn})
 	if err != nil {
@@ -259,11 +265,11 @@ func tenantDelete(args []string) {
 
 func printTenant(tn *identityv1.Tenant) {
 	q := tn.GetSpec().GetQuota()
-	fmt.Printf("id=%s name=%s display_name=%q phase=%s quota(vcpu=%d,memory_mb=%d,volume_gb=%d,vms=%d,vcpu/vm=%d,memory_mb/vm=%d,pci_devices=%s,images=%d,subnets=%d,network_interfaces=%d) rv=%d\n",
+	fmt.Printf("id=%s name=%s display_name=%q phase=%s quota(vcpu=%d,memory_mb=%d,volume_gb=%d,vms=%d,vcpu/vm=%d,memory_mb/vm=%d,pci_devices=%s,images=%d,subnets=%d,network_interfaces=%d,ip_reservations=%d) rv=%d\n",
 		tn.GetMeta().GetId(), tn.GetMeta().GetName(), tn.GetSpec().GetDisplayName(), tn.GetStatus().GetPhase(),
 		q.GetMaxVcpu(), q.GetMaxMemoryMb(), q.GetMaxVolumeGb(), q.GetMaxVms(), q.GetMaxVcpuPerVm(), q.GetMaxMemoryMbPerVm(),
 		formatPciDeviceQuota(q.GetPciDevices()),
-		q.GetMaxImages(), q.GetMaxSubnets(), q.GetMaxNetworkInterfaces(),
+		q.GetMaxImages(), q.GetMaxSubnets(), q.GetMaxNetworkInterfaces(), q.GetMaxIpReservations(),
 		tn.GetMeta().GetResourceVersion())
 }
 

@@ -477,6 +477,14 @@ VMの配置先を絞る。HostAggregateをcomputeに置くのは、スケジュ�
 Network＋AZを指定されたNICのSubnetを、networkサービスがIPの払い出しと同じ処理の
 中で原子的に選ぶ——IPAMの持ち主がnetworkなので、選んだ直後に枯渇する競合を避けられる。
 
+**`IPReservation`: VMに依存しないIPの予約**: LBのVIPや外部IPのように、VMのNICに付かない
+アドレスもSubnetから取る必要がある。上位のソフトウェア（kyuusha-vpc等）が独自のアドレス
+プールを持つと、VMと同じSubnetから取るVIPがkyuushaのIPAMと衝突するので、予約もIPAMの持ち主で
+あるkyuushaに置いた（予約はトポロジに依存せず、VPCが無くても意味を持つ）。予約は純粋に
+IPAMの上の予約で、ホストへの配線もSecurityGroupのアドレス集合への参加もしない——どう使うかは
+使う側の仕事で、kyuushaにLBやNATの概念を持ち込まないため。誰が予約できるかはNICを付けられる
+かと同じ規則にした（公開IP用のNetworkを管理者が作り、`PUBLIC`や共有で見せる使い方ができる）。
+
 **AZはクライアントが決める**: VMの`spec.zone`はKaaS側が選ぶ（kyuushaはAZを選ばない）。
 マルチAZ冗長性が欲しいテナントは、AZごとにVMを作り分ける。1台のVirtualMachineは物理的に
 1ハイパーバイザー上でしか動かないため、**マルチAZにまたがるVirtualMachineは作れない**

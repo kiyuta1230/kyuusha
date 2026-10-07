@@ -30,6 +30,7 @@ type QuotaSpec struct {
 	MaxImages            int32
 	MaxSubnets           int32
 	MaxNetworkInterfaces int32
+	MaxIPReservations    int32
 }
 
 type PciDeviceQuota struct {

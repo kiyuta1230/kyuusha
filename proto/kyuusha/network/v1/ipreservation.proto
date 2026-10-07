@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package kyuusha.network.v1;
+
+option go_package = "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/v1;networkv1";
+
+import "google/protobuf/empty.proto";
+import "kyuusha/resource/v1/common.proto";
+
+// IPReservation holds an address of a Subnet independently of any VM's
+// NetworkInterface -- for a load balancer VIP, an external IP, and the
+// like. It comes from the same IPAM as NetworkInterface addresses, so the
+// two never collide. kyuusha only reserves it: it never wires it on a host
+// and it is never a member of a SecurityGroup address set. See
+// docs/specs/network.md「IPReservation」.
+message IPReservationSpec {
+  // Either network_id + zone (kyuusha picks a Subnet of that Network in
+  // that zone with a free address, the same way as for a
+  // NetworkInterface), or subnet_id.
+  string network_id = 1;
+  string zone = 2;
+  string subnet_id = 3;
+  // Optional specific addresses, at most one per address family (only
+  // IPv4 for now). Must lie in the Subnet's CIDR and be free; may be
+  // outside allocatable_ip_ranges. Requires subnet_id.
+  repeated string requested_addresses = 4;
+}
+
+message IPReservationStatus {
+  string phase = 1; // Pending / Ready
+  repeated kyuusha.resource.v1.Condition conditions = 2;
+  // The reserved addresses, one per address family (only IPv4 for now).
+  // Never change for the reservation's lifetime.
+  repeated string addresses = 3;
+  string subnet_id = 4; // where they came from
+  string zone = 5;
+}
+
+message IPReservation {
+  kyuusha.resource.v1.ObjectMeta meta = 1;
+  IPReservationSpec spec = 2;
+  IPReservationStatus status = 3;
+}
+
+message CreateIPReservationRequest {
+  string tenant_id = 1;
+  string name = 2; // idempotency key
+  IPReservationSpec spec = 3;
+  map<string, string> labels = 4;
+  map<string, string> annotations = 5;
+}
+message GetIPReservationRequest { string tenant_id = 1; string id = 2; }
+// Empty tenant_id lists every tenant's reservations (cross-tenant roles only).
+message ListIPReservationsRequest { string tenant_id = 1; }
+message ListIPReservationsResponse { repeated IPReservation items = 1; }
+// Only meta (labels, annotations, finalizers) can change; spec and status
+// keep their stored values.
+message UpdateIPReservationRequest { string tenant_id = 1; IPReservation ip_reservation = 2; }
+// The address returns to the Subnet once the reservation is actually gone
+// (Finalizers hold it until then).
+message DeleteIPReservationRequest { string tenant_id = 1; string id = 2; }
+message WatchIPReservationsRequest { string tenant_id = 1; int64 since_resource_version = 2; }
+message IPReservationEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ADDED = 1;
+    MODIFIED = 2;
+    DELETED = 3;
+    BOOKMARK = 4;
+  }
+  Type type = 1;
+  IPReservation ip_reservation = 2;
+  int64 resource_version = 3;
+}
+
+service IPReservationService {
+  rpc Create(CreateIPReservationRequest) returns (IPReservation);
+  rpc Get(GetIPReservationRequest) returns (IPReservation);
+  rpc List(ListIPReservationsRequest) returns (ListIPReservationsResponse);
+  rpc Update(UpdateIPReservationRequest) returns (IPReservation);
+  rpc Delete(DeleteIPReservationRequest) returns (google.protobuf.Empty);
+  rpc Watch(WatchIPReservationsRequest) returns (stream IPReservationEvent);
+}

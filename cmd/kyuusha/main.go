@@ -55,6 +55,8 @@ func main() {
 		netifCmd(os.Args[2:])
 	case "secgroup":
 		secgroupCmd(os.Args[2:])
+	case "ipreservation":
+		ipreservationCmd(os.Args[2:])
 	case "volume":
 		volumeCmd(os.Args[2:])
 	case "volattach":
@@ -83,6 +85,7 @@ func usage() {
   kyuusha network <create|get|list|delete> [flags]
   kyuusha subnet <create|get|list|watch|delete|add-finalizer|remove-finalizer> [flags]
   kyuusha netif <create|get|list|watch|set-security-groups|delete> [flags]
+  kyuusha ipreservation <create|get|list|delete|add-finalizer|remove-finalizer> [flags]
   kyuusha secgroup <create|get|list|update|delete> [flags]   (rules: protocol:port_range:peer, peer = CIDR | sg=<id>|sg=self | net=<network id>)
   kyuusha volume <create|get|list|watch|delete> [flags]
   kyuusha volattach <create|get|list|watch|delete> [flags]

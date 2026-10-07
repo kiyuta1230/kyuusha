@@ -22,6 +22,7 @@ var quotaPolicySrc string
 type tenantUsage struct {
 	SubnetCount           int32
 	NetworkInterfaceCount int32
+	IPReservationCount    int32
 }
 
 // quotaChecker evaluates the used+requested<=max judgement as an OPA/Rego
@@ -33,6 +34,7 @@ type tenantUsage struct {
 type quotaChecker struct {
 	subnetQuery           rego.PreparedEvalQuery
 	networkInterfaceQuery rego.PreparedEvalQuery
+	ipReservationQuery    rego.PreparedEvalQuery
 }
 
 func newQuotaChecker(ctx context.Context) (*quotaChecker, error) {
@@ -50,7 +52,22 @@ func newQuotaChecker(ctx context.Context) (*quotaChecker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prepare network interface quota policy: %w", err)
 	}
-	return &quotaChecker{subnetQuery: subnetQuery, networkInterfaceQuery: networkInterfaceQuery}, nil
+	ipReservationQuery, err := rego.New(
+		rego.Query("data.kyuusha.network.quota.allow_ip_reservation"),
+		rego.Module("quota.rego", quotaPolicySrc),
+	).PrepareForEval(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("prepare ip reservation quota policy: %w", err)
+	}
+	return &quotaChecker{subnetQuery: subnetQuery, networkInterfaceQuery: networkInterfaceQuery, ipReservationQuery: ipReservationQuery}, nil
+}
+
+func (q *quotaChecker) allowIPReservation(ctx context.Context, usage tenantUsage, limit *identityv1.QuotaSpec) (bool, error) {
+	input := map[string]any{
+		"usage": map[string]any{"ip_reservation_count": usage.IPReservationCount},
+		"limit": map[string]any{"max_ip_reservations": limit.GetMaxIpReservations()},
+	}
+	return evalAllow(ctx, q.ipReservationQuery, input)
 }
 
 func (q *quotaChecker) allowSubnet(ctx context.Context, usage tenantUsage, limit *identityv1.QuotaSpec) (bool, error) {

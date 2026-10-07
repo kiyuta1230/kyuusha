@@ -22,3 +22,9 @@ default allow_network_interface := false
 allow_network_interface if {
 	input.usage.network_interface_count + 1 <= input.limit.max_network_interfaces
 }
+
+default allow_ip_reservation := false
+
+allow_ip_reservation if {
+	input.usage.ip_reservation_count + 1 <= input.limit.max_ip_reservations
+}

@@ -104,6 +104,7 @@ type QuotaSpec struct {
 	MaxImages            int32 `protobuf:"varint,8,opt,name=max_images,json=maxImages,proto3" json:"max_images,omitempty"`
 	MaxSubnets           int32 `protobuf:"varint,9,opt,name=max_subnets,json=maxSubnets,proto3" json:"max_subnets,omitempty"`
 	MaxNetworkInterfaces int32 `protobuf:"varint,10,opt,name=max_network_interfaces,json=maxNetworkInterfaces,proto3" json:"max_network_interfaces,omitempty"`
+	MaxIpReservations    int32 `protobuf:"varint,11,opt,name=max_ip_reservations,json=maxIpReservations,proto3" json:"max_ip_reservations,omitempty"` // network's IPReservation count, same +1 check
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -204,6 +205,13 @@ func (x *QuotaSpec) GetMaxSubnets() int32 {
 func (x *QuotaSpec) GetMaxNetworkInterfaces() int32 {
 	if x != nil {
 		return x.MaxNetworkInterfaces
+	}
+	return 0
+}
+
+func (x *QuotaSpec) GetMaxIpReservations() int32 {
+	if x != nil {
+		return x.MaxIpReservations
 	}
 	return 0
 }
@@ -860,7 +868,7 @@ var File_kyuusha_identity_v1_tenant_proto protoreflect.FileDescriptor
 
 const file_kyuusha_identity_v1_tenant_proto_rawDesc = "" +
 	"\n" +
-	" kyuusha/identity/v1/tenant.proto\x12\x13kyuusha.identity.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\x9a\x03\n" +
+	" kyuusha/identity/v1/tenant.proto\x12\x13kyuusha.identity.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a kyuusha/resource/v1/common.proto\"\xca\x03\n" +
 	"\tQuotaSpec\x12\x19\n" +
 	"\bmax_vcpu\x18\x01 \x01(\x05R\amaxVcpu\x12\"\n" +
 	"\rmax_memory_mb\x18\x02 \x01(\x03R\vmaxMemoryMb\x12\"\n" +
@@ -875,7 +883,8 @@ const file_kyuusha_identity_v1_tenant_proto_rawDesc = "" +
 	"\vmax_subnets\x18\t \x01(\x05R\n" +
 	"maxSubnets\x124\n" +
 	"\x16max_network_interfaces\x18\n" +
-	" \x01(\x05R\x14maxNetworkInterfaces\"g\n" +
+	" \x01(\x05R\x14maxNetworkInterfaces\x12.\n" +
+	"\x13max_ip_reservations\x18\v \x01(\x05R\x11maxIpReservations\"g\n" +
 	"\x0ePciDeviceQuota\x12\x1b\n" +
 	"\tvendor_id\x18\x01 \x01(\tR\bvendorId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x1b\n" +

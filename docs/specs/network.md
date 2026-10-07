@@ -18,12 +18,13 @@ NetworkClass（管理者）    「どのプールから、どの単位で払い�
   ▲ 参照（1つ・変更不可）
 Network（テナント）       ルーティングドメイン兼分離の境界。AZをまたぐ
   ├─ Subnet（テナントが依頼、kyuushaが払い出す）  AZに閉じる。CIDR 1つ＝gateway 1つ（アドレスファミリごと）
-  │    └─ NetworkInterface（VMのNIC）── SecurityGroup（テナント）を明示的に付ける
+  │    ├─ NetworkInterface（VMのNIC）── SecurityGroup（テナント）を明示的に付ける
+  │    └─ IPReservation（VMに依存しないアドレスの予約）
   └─ 既定のSecurityGroup（Networkと一緒に作られる）
 ```
 
 フィールドの詳細はproto（`proto/kyuusha/network/v1/network.proto`・`subnet.proto`・
-`networkinterface.proto`・`securitygroup.proto`）参照。
+`networkinterface.proto`・`securitygroup.proto`・`ipreservation.proto`）参照。
 
 - **AllocationPool**（クラスタ単位、`tenant_id`は常に空）: 管理者専用——テナントは作れず、
   見ることもできない（テナントに見えるのは自分のNetwork/Subnetに払い出された値だけ）。
@@ -70,6 +71,7 @@ Network（テナント）       ルーティングドメイン兼分離の境界
   作成時に空ならNetworkの既定のグループが付く。作成後は`SetSecurityGroups`でだけ変えられる
   （空にすると全て拒否）
 - **SecurityGroup**（テナント所有）: 下記「SecurityGroup」
+- **IPReservation**（テナント所有）: VMのNICと独立にSubnetのアドレスを予約する。下記「IPReservation」
 
 ## 払い出し（`internal/network/alloc.go`、`ipam.go`）
 
@@ -175,6 +177,36 @@ EVPN、VRF-lite、ホストのVRF）では経路そのものが分かれ、VRF�
 全てが1つの経路表に載るためSecurityGroupの既定拒否で分ける（SNAPの責務）。ルーティング
 ドメインの値（Route Target、L3 VNI等）はNetwork単位で払い出す（Classの`network`参照）。
 
+## IPReservation
+
+VMのNICとは独立に、Subnetのアドレスを予約する（LBのVIP、外部IP、ゲートウェイのNATの
+公開IP等）。NICと同じIPAMから払い出すので、NICのアドレスとは決して衝突しない。kyuushaは
+予約するだけで、ホストへの配線は一切せず、SecurityGroupのアドレス集合にも入れない（それ自体は
+通信の端点ではないため）——予約したアドレスをどう使うかは使う側の仕事。
+
+- **作り方**: `spec.network_id`＋`spec.zone`（NICと同じく、払い出しと同じ処理の中で
+  networkサービスがSubnetを選ぶ）か、`spec.subnet_id`。`spec.requested_addresses`で
+  特定のアドレスを指定できる（アドレスファミリごとに1つまで、今はIPv4だけ。`subnet_id`が
+  必要）。指定したアドレスは、そのSubnetのCIDRのホストアドレスで、gateway_ipでなく、
+  空いていること（作成時に分かる範囲で検査し、使用中なら`InvalidArgument`）。
+  `allocatable_ip_ranges`の外でもよい（VIPを決まった位置に置けるように）
+- **使える人**: NICを付けられるのと同じ規則（自分のNetwork、`PUBLIC`、
+  `shared_with_tenant_ids`に入っているNetwork）
+- **払い出し**: 作成直後は`Pending`。network-reconcilerが払い出して`Ready`にし、
+  `status.addresses`（アドレスファミリごとに1つ）・`status.subnet_id`・`status.zone`を書く。
+  これらは予約の寿命の間変わらない。空きが無ければ（指定したアドレスが使用中の場合も）
+  `Pending`のまま`NoFreeAddress`のConditionで理由を報告し、10秒ごとの再試行で空いた時点で
+  払い出す
+- **Quota**: `max_ip_reservations`（作ったテナントに数える。[Quota仕様](quota.md)）
+- **Update**: `meta`（ラベル・アノテーション・Finalizer）だけ。`spec`と`status`は保存済みの
+  値が残る
+- **削除**: Finalizerがあれば外れるまで残り、その間アドレスも保持する。実際に消えた時点で
+  アドレスがSubnetに返る。予約が残っている間は、そのSubnet（`spec.subnet_id`か
+  `status.subnet_id`）とNetworkは削除できない（`FailedPrecondition`）
+- List/Watchは`tenant_id`を空にすると全テナント分（テナント横断のロールのみ）。
+  ラベル・アノテーション、Admission Webhook（リソース名`IPReservation`）は他のリソースと同じ
+- 範囲外: 予約したアドレスをNICに追加で付ける・付け替える機能
+
 ## Network/NetworkClassの共有と公開
 
 - **Networkの共有**: `visibility`/`shared_with_tenant_ids`（`kyuusha.image.v1.ImageSpec`の
@@ -228,6 +260,7 @@ Quota（`Tenant.spec.quota.max_subnets`/`max_network_interfaces`）判定を同�
   ため。`status`は常に保存済みの値が残る——呼び出し側が指定した`vlan_id`等を受け入れると、
   そのテナントのVMを別テナントのVLANへ配線できてしまうため
 - **SecurityGroup**: `meta`と`spec`。`status`は常に保存済みの値が残る
+- **IPReservation**: `meta`のみ
 - **NetworkInterface**: `meta`のみ。`spec.security_group_ids`は
   `SetSecurityGroups`経由でしか変えられず（差分があるとエラー）、`spec.vm_id`/
   `subnet_id`/`network_id`/`zone`の変更はエラー、`status`（`ip_address`/`mac_address`/
@@ -374,7 +407,7 @@ exit code」という呼び出し規約を共有するが、配線とACL強制�
 ## エンドポイント
 
 `network :8084`（`AllocationPoolService`, `NetworkClassService`, `NetworkService`,
-`SubnetService`, `NetworkInterfaceService`, `SecurityGroupService`、それにcompute-agent向けの
+`SubnetService`, `NetworkInterfaceService`, `SecurityGroupService`, `IPReservationService`、それにcompute-agent向けの
 `kyuusha.network.agent.v1.PolicyDistributionService`）。api-gateway経由でのみ到達可能
 （[システム構成仕様](system-overview.md)参照）——`SubnetService`/
 `NetworkInterfaceService`は組み込みのプロキシで、残りはapi-gatewayの外部バックエンドと

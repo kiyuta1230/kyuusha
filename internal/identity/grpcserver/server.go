@@ -131,6 +131,7 @@ func fromQuota(q *identityv1.QuotaSpec) identity.QuotaSpec {
 		MaxImages:            q.GetMaxImages(),
 		MaxSubnets:           q.GetMaxSubnets(),
 		MaxNetworkInterfaces: q.GetMaxNetworkInterfaces(),
+		MaxIPReservations:    q.GetMaxIpReservations(),
 	}
 	for _, p := range q.GetPciDevices() {
 		out.PciDevices = append(out.PciDevices, identity.PciDeviceQuota{
@@ -151,6 +152,7 @@ func toQuota(q identity.QuotaSpec) *identityv1.QuotaSpec {
 		MaxImages:            q.MaxImages,
 		MaxSubnets:           q.MaxSubnets,
 		MaxNetworkInterfaces: q.MaxNetworkInterfaces,
+		MaxIpReservations:    q.MaxIPReservations,
 	}
 	for _, p := range q.PciDevices {
 		out.PciDevices = append(out.PciDevices, &identityv1.PciDeviceQuota{

@@ -19,10 +19,11 @@ Tenantが持つ利用上限（Quota）の値はidentityが保持し、使用量�
 | `max_images` | テナント合計Image数上限。imageが強制する |
 | `max_subnets` | テナント合計Subnet数上限。networkが強制する |
 | `max_network_interfaces` | テナント合計NetworkInterface数上限。networkが強制する（VM作成に伴う内部的なNetworkInterface作成にも同じ判定がかかる） |
+| `max_ip_reservations` | テナント合計IPReservation数上限。networkが強制する（作ったテナントに数える。他テナントのNetworkから予約しても予約したテナントの分） |
 
-`max_images`/`max_subnets`/`max_network_interfaces`も`pci_devices`と同じく、
+`max_images`/`max_subnets`/`max_network_interfaces`/`max_ip_reservations`も`pci_devices`と同じく、
 未設定（0）は無制限ではなく**上限0**を意味する: Tenant作成時にこれらを指定しなければ、
-そのテナントはImage/Subnet/NetworkInterfaceを1つも作れない。
+そのテナントはImage/Subnet/NetworkInterface/IPReservationを1つも作れない。
 
 `pci_devices`は他のフィールドと違い、リストに存在しない`(vendor_id, device_id)`の
 組は**上限0（無制限ではない）**を意味する。GPU等の物理的に希少なリソースは、
@@ -37,7 +38,7 @@ vcpu/memory_mbのような「デフォルトで自由、上限だけ管理者が
   マップ本体に同居する
 - block-storage内のin-memoryマップ（`tenant_id -> {volume_gb}`）
 - image内のin-memoryマップ（`tenant_id -> {image_count}`）
-- network内のin-memoryマップ（`tenant_id -> {subnet_count, network_interface_count}`）
+- network内のin-memoryマップ（`tenant_id -> {subnet_count, network_interface_count, ip_reservation_count}`）
 
 どれもDBではなくプロセス内状態。プロセス再起動やレプリカ入れ替えのたびに`Service`の
 コンストラクタが対応するetcd上のリソース（VM/Volume/Image/Subnet/NetworkInterface）を

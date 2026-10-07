@@ -62,11 +62,11 @@ identity向け。`create`は`tenant_id`を持たないリクエストのため**
 
 | サブコマンド | フラグ |
 |---|---|
-| `create` | `-name`(必須、冪等キー) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm` `-pci-device-quota`(カンマ区切り`vendor_id:device_id:max_count`。リストに無い組は上限0、[Quota仕様](quota.md)参照) |
+| `create` | `-name`(必須、冪等キー) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm` `-pci-device-quota`(カンマ区切り`vendor_id:device_id:max_count`。リストに無い組は上限0、[Quota仕様](quota.md)参照) `-max-images` `-max-subnets` `-max-network-interfaces` `-max-ip-reservations` |
 | `get` | `-id`(必須) |
 | `list` | `-id`(空なら全テナント、admin-only) |
 | `watch` | `-id` `-since-resource-version` |
-| `update` | `-id`(必須) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm` `-pci-device-quota`。明示的に指定したフラグだけがGet→Updateで上書きされ、省略したフィールドは既存値のまま（`-pci-device-quota`を指定した場合はリスト全体を丸ごと置き換える、既存エントリとのマージはしない） |
+| `update` | `-id`(必須) `-display-name` `-max-vcpu` `-max-memory-mb` `-max-volume-gb` `-max-vms` `-max-vcpu-per-vm` `-max-memory-mb-per-vm` `-pci-device-quota` `-max-images` `-max-subnets` `-max-network-interfaces` `-max-ip-reservations`。明示的に指定したフラグだけがGet→Updateで上書きされ、省略したフィールドは既存値のまま（`-pci-device-quota`を指定した場合はリスト全体を丸ごと置き換える、既存エントリとのマージはしない） |
 | `delete` | `-id`(必須) |
 
 ## `kyuusha hypervisor <get|list|watch|set-schedulable|set-revoked|bootstrap-token>`
@@ -175,6 +175,18 @@ networkサービスが選んだもの）。`security_groups=`は付いているS
 | `delete` | `-tenant`(必須) `-id`(必須) |
 
 `update`はgRPC APIとしては存在するがCLIには未実装（同上の理由）。
+
+## `kyuusha ipreservation <create|get|list|delete|add-finalizer|remove-finalizer>`
+
+IPReservation（[network仕様](network.md)「IPReservation」）。`addresses=`は予約できた
+アドレス、`pending_reason=`は空きが無くて待っている理由。
+
+| サブコマンド | フラグ |
+|---|---|
+| `create` | `-tenant` `-name`(必須、冪等キー) `-network`＋`-zone`(networkサービスがSubnetを選ぶ) または `-subnet` `-address`(特定のアドレス、`-subnet`が必要) `-labels` |
+| `get` / `delete` | `-tenant` `-id`(必須) |
+| `list` | `-tenant`、または`-all-tenants`(テナント横断のロールのみ) |
+| `add-finalizer` / `remove-finalizer` | `-tenant` `-id`(必須) `-finalizer`(必須) |
 
 ## `kyuusha secgroup <create|get|list|update|delete>`
 

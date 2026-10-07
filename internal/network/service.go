@@ -96,12 +96,13 @@ const orphanSweepInterval = 10 * time.Minute
 // pool is exhausted, retried by Run's periodic sweep. See
 // docs/specs/network.md.
 type Service struct {
-	subnets    *resource.Store[Subnet, *Subnet]
-	interfaces *resource.Store[NetworkInterface, *NetworkInterface]
-	networks   *resource.Store[Network, *Network]
-	classes    *resource.Store[NetworkClass, *NetworkClass]
-	pools      *resource.Store[AllocationPool, *AllocationPool]
-	secgroups  *resource.Store[SecurityGroup, *SecurityGroup]
+	subnets      *resource.Store[Subnet, *Subnet]
+	interfaces   *resource.Store[NetworkInterface, *NetworkInterface]
+	networks     *resource.Store[Network, *Network]
+	classes      *resource.Store[NetworkClass, *NetworkClass]
+	pools        *resource.Store[AllocationPool, *AllocationPool]
+	secgroups    *resource.Store[SecurityGroup, *SecurityGroup]
+	reservations *resource.Store[IPReservation, *IPReservation]
 
 	alloc *allocator
 	ips   *ipPool
@@ -168,6 +169,11 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 			Conflict:      ErrSecurityGroupConflict,
 			HistoryPruned: ErrSecurityGroupHistoryPruned,
 		}),
+		reservations: resource.NewStore[IPReservation, *IPReservation](etcdClient, "ipreservation", resource.StoreErrors{
+			NotFound:      ErrIPReservationNotFound,
+			Conflict:      ErrIPReservationConflict,
+			HistoryPruned: ErrIPReservationHistoryPruned,
+		}),
 		computeClient:  computeClient,
 		identityClient: identityClient,
 		quota:          quota,
@@ -212,6 +218,18 @@ func (s *Service) rebuildUsage(ctx context.Context) error {
 		u := usage[n.Meta.TenantID]
 		u.NetworkInterfaceCount++
 		usage[n.Meta.TenantID] = u
+	}
+	reservations, err := s.reservations.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("network: rebuild usage: list ip reservations: %w", err)
+	}
+	for _, r := range reservations {
+		if r.Meta.DeletedAt != nil {
+			continue // Delete already counted it down
+		}
+		u := usage[r.Meta.TenantID]
+		u.IPReservationCount++
+		usage[r.Meta.TenantID] = u
 	}
 	s.usage = usage
 	return nil
@@ -260,6 +278,15 @@ func (s *Service) rebuildPools(ctx context.Context) error {
 		}
 		if oct, ok := parseMACOct(n.Status.MACAddress); ok && oct > maxMACOct {
 			maxMACOct = oct
+		}
+	}
+	reservations, err := s.reservations.List(ctx, "")
+	if err != nil {
+		return fmt.Errorf("network: rebuild pools: list ip reservations: %w", err)
+	}
+	for _, r := range reservations {
+		for _, a := range r.Status.Addresses {
+			s.ips.markUsed(r.Status.SubnetID, a)
 		}
 	}
 	// Only ever raise the counter: remarkPools re-runs this on a live
@@ -319,6 +346,7 @@ func (s *Service) Run(ctx context.Context) error {
 	go s.watchPendingNetworks(ctx)
 	go s.watchPendingSubnets(ctx)
 	go s.watchPendingNetworkInterfaces(ctx)
+	go s.watchPendingIPReservations(ctx)
 	go s.watchVMPlacement(ctx)
 
 	ticker := time.NewTicker(pendingSweepInterval)
@@ -333,6 +361,7 @@ func (s *Service) Run(ctx context.Context) error {
 			s.retryPendingNetworks(ctx)
 			s.retryPendingSubnets(ctx)
 			s.retryPendingNetworkInterfaces(ctx)
+			s.retryPendingIPReservations(ctx)
 		case <-orphanTicker.C:
 			s.sweepOrphanedNetworkInterfaces(ctx)
 		}
@@ -617,6 +646,11 @@ func (s *Service) UpdateSubnet(ctx context.Context, subnet *Subnet) (*Subnet, er
 // compute.Service.Delete documents for VirtualMachine; a repeated Delete
 // while Finalizers are pending doesn't drop it again.
 func (s *Service) DeleteSubnet(ctx context.Context, tenantID, id string) error {
+	if r, err := s.reservationBlocking(ctx, "", id); err != nil {
+		return err
+	} else if r != nil {
+		return fmt.Errorf("%w: IP reservation %q (tenant %q) still holds an address of subnet %q", ErrInUse, r.Meta.ID, r.Meta.TenantID, id)
+	}
 	// Admission runs before taking usageMu: a webhook round trip must not
 	// hold up every other tenant's Create/Delete.
 	if current, err := s.subnets.Get(ctx, tenantID, id); err == nil {
@@ -826,8 +860,14 @@ func (s *Service) tryAllocateIP(ctx context.Context, n *NetworkInterface) {
 // try: just the pinned Subnet, or every Ready, not-being-deleted Subnet of
 // n's Network in n's zone, oldest first.
 func (s *Service) candidateSubnets(ctx context.Context, n *NetworkInterface) ([]Subnet, error) {
-	if n.Spec.SubnetID != "" {
-		sn, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.Spec.SubnetID)
+	return s.candidateSubnetsFor(ctx, n.Meta.TenantID, n.Spec.SubnetID, n.Spec.NetworkID, n.Spec.Zone)
+}
+
+// candidateSubnetsFor is candidateSubnets for any address holder of
+// tenantID (a NetworkInterface or an IPReservation).
+func (s *Service) candidateSubnetsFor(ctx context.Context, tenantID, subnetID, networkID, zone string) ([]Subnet, error) {
+	if subnetID != "" {
+		sn, err := s.getSubnetForInterface(ctx, tenantID, subnetID)
 		if err != nil {
 			return nil, err
 		}
@@ -836,7 +876,7 @@ func (s *Service) candidateSubnets(ctx context.Context, n *NetworkInterface) ([]
 		}
 		return []Subnet{sn}, nil
 	}
-	network, err := s.getNetworkAnyTenant(ctx, n.Meta.TenantID, n.Spec.NetworkID)
+	network, err := s.getNetworkAnyTenant(ctx, tenantID, networkID)
 	if err != nil {
 		return nil, err
 	}
@@ -846,7 +886,7 @@ func (s *Service) candidateSubnets(ctx context.Context, n *NetworkInterface) ([]
 	}
 	var out []Subnet
 	for _, sn := range all {
-		if sn.Spec.NetworkID == network.Meta.ID && sn.Spec.Zone == n.Spec.Zone && sn.Status.Phase == SubnetPhaseReady && sn.Meta.DeletedAt == nil {
+		if sn.Spec.NetworkID == network.Meta.ID && sn.Spec.Zone == zone && sn.Status.Phase == SubnetPhaseReady && sn.Meta.DeletedAt == nil {
 			out = append(out, sn)
 		}
 	}

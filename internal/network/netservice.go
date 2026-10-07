@@ -495,6 +495,11 @@ func (s *Service) DeleteNetwork(ctx context.Context, tenantID, id string) error 
 			return fmt.Errorf("%w: Network %q still has Subnet %q", ErrInUse, current.Meta.Name, sn.Meta.Name)
 		}
 	}
+	if r, err := s.reservationBlocking(ctx, id, ""); err != nil {
+		return err
+	} else if r != nil {
+		return fmt.Errorf("%w: Network %q still has IP reservation %q (tenant %q)", ErrInUse, current.Meta.Name, r.Meta.ID, r.Meta.TenantID)
+	}
 	if err := s.admit(ctx, admissionwebhook.Request{
 		Operation: "DELETE", Resource: "Network", TenantID: tenantID, Name: current.Meta.Name, ID: id,
 		OldObject: admissionNetworkObject(current),

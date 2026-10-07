@@ -79,6 +79,31 @@ func (p *ipPool) allocate(subnetID, cidr, gatewayIP string, allocatableRanges []
 	return "", false
 }
 
+// allocateSpecific takes exactly ip in subnetID if it's one of cidr's host
+// addresses, isn't gatewayIP and is free (allocatable ranges don't apply:
+// see checkAddressInSubnet).
+func (p *ipPool) allocateSpecific(subnetID, cidr, gatewayIP, ip string) bool {
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	start, end, ok := hostRange(ipnet)
+	want := net.ParseIP(ip).To4()
+	if !ok || want == nil || ipAfter(start, want) || ipAfter(want, end) || ip == gatewayIP {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.used[subnetID] == nil {
+		p.used[subnetID] = make(map[string]bool)
+	}
+	if p.used[subnetID][ip] {
+		return false
+	}
+	p.used[subnetID][ip] = true
+	return true
+}
+
 type ipRange struct{ start, end net.IP }
 
 // parseIPRange parses "<start-ip>-<end-ip>" (both IPv4) into its inclusive

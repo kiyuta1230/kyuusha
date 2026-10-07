@@ -18,7 +18,7 @@ import (
 // interferes with a test that isn't specifically exercising it. Mirrors
 // compute/block-storage/image's identical helper.
 func UnlimitedQuota() *identityv1.QuotaSpec {
-	return &identityv1.QuotaSpec{MaxSubnets: math.MaxInt32, MaxNetworkInterfaces: math.MaxInt32}
+	return &identityv1.QuotaSpec{MaxSubnets: math.MaxInt32, MaxNetworkInterfaces: math.MaxInt32, MaxIpReservations: math.MaxInt32}
 }
 
 // FakeTenantClient is a minimal identityv1.TenantServiceClient for tests

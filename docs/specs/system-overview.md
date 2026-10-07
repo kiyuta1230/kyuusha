@@ -75,7 +75,7 @@ flowchart LR
 | `compute` | `:8081` | `VirtualMachineService`, `HypervisorService`（Registerを含む全RPC） |
 | `identity` | `:8082` | `TenantService` |
 | `image` | `:8083` | `ImageService` |
-| `network` | `:8084` | `AllocationPoolService`, `NetworkClassService`, `NetworkService`, `SubnetService`, `NetworkInterfaceService`, `SecurityGroupService`, `PolicyDistributionService`（compute-agent向け） |
+| `network` | `:8084` | `AllocationPoolService`, `NetworkClassService`, `NetworkService`, `SubnetService`, `NetworkInterfaceService`, `SecurityGroupService`, `IPReservationService`, `PolicyDistributionService`（compute-agent向け） |
 | `block-storage` | `:8085` | `VolumeService`, `VolumeAttachmentService`, `StorageConnectionService` |
 | `NATS` | `:4222`（client）, `:8222`（監視用HTTP、compose環境のみ） | JetStream |
 

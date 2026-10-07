@@ -7,6 +7,22 @@
 
 ## 2026-10-08
 
+- **VMに依存しないIPの予約`IPReservation`を追加した**（kyuusha-vpcからの変更依頼A11）。
+  NICと同じIPAMから、Network＋AZ（Subnetはnetworkサービスが選ぶ）かSubnetを指定して、
+  任意で特定のアドレスを予約できる。ホストへの配線もSecurityGroupの集合への参加もしない
+  純粋な予約。予約できる人はNICを付けられる人と同じ、数はidentityの新しいQuota
+  `max_ip_reservations`で制限。予約が残っているSubnet/Networkは削除できず、Finalizerで
+  止まっている間はアドレスを保持する。ラベル・Admission Webhook・横断List/Watch・
+  api-gatewayの汎用転送に対応し、CLIは`kyuusha ipreservation`。playgroundで確認した:
+  - /29のSubnetで予約（Network＋AZ、特定のアドレス）とVMのNICが別々のアドレスを得る
+  - 使用中・gatewayのアドレスの指定は拒否される
+  - 空きが無い予約は`Pending`のまま理由を報告する
+  - 予約が残っているSubnetは削除できない
+  - Finalizerで止めた予約はアドレスを持ち続け、Finalizerを外すとそのアドレスが`Pending`の
+    予約に払い出される
+  - テナントの横断Listは拒否され、管理者は全テナント分を見られる
+  仕様: [network.md「IPReservation」](specs/network.md)
+
 - **SecurityGroupのポリシーのホストへの配布を、NATSからxDSのようなgRPCストリームに
   変えた**。compute-agentがnetworkサービスへ`PolicyDistributionService.Stream`を張って、
   配線済みのNICを申告する。networkはそのポリシーと参照される集合の全量を送り、以降は

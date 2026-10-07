@@ -23,6 +23,7 @@ func TestQuotaRoundTrip(t *testing.T) {
 		MaxImages:            7,
 		MaxSubnets:           8,
 		MaxNetworkInterfaces: 9,
+		MaxIpReservations:    11,
 		PciDevices: []*identityv1.PciDeviceQuota{
 			{VendorId: "10de", DeviceId: "1c03", MaxCount: 2},
 		},
@@ -38,7 +39,8 @@ func TestQuotaRoundTrip(t *testing.T) {
 		out.GetMaxMemoryMbPerVm() != in.GetMaxMemoryMbPerVm() ||
 		out.GetMaxImages() != in.GetMaxImages() ||
 		out.GetMaxSubnets() != in.GetMaxSubnets() ||
-		out.GetMaxNetworkInterfaces() != in.GetMaxNetworkInterfaces() {
+		out.GetMaxNetworkInterfaces() != in.GetMaxNetworkInterfaces() ||
+		out.GetMaxIpReservations() != in.GetMaxIpReservations() {
 		t.Fatalf("round trip mismatch: in=%+v out=%+v", in, out)
 	}
 	if len(out.GetPciDevices()) != 1 ||
