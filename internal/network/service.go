@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,8 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -122,15 +119,6 @@ type Service struct {
 	usageMu sync.Mutex
 	usage   map[string]tenantUsage
 
-	// js is used by publishUpdateACL/publishUpdateSets, to notify
-	// whichever hypervisor is currently running a NetworkInterface's VM
-	// that its SecurityPolicy changed: from SetSecurityGroups
-	// (cmd/network), and from group rule and address-set membership
-	// changes (cmd/network-reconciler, see sgsync.go). nil (most tests)
-	// makes it a no-op -- best-effort, never blocks or fails anything
-	// (see docs/specs/snap.md「ポリシーの変更とホストへの反映」).
-	js jetstream.JetStream
-
 	// AdmissionGate is consulted synchronously before Subnet Create/Update/
 	// Delete, NetworkInterface Create/Update/SetSecurityGroups and
 	// SecurityGroup Create/Update/Delete (see
@@ -144,7 +132,7 @@ type Service struct {
 // etcd before returning -- callers must not start serving Create requests
 // until this returns, or a Create racing either rebuild could hand out an
 // id/address/quota charge the rebuild was about to reserve.
-func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, computeClient computev1.VirtualMachineServiceClient, js jetstream.JetStream) (*Service, error) {
+func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient identityv1.TenantServiceClient, computeClient computev1.VirtualMachineServiceClient) (*Service, error) {
 	quota, err := newQuotaChecker(ctx)
 	if err != nil {
 		return nil, err
@@ -183,7 +171,6 @@ func NewService(ctx context.Context, etcdClient *clientv3.Client, identityClient
 		computeClient:  computeClient,
 		identityClient: identityClient,
 		quota:          quota,
-		js:             js,
 		alloc:          newAllocator(),
 		ips:            newIPPool(),
 		usage:          make(map[string]tenantUsage),
@@ -333,7 +320,6 @@ func (s *Service) Run(ctx context.Context) error {
 	go s.watchPendingSubnets(ctx)
 	go s.watchPendingNetworkInterfaces(ctx)
 	go s.watchVMPlacement(ctx)
-	go newSGSyncer(s).run(ctx)
 
 	ticker := time.NewTicker(pendingSweepInterval)
 	defer ticker.Stop()
@@ -935,9 +921,8 @@ func stringsEqual(a, b []string) bool {
 }
 
 // SetSecurityGroups replaces a NetworkInterface's attached groups
-// wholesale (empty = none, deny all) and best-effort notifies the
-// hypervisor running its VM (see publishUpdateACL); the membership change
-// reaches the other hosts through network-reconciler (sgsync.go).
+// wholesale (empty = none, deny all). Hosts pick the change up through
+// their policy streams (see PolicyHub).
 func (s *Service) SetSecurityGroups(ctx context.Context, tenantID, id string, ids []string) (*NetworkInterface, error) {
 	if err := s.validateAttachSecurityGroups(ctx, tenantID, ids); err != nil {
 		return nil, err
@@ -959,76 +944,7 @@ func (s *Service) SetSecurityGroups(ctx context.Context, tenantID, id string, id
 	if err != nil {
 		return nil, err
 	}
-	s.publishUpdateACL(ctx, out, out.Meta.ResourceVersion)
 	return &out, nil
-}
-
-// publishUpdateACL resolves the hypervisor currently running n's VM (via
-// the same computeClient sweepOrphanedNetworkInterfaces already holds) and
-// publishes an UpdateACLCommand to it. Best-effort only: a resolve failure,
-// an unscheduled VM (empty hypervisor -- the eventual boot-time
-// snap.Attach will carry the current rules anyway), a nil computeClient/
-// js, or a publish failure all just log-and-return, never propagate to the
-// caller -- the etcd write already succeeded, and this is host-state
-// convergence, not correctness of the API call itself.
-//
-// version must exceed whatever this interface's last update_acl carried
-// (compute-agent drops anything not newer): n's own resource_version for
-// a change to n itself, or the revision of whatever else triggered the
-// re-send (republishNetworkACLs) when n is unchanged.
-func (s *Service) publishUpdateACL(ctx context.Context, n NetworkInterface, version int64) {
-	if n.Spec.VMID == "" || s.computeClient == nil || s.js == nil {
-		return
-	}
-	vm, err := s.computeClient.Get(ctx, &computev1.GetVirtualMachineRequest{TenantId: n.Meta.TenantID, Id: n.Spec.VMID})
-	if err != nil {
-		slog.Warn("network: resolve hypervisor for update_acl failed, skipping notify", "netif_id", n.Meta.ID, "vm_id", n.Spec.VMID, "err", err)
-		return
-	}
-	hypervisor := vm.GetStatus().GetHypervisor()
-	if hypervisor == "" {
-		return
-	}
-
-	var subnetCIDR, gatewayIP string
-	var subnetLabels map[string]string
-	var attach AttachContext
-	if subnet, err := s.getSubnetForInterface(ctx, n.Meta.TenantID, n.SubnetID()); err == nil {
-		subnetCIDR, gatewayIP = subnet.Status.IPv4()
-		subnetLabels = subnet.Meta.Labels
-		attach = s.attachContext(ctx, subnet)
-	}
-
-	policy, err := s.SecurityPolicy(ctx, n)
-	if err != nil {
-		slog.Warn("network: resolve security policy for update_acl failed, skipping notify", "netif_id", n.Meta.ID, "err", err)
-		return
-	}
-
-	cmd := UpdateACLCommand{
-		IfaceID:         n.Meta.ID,
-		VMID:            n.Spec.VMID,
-		TenantID:        n.Meta.TenantID,
-		SubnetID:        n.SubnetID(),
-		SubnetLabels:    subnetLabels,
-		SubnetCIDR:      subnetCIDR,
-		IPAddress:       n.Status.IPAddress,
-		MACAddress:      n.Status.MACAddress,
-		GatewayIP:       gatewayIP,
-		Attach:          attach,
-		Policy:          policy.ToInfo(),
-		ResourceVersion: max(version, n.Meta.ResourceVersion),
-	}
-	payload, err := json.Marshal(cmd)
-	if err != nil {
-		slog.Error("network: marshal update_acl command failed", "netif_id", n.Meta.ID, "err", err)
-		return
-	}
-	msg := nats.NewMsg(CmdSubjectUpdateACL(hypervisor))
-	msg.Data = payload
-	if _, err := s.js.PublishMsg(ctx, msg); err != nil {
-		slog.Warn("network: publish update_acl failed", "netif_id", n.Meta.ID, "hypervisor", hypervisor, "err", err)
-	}
 }
 
 // DeleteNetworkInterface mirrors DeleteSubnet: Finalizers hold the

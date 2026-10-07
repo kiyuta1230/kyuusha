@@ -88,19 +88,7 @@ func (s *NetworkInterfaceServer) GetSecurityPolicy(ctx context.Context, req *net
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	out := &networkv1.SecurityPolicy{SecurityGroupIds: p.SecurityGroupIDs}
-	conv := func(rs []network.PolicyRule) []*networkv1.SecurityPolicyRule {
-		var o []*networkv1.SecurityPolicyRule
-		for _, r := range rs {
-			o = append(o, &networkv1.SecurityPolicyRule{Protocol: r.Protocol, PortRange: r.PortRange, Cidr: r.CIDR, Set: r.Set})
-		}
-		return o
-	}
-	out.IngressRules, out.EgressRules = conv(p.IngressRules), conv(p.EgressRules)
-	for _, a := range p.Sets {
-		out.Sets = append(out.Sets, &networkv1.AddressSet{Name: a.Name, Version: a.Version, Members: a.Members})
-	}
-	return out, nil
+	return toSecurityPolicyProto(p), nil
 }
 
 func (s *NetworkInterfaceServer) Delete(ctx context.Context, req *networkv1.DeleteNetworkInterfaceRequest) (*emptypb.Empty, error) {

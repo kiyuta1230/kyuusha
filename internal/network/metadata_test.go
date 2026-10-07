@@ -14,7 +14,7 @@ import (
 // validated on both paths (see resource.ValidateMetadata).
 func TestService_SubnetLabelsAndAnnotations(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestService_SubnetLabelsAndAnnotations(t *testing.T) {
 // would defeat SNAP's anti-spoofing.
 func TestService_UpdateCannotForgeServerOwnedFields(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestService_UpdateCannotForgeServerOwnedFields(t *testing.T) {
 
 func TestService_UpdateSubnetRejectsAddressingChanges(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

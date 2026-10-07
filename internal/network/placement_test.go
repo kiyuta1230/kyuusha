@@ -26,7 +26,7 @@ func TestInterfaceHypervisorFollowsRunningVM(t *testing.T) {
 
 func TestService_SyncInterfaceHypervisor(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

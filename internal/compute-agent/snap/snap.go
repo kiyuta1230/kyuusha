@@ -72,7 +72,7 @@ func freshSets(sets []vmm.SetUpdate) []vmm.SetUpdate {
 // Attach applies iface's SecurityPolicy: the built-in nftacl
 // implementation when securityBackendBin is empty (the default -- see
 // nftacl's own doc comment), or an external plugin otherwise. Idempotent
-// either way: Boot's initial wiring and a later update_acl re-apply call
+// either way: Boot's initial wiring and a later policy-stream re-apply call
 // it the same way. Set copies older than what the host already has
 // (another interface's newer delta) are left out, so the backend keeps
 // the newer contents.
@@ -93,7 +93,7 @@ func Attach(iface Interface, securityBackendBin string) error {
 }
 
 // UpdateSets applies address-set changes (network-reconciler's
-// update_sets, see docs/specs/snap.md) and returns those actually passed
+// policy stream, see docs/specs/snap.md) and returns those actually passed
 // on: a delta must be newer than what this host last applied to the set,
 // a full copy at least as new. Sets no interface on this host references
 // are the backend's to ignore.

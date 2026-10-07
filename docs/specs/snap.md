@@ -26,15 +26,14 @@ ACL強制プラグイン契約——SNAP（Security Network Attach Protocol）�
   およびVNAPと同じNetwork/NetworkClassの文脈（`network_id`/`network_class`/
   `subnet_values`等、[VNAP仕様](vnap.md)参照）。`subnet_labels`はSubnetの`meta.labels`、
   `ip_address`/`mac_address`はそのVMに払い出された自身のアドレスでアンチスプーフィング
-  （後述）の入力——再適用でも毎回同じ値が届く（networkサービスが`update_acl`コマンドに
+  （後述）の入力——再適用でも毎回同じ値が届く（networkサービスがポリシーの配布に
   載せる）。ルールが参照しているのに`sets`に無い集合は、既にホストにある中身のまま使う
   （無ければ空として作る）。プラグインは知らないフィールドを無視すること
 - **update_setsのpayload**: `{"sets": [...]}`。各要素は`name`/`version`と、`full: true`
   なら`members`（全量で置き換え）、そうでなければ`add`/`remove`（差分）。このホストの
   どのNICのルールも参照していない集合はプラグインが無視してよい
 - **呼び出しタイミング**: attachはVM Boot時（`netsetup.Wire`成功直後）と、ポリシーの
-  再適用時（`update_acl`、後述）。update_setsはnetwork-reconcilerからのアドレス集合の
-  変更が届いた時
+  再適用時（ポリシーの配布、後述）。update_setsはアドレス集合の変更が届いた時
 - **版**: 集合の`version`はetcdのリビジョンで、差分と全量の新旧を同じ物差しで比べられる。
   compute-agent（`internal/compute-agent/snap`）が集合ごとに最後に適用した版を覚えて
   おり、差分はそれより新しい場合だけ、全量はそれ以上の場合だけプラグインへ渡す（attachの
@@ -176,49 +175,66 @@ VM間・VM→ゲートウェイ通信が通ること、送信元IP・送信元MA
 削除・全量の置き換えに応じて相手からの着信が通る/通らないこと。
 `examples/snap-plugins/ebpf-snap/sets_test.go`）。
 
-## ポリシーの変更とホストへの反映
+## ポリシーの配布
 
-稼働中のVMのNICについて、何かが変わるとnetworkサービスがNATS（`network`独自の
-JetStreamストリーム`NETWORK_CMD`）でそのNICのいるHypervisorへ知らせる。どの経路も
-ベストエフォートで、Hypervisorの解決やpublishに失敗してもRPC自体は成功のまま返す
-（etcdへの反映は済んでいて、下記の定期的な全量で収束するため）。
+稼働中のVMのNICのポリシーは、compute-agentがnetworkサービスに張るgRPCの双方向ストリーム
+（`kyuusha.network.agent.v1.PolicyDistributionService.Stream`、東西mTLS、api-gatewayは
+中継しない）で追従させる。EnvoyのxDSと同じ形で、設計の理由は
+[architecture.md「ポリシーの配布: xDSのようなgRPCストリーム」](../architecture.md)。
+compute-agentの`-network-addr`で接続先（networkのどのレプリカでもよい）を指定する。
+空ならストリームを張らず、NICは起動時のポリシーのまま（警告をログに出す）。
 
-| 変わったもの | 送り手 | subject | 中身 |
-|---|---|---|---|
-| NICに付いたグループ（`SetSecurityGroups`） | network（API） | `ms.network.cmd.<hypervisor>.network_interface.update_acl` | そのNICのポリシーの全量（ルールと参照する集合の全量） |
-| グループのルール | network-reconciler（SecurityGroupのWatch） | 同上 | そのグループが付いた稼働中の全NICのポリシーの全量 |
-| 集合のメンバー（NICの払い出し、VMの起動・停止・削除・移行、付け替え） | network-reconciler（NetworkInterfaceのWatch） | `ms.network.cmd.<hypervisor>.security_group.update_sets` | その集合を参照するルールを持つホストへ差分 |
-| NICがホストに着いた（VMが`Running`になった） | network-reconciler | 同上 | そのホストへ、NICのルールが参照する全集合の全量 |
-| （定期、30秒ごと） | network-reconciler | 同上 | 各ホストへ、参照している全集合の全量（etcdから読み直す） |
+### やりとり
 
-### update_acl
+| 向き | メッセージ | 中身 |
+|---|---|---|
+| agent→network | `Subscribe` | `hypervisor`と、そのホストのドライバが配線済みのNICの一覧。**申告し直すたびに置き換える**（state of the world）。ストリームの最初のメッセージは必ずこれ |
+| network→agent | `PolicyStreamResponse` | `nonce`（ストリーム内で増える）、`revision`（networkのキャッシュが反映しているetcdリビジョン）、`observed_at`、`interfaces`（NICごとのポリシーの全量）、`sets`（集合の全量または差分） |
+| agent→network | `Ack` | 応答の`nonce`と、適用できなかった場合は`error`（NACK） |
 
-compute-agentは`update_acl`を受け取ると、稼働中の全ドライバへ`ApplyACL(vm_id, iface_id, ...)`
-を試し、該当tapを持つドライバが見つかるまでメッセージを**Ackしない**——JetStreamの
-再配送（デフォルトAckWait、`MaxDeliver=20`で打ち切り）にそのまま「VM起動待ち」の
-リトライを任せる。`update_acl`は常にその時点の**全量**を運ぶため、再配送や順序前後が
-あっても最終的に正しい状態へ収束する。ただし`resource_version`を使い、より新しい
-コマンドが既に適用済みなら古いコマンドを再適用しない（compute-agent再起動でこの記録が
-失われても問題ない——次に来る`update_acl`が常に完全な状態を運ぶため）。
+networkが送るもの:
 
-### アドレス集合の配布
+| きっかけ | 送る先 | 中身 |
+|---|---|---|
+| NICが新しく申告された | そのストリーム | そのNICのポリシーの全量と、そのストリームにまだ送っていない集合の全量 |
+| NICのアドレス・付いているグループ（`SetSecurityGroups`）が変わった | そのNICを申告しているストリーム | そのNICのポリシーの全量（新しく参照する集合があればその全量も） |
+| グループのルールが変わった | そのグループが付いたNICを申告しているストリーム | それらのNICのポリシーの全量 |
+| 集合のメンバーが変わった（NICの払い出し、VMの起動・停止・削除・移行、付け替え） | その集合の写しを送ってあるストリーム | 差分（`add`/`remove`、版はその変更のetcdリビジョン） |
+| 接続直後・networkのキャッシュの作り直し・5分ごと | 全ストリーム | 申告されている全NICのポリシーと、必要な全集合の全量 |
 
-ルールを相手のアドレスに展開して配ると、メンバーが1つ増えるだけでそのグループを参照する
-全NICへルールの全量を送り直すことになり、規模が大きいと破綻する（設計の理由は
-[architecture.md「SecurityGroup」](../architecture.md)）。そこでルールは集合への参照のまま
-にし、集合の中身だけを差分で配る。
+### compute-agentの側
 
-- network-reconcilerはNICとSecurityGroupをWatchして「どのNICがどの集合のメンバーか」
-  「どのホストのNICのルールがどの集合を参照しているか」を持ち、NICの変化ごとに、
-  変わった集合を参照しているホストへだけ差分を送る。差分の`version`はそのNICの変更の
-  etcdリビジョン
-- compute-agentは集合ごとに最後に適用した版を覚え、古いものは捨てる（上記「版」）。
-  ホストに無い集合への差分はSNAPのバックエンドが無視する
-- 差分の取りこぼし・順序の入れ替わり・compute-agentの再起動は、30秒ごとの全量
-  （etcdからの読み直し、版はその読み取りのリビジョン）で直る。反映は最終的に揃う方式
-  で、新しいVMのアドレスが他のホストの集合に入るまでの間は、そのVMとの通信が相手側で
-  拒否されうる
-- **遅れのメトリクス**: compute-agentの`kyuusha_compute_agent_sg_set_propagation_seconds`
-  （ヒストグラム、`kind`=`delta`/`full`）が、network-reconcilerが変化を見てから
-  ホストで適用し終えるまでの時間。network-reconcilerの`kyuusha_network_sg_set_updates_total`
-  （`kind`別）が送った集合の更新の数。目標は数秒以内
+- 起動時と、ドライバの配線状態が変わった時（VMのBoot直後、それ以外は1秒ごとに確認）に
+  `Subscribe`を送り直す
+- 応答を受け取ると、まずNICごとのポリシーを該当tapのドライバの`ApplyACL`で適用し
+  （SNAPの`attach`。新しく参照された集合はここで空として作られる）、次に集合の更新を
+  SNAPの`update_sets`で適用して、`Ack`を返す。どれかが失敗したら`error`付きで返す
+- NICのポリシーは、そのNICに最後に適用したものより古い版なら捨てる（同じ版の再送は
+  そのまま適用し直す）。集合の版の扱いは上記「版」
+- ストリームが切れたら、ジッター付きの待ち時間（1秒から倍々で最大30秒）で繋ぎ直し、
+  全量から受け取り直す。networkのレプリカの再起動で全ホストが一斉に繋ぎ直さないため
+- VMの起動時のtapの配線には、computeが読んだポリシー（`GetSecurityPolicy`）を使う。
+  VMは最初のパケットから正しいルールで動き、ストリームはその後を追従させる
+
+### networkの側
+
+networkのAPIの各レプリカが`PolicyHub`（`internal/network/policyhub.go`）を持ち、
+NetworkInterfaceとSecurityGroupを一覧してから、そのリビジョンからWatchしてキャッシュを
+保つ。Watchが切れたら一覧し直し、全ストリームへ全部を送り直す。共有の状態を持たないので、
+レプリカの数に制約は無い。ストリームの送信が溜まりすぎた（1024応答）場合はそのストリームを
+切り、agentに繋ぎ直させる。
+
+### 反映の遅れと適用状況
+
+反映は最終的に揃う方式で、新しいVMのアドレスが他のホストの集合に入るまでの間は、そのVMとの
+通信が相手側で拒否されうる。目標は数秒以内。
+
+- `kyuusha_compute_agent_sg_set_propagation_seconds`（compute-agent、ヒストグラム、
+  `kind`=`delta`/`full`/`policy`）: networkが変化を見てから、そのホストで適用し終える
+  までの時間
+- `kyuusha_network_policy_revision`（network）と`kyuusha_network_policy_acked_revision`
+  （`hypervisor`別）: キャッシュの版と、各ホストが適用できたと返した最新の版。差が
+  開いたままのホストは追従できていない
+- `kyuusha_network_policy_nacks_total`（`hypervisor`別）: 適用できなかった応答の数
+- `kyuusha_network_policy_streams`（`hypervisor`別）: 繋がっているストリームの数
+- `kyuusha_network_sg_set_updates_total`（`kind`別）: 送った集合の更新の数

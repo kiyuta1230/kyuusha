@@ -66,8 +66,8 @@ is no shared bridge at all.
 - **Attachment**: TCX (`link.AttachTCX`), the modern qdisc-free kernel
   attach point -- no `tc qdisc add ... clsact` needed, unlike classic
   tc-BPF filters.
-- **Re-apply** (a later `update_acl`-triggered `attach` call for the
-  same tap): only rewrites the rule maps' contents. The already-
+- **Re-apply** (a later `attach` call for the same tap, when its policy
+  changes): only rewrites the rule maps' contents. The already-
   attached programs keep running throughout, so there's no enforcement gap
   during an update.
 - **Anti-spoofing** (same rules as `nftacl`'s, see `docs/specs/snap.md`

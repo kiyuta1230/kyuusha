@@ -852,7 +852,7 @@ compute-agentは複数ハイパーバイザーに分散配置される前提で�
 
 **subject命名規則**: `ms.<service>.<方向>.<hypervisor>.<resource-type>.<verb>`
 
-- コマンド（control-plane→agent）: `ms.compute.cmd.<hypervisor>.vm.create` / `ms.network.cmd.<hypervisor>.interface.bind` など
+- コマンド（control-plane→agent）: `ms.compute.cmd.<hypervisor>.vm.create` / `ms.blockstorage.cmd.<hypervisor>.volume.verify` など（状態の配布は対象外。SecurityGroupのポリシーはgRPCストリームで配る——「ポリシーの配布: xDSのようなgRPCストリーム」）
 - イベント（agent→control-plane、結果報告・heartbeat）: `ms.compute.evt.<hypervisor>.vm.create-result` / `ms.compute.evt.<hypervisor>.heartbeat`
 
 **ストリームと配信保証**: 性質が異なるので2種類のストリームに分ける。
@@ -1675,16 +1675,46 @@ NICへ約1,000件のアドレスを含むルールを送り直すことになり
 - **反映は最終的に揃う方式として受け入れる**: 新しいVMが起動してから他のホストの集合に
   そのアドレスが入るまでの短い間は、そのVMとの通信が相手側で拒否されうる（AWSも同様）。
   目標は数秒以内で、遅れはcompute-agentのメトリクスで見えるようにした
-- **取りこぼしは定期的な全量で直す**: 集合ごとに版（etcdのリビジョン）を持たせ、ホストは
-  古い版を捨てる。差分の取りこぼしや順序の入れ替わりは、network-reconcilerが定期的に
-  送る全量で収束する（`update_acl`が常に全量を運ぶので最終的に正しくなる、という既存の
-  考え方を差分にも適用した）
+- **版はetcdのリビジョン**: 集合ごとに版を持たせ、ホストは古い版を捨てる。差分と全量、
+  起動時の写しと配布中の更新を同じ物差しで比べられる
 - **集合のメンバーは稼働中のVMのNICだけ**: NICのアドレスが集合に入るのはVMがどこかの
   ハイパーバイザーで動いている間だけにした。VMの削除からNICの後始末（孤児の掃除）までは
   時間があり、その間アドレスを集合に残すと消えたVMの分の許可が残るため
-- **配る主体はnetwork-reconciler**: NIC・SecurityGroupの変化をWatchし、どのホストがどの集合を
-  参照しているかを自分で持てるのは単一レプリカのreconcilerだけなので、差分と全量の配布は
-  そこに置いた。APIの側（`SetSecurityGroups`）はそのNICの全量（`update_acl`）だけを送る
+
+### ポリシーの配布: xDSのようなgRPCストリーム
+
+control planeからcompute-agentへの「指示」（VMの作成・停止・削除、ボリュームの検証等）は
+NATS JetStreamで送るが、SecurityGroupのポリシーは**compute-agentがnetworkサービスに張る
+gRPCの双方向ストリーム**（`kyuusha.network.agent.v1.PolicyDistributionService`、Envoyの
+xDSと同じ形）で配る。
+
+- **指示と状態は性質が違う**: 指示は「1回だけ実行して結果を返してほしい」もので、WorkQueueの
+  ストリーム（受理でack、再配送あり）と結果報告のストリームの組み合わせがそのまま合う。
+  ポリシーは「このホストのこのNICは今この状態であるべき」という状態の同期で、受け手が
+  「何を知りたいか」を申告し、送り手がその時点の状態と以降の変化を送る形が合う。NATSの
+  WorkQueueで状態を運ぶと回避策が積み上がる: tapが配線されるまでackせず再配送で待つ
+  （上限を過ぎると消える）、VMがホストに着いた時だけの全量の特別扱い、取りこぼしを
+  直すための短い間隔の全量、ホストが今どの版を適用しているかが送り手から見えない、
+  繋がっていないホスト宛ての古い差分がストリームに溜まる。xDSの形では、購読の開始が
+  そのまま「最初に全量」になり、再接続も同じ経路で全量からやり直すので特別扱いが要らず、
+  応答ごとのACK/NACKで適用状況が見える
+- **形**: compute-agentは自分のドライバが配線済みのNICの一覧を申告する（state of the
+  world: 申告し直すたびに置き換え）。networkサービスは、新しく申告されたNICのポリシーの全量と、
+  そのストリームにまだ送っていない集合の全量を送り、その後はNIC（アドレス・付いている
+  グループ）やグループのルールの変化でそのNICのポリシーを、集合のメンバーの増減でその集合を
+  持つストリームへ差分を送る。compute-agentは応答ごとに適用できたか（ACK/NACK）を返す。
+  切れたらジッター付きの待ち時間で繋ぎ直し、全量から受け取り直す。5分ごとの全量の再送は、
+  キャッシュの不整合に対する保険として残した
+- **配るのはnetworkのAPI側（複数レプリカ）**: 各レプリカがNICとSecurityGroupをetcdから
+  Watchしてキャッシュを作り、そこから自分に繋いだストリームへ答える。読み取りだけで
+  共有の状態を持たないので、「APIは複数レプリカ、reconcileは単一」の分け方そのままで、
+  compute-agentはどのレプリカに繋いでもよい。これでnetworkはNATSに依存しなくなった
+- **起動時の写しは残す**: VMの起動時にはcomputeが読んだポリシー（`GetSecurityPolicy`）で
+  tapを配線するので、VMは最初のパケットから正しいルールで動く。ストリームはその後を
+  追従させる（版が同じ物差しなので、古い方が新しい方を上書きすることはない）
+- **規模**: ハイパーバイザー最大500台でストリームは500本。KubernetesのAPIサーバーのWatchや
+  xDSははるかに大きな規模で同じことをしている。kyuusha-vpcも自分の設定（ルートテーブル等）を
+  同じ形で配るので、運用者から見て配布の仕組みが揃う
 
 ### テナント間でのNetwork共有: 無目的な共有は禁止、所有テナントが個別に許可した相手だけが参加できる
 
@@ -2756,13 +2786,9 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
   [SNAP仕様](specs/snap.md)参照）。
 
   稼働中のVMのポリシーの変更（`SetSecurityGroups`、グループのルールの変更、アドレス集合の
-  メンバーの増減）は、対象のHypervisorへ`network`独自のNATS JetStreamストリーム
-  （`NETWORK_CMD`）で通知する形にした——VM起動時のみ有効な静的な設定ではなく、稼働中の
-  VMに対しても実際にホスト側の強制状態を追従させるため（上記「SecurityGroup」）。`cmd/network`（ステートレスAPI
-  バイナリ）がこの通知のためだけにcompute/NATSへの依存を新たに持つことになったが、
-  これは`cmd/compute`が既に持つ「StreamConsole/ライブホットプラグのための同期的な
-  NATS利用」と同じ例外（reconcilerの単一レプリカ制約とは無関係、各レプリカが独立に
-  依存先へ繋ぐだけ）として扱う。
+  メンバーの増減）は、compute-agentがnetworkサービスに張るgRPCストリームで追従させる
+  ——VM起動時のみ有効な静的な設定ではなく、稼働中のVMに対しても実際にホスト側の強制状態を
+  追従させるため（上記「ポリシーの配布: xDSのようなgRPCストリーム」）。
 
   「非ブリッジ配線には別のSNAP実装が要る」という上記の制約が実際にプラガブル契約で
   解決できることを、TC-BPF（`cilium/ebpf`、tapに直接アタッチしブリッジのポートで

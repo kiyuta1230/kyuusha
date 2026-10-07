@@ -231,8 +231,9 @@ type NetworkInterfaceInfo struct {
 	// Policy is what the host's SNAP backend enforces for the interface
 	// from boot on (its SecurityGroups' merged rules plus snapshots of the
 	// address sets they reference -- see docs/specs/snap.md). Later
-	// changes travel network's own NATS commands (update_acl/update_sets,
-	// internal/network/nats.go), so this only needs to be right at boot.
+	// changes travel the host's policy stream from network (see
+	// docs/specs/snap.md「ポリシーの配布」), so this only needs to be right
+	// at boot.
 	Policy SecurityPolicyInfo `json:"policy"`
 }
 

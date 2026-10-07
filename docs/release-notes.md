@@ -5,6 +5,31 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-10-08
+
+- **SecurityGroupのポリシーのホストへの配布を、NATSからxDSのようなgRPCストリームに
+  変えた**。compute-agentがnetworkサービスへ`PolicyDistributionService.Stream`を張って、
+  配線済みのNICを申告する。networkはそのポリシーと参照される集合の全量を送り、以降は
+  変化（NICのポリシー・集合の差分）を送る。compute-agentは応答ごとにACK/NACKを返す。
+  - 配るのはnetworkのAPI（各レプリカがetcdをWatchしたキャッシュから答える）になり、
+    `network`・`network-reconciler`はNATSに繋がなくなった。`NETWORK_CMD`ストリームと
+    `update_acl`/`update_sets`のsubjectは廃止した。`network`の`-compute-addr`/`-nats-url`と
+    `network-reconciler`の`-nats-url`も削除し、compute-agentに`-network-addr`を追加した
+  - SNAPの契約（`attach`/`detach`/`update_sets`）は変わらない
+  - 適用状況が見えるようになった: `kyuusha_network_policy_revision`と
+    `kyuusha_network_policy_acked_revision{hypervisor}`の差、
+    `kyuusha_network_policy_nacks_total`、`kyuusha_network_policy_streams`
+  - playgroundで確認した:
+    - 既定のグループでの疎通、グループを全て外した時の拒否、`self`のグループへの参加の
+      反映（約2.3秒、ゲスト側の確認間隔2秒を含む）、VMの削除（同じホストで0.8秒）が
+      いずれも以前と同じく動く
+    - 別のホストのVMが集合に入るまで0.07秒
+    - networkを再起動すると全compute-agentが繋ぎ直して全量を受け取り直し、その後の
+      削除も0.4秒で別のホストの集合から消える
+    - 各ホストの`acked_revision`がキャッシュの版に追いつく
+  - 設計: [architecture.md「ポリシーの配布: xDSのようなgRPCストリーム」](architecture.md)、
+    仕様: [snap.md「ポリシーの配布」](specs/snap.md)
+
 ## 2026-10-05
 
 - **Migrate／Resize（`allow_migrate`）が、最後のVMの更新に失敗した時に旧ホストの容量を

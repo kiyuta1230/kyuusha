@@ -45,7 +45,7 @@ func (w *recordingWebhook) last(t *testing.T) admissionwebhook.Request {
 
 func TestService_AdmissionWebhookGatesNetworkWrites(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -165,7 +165,8 @@ NICに付けるallowのみのルールの集まり（設計の理由は[architec
   `network:<id>`の集合に入るのは、アドレスが払い出されていて、VMがどこかで`Running`の
   間（`status.hypervisor`が空でない間）だけ。VMの停止・削除と同時に抜ける
 
-ホストでの強制とアドレス集合の配り方は[SNAP仕様](snap.md)参照。List/Watchは`tenant_id`を
+ホストでの強制と、ポリシー・アドレス集合の配り方（compute-agentがnetworkに張るxDSのような
+gRPCストリーム）は[SNAP仕様](snap.md)参照。List/Watchは`tenant_id`を
 空にすると全テナント分（テナント横断のロールのみ）。ラベル・アノテーション、Admission
 Webhook（リソース名`SecurityGroup`）は他のリソースと同じ。
 
@@ -269,9 +270,9 @@ Getするついでに同期し直す。
   ではなく、別バイナリ`network-reconciler`（`cmd/network-reconciler/main.go`、常に単一
   レプリカ）——`-compute-addr`もこちらが持つ。VMが存在する限り触らず、`Get`が`NotFound`
   を返した場合のみ削除する（一時的な疎通不可などその他のエラーは「わからないので消さない」
-  で次回ティックに委ねる）。`network`本体（gRPC APIバイナリ）も別の理由で同じ
-  `computeClient`を独自に持つ——`SetSecurityGroups`がポリシーの変更を通知すべきHypervisorを
-  解決するためで、こちらはオーファンGCとは無関係（[SNAP仕様](snap.md)参照）
+  で次回ティックに委ねる）。`network`本体（gRPC APIバイナリ）はcomputeにもNATSにも
+  繋がない——ポリシーはcompute-agentの方から張るストリームで配る（[SNAP仕様](snap.md)
+  「ポリシーの配布」）
 
 ## compute側の統合
 
@@ -373,7 +374,8 @@ exit code」という呼び出し規約を共有するが、配線とACL強制�
 ## エンドポイント
 
 `network :8084`（`AllocationPoolService`, `NetworkClassService`, `NetworkService`,
-`SubnetService`, `NetworkInterfaceService`, `SecurityGroupService`）。api-gateway経由でのみ到達可能
+`SubnetService`, `NetworkInterfaceService`, `SecurityGroupService`、それにcompute-agent向けの
+`kyuusha.network.agent.v1.PolicyDistributionService`）。api-gateway経由でのみ到達可能
 （[システム構成仕様](system-overview.md)参照）——`SubnetService`/
 `NetworkInterfaceService`は組み込みのプロキシで、残りはapi-gatewayの外部バックエンドと
 同じ汎用転送（[外部システム連携仕様](external-integration.md)「外部バックエンドの登録」）で

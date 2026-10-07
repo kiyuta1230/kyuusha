@@ -295,8 +295,8 @@ func (s *Service) WatchSecurityGroups(ctx context.Context, tenantID string, sinc
 }
 
 // UpdateSecurityGroup replaces spec, labels and annotations; status is
-// server-owned. Hosts pick the change up through network-reconciler's
-// SecurityGroup watch (see sgsync.go).
+// server-owned. Hosts pick the change up through their policy streams
+// (see PolicyHub).
 func (s *Service) UpdateSecurityGroup(ctx context.Context, tenantID string, g *SecurityGroup) (*SecurityGroup, error) {
 	if err := resource.ValidateMetadata(resource.Metadata{Labels: g.Meta.Labels, Annotations: g.Meta.Annotations}); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
@@ -443,7 +443,7 @@ type PolicyRule struct {
 
 // AddressSet is a versioned snapshot of one named set's members. Version
 // is the etcd revision the snapshot reflects, the same clock membership
-// deltas carry (see sgsync.go), so a host can tell which is newer.
+// deltas carry (see PolicyHub), so a host can tell which is newer.
 type AddressSet struct {
 	Name    string
 	Version int64

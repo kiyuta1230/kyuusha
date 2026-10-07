@@ -13,7 +13,7 @@ import (
 func newTestService(t *testing.T) (*Service, context.Context) {
 	t.Helper()
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestService_CreateNeverAllocatesSynchronously(t *testing.T) {
 func TestService_NewServiceRebuildsPoolsFromExistingResources(t *testing.T) {
 	ctx := context.Background()
 	etcdClient := resourcetest.Client(t)
-	svc1, err := NewService(ctx, etcdClient, &FakeTenantClient{}, nil, nil)
+	svc1, err := NewService(ctx, etcdClient, &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestService_NewServiceRebuildsPoolsFromExistingResources(t *testing.T) {
 	sn := mustCreateAndAllocateSubnet(t, ctx, svc1, "tenant-a", "sn1", SubnetSpec{NetworkID: netID, Zone: "zone-a"})
 	iface := mustCreateAndAllocateNetworkInterface(t, ctx, svc1, "tenant-a", "nic1", NetworkInterfaceSpec{VMID: "vm-1", SubnetID: sn.Meta.ID}, sn)
 
-	svc2, err := NewService(ctx, etcdClient, &FakeTenantClient{}, nil, nil)
+	svc2, err := NewService(ctx, etcdClient, &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestService_CreateNetworkInterfaceGoesReadyWithAllocatedIPMAC(t *testing.T)
 // "NetworkInterfaceのオーファンGC").
 func TestService_SweepOrphanedNetworkInterfacesDeletesOnlyMissingVMs(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, &FakeVirtualMachineClient{Existing: map[string]bool{"vm-exists": true}}, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, &FakeVirtualMachineClient{Existing: map[string]bool{"vm-exists": true}})
 	if err != nil {
 		t.Fatal(err)
 	}

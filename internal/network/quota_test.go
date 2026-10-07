@@ -11,7 +11,7 @@ import (
 
 func TestService_CreateSubnetEnforcesQuota(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxSubnets: 2}}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxSubnets: 2}}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestService_CreateSubnetEnforcesQuota(t *testing.T) {
 
 func TestService_CreateNetworkInterfaceEnforcesQuota(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxSubnets: 1, MaxNetworkInterfaces: 2}}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{Quota: &identityv1.QuotaSpec{MaxSubnets: 1, MaxNetworkInterfaces: 2}}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestService_NewServiceRebuildsUsageFromExistingSubnetsAndNetworkInterfaces(
 	quota := &identityv1.QuotaSpec{MaxSubnets: 1, MaxNetworkInterfaces: 1}
 	const tenant = "tenant-a"
 
-	svc1, err := NewService(ctx, etcdClient, &FakeTenantClient{Quota: quota}, nil, nil)
+	svc1, err := NewService(ctx, etcdClient, &FakeTenantClient{Quota: quota}, nil)
 	if err != nil {
 		t.Fatalf("NewService (first): %v", err)
 	}
@@ -99,7 +99,7 @@ func TestService_NewServiceRebuildsUsageFromExistingSubnetsAndNetworkInterfaces(
 		t.Fatalf("CreateNetworkInterface: %v", err)
 	}
 
-	svc2, err := NewService(ctx, etcdClient, &FakeTenantClient{Quota: quota}, nil, nil)
+	svc2, err := NewService(ctx, etcdClient, &FakeTenantClient{Quota: quota}, nil)
 	if err != nil {
 		t.Fatalf("NewService (second, simulating a restart): %v", err)
 	}

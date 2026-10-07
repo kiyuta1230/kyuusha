@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package kyuusha.network.agent.v1;
+
+option go_package = "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/agent/v1;networkagentv1";
+
+import "google/protobuf/timestamp.proto";
+import "kyuusha/network/v1/networkinterface.proto";
+
+// PolicyDistributionService is how a hypervisor's compute-agent keeps the
+// SecurityGroup policy of the NetworkInterfaces wired on it current, in
+// the style of Envoy's xDS: the agent subscribes to the interfaces it has,
+// the network service sends their state (full copies first, then
+// changes), and the agent acknowledges each response. East-west only (a
+// separate package so api-gateway's kyuusha.network.v1.* forwarding never
+// reaches it). See docs/specs/snap.md「ポリシーの配布」.
+service PolicyDistributionService {
+  rpc Stream(stream PolicyStreamRequest) returns (stream PolicyStreamResponse);
+}
+
+message PolicyStreamRequest {
+  oneof msg {
+    Subscribe subscribe = 1;
+    Ack ack = 2;
+  }
+}
+
+// Subscribe declares the complete set of NetworkInterfaces the agent wants
+// policy for (state of the world: each one replaces the previous). The
+// first message on a stream must be a Subscribe.
+message Subscribe {
+  string hypervisor = 1;
+  repeated string interface_ids = 2;
+}
+
+// Ack reports whether the response with this nonce was applied. A
+// non-empty error is a NACK.
+message Ack {
+  uint64 nonce = 1;
+  string error = 2;
+}
+
+message PolicyStreamResponse {
+  uint64 nonce = 1;    // per stream, increasing
+  int64 revision = 2;  // etcd revision the server's view reflects
+  // When the server saw the change this response carries, for the agent's
+  // propagation-delay metric.
+  google.protobuf.Timestamp observed_at = 3;
+  // Complete policy of each listed interface (new subscriptions, or a
+  // change to the interface or one of its SecurityGroups).
+  repeated InterfacePolicy interfaces = 4;
+  // Address-set changes: full copies (a set newly needed on this stream,
+  // or the periodic resend) and membership deltas.
+  repeated SetUpdate sets = 5;
+}
+
+// AttachContext mirrors the VNAP/SNAP payload's Network/NetworkClass
+// context (see docs/specs/vnap.md).
+message AttachContext {
+  string network_id = 1;
+  map<string, string> network_labels = 2;
+  string network_class = 3;
+  map<string, string> network_class_attributes = 4;
+  map<string, int64> network_values = 5;
+  map<string, string> network_attributes = 6;
+  map<string, int64> subnet_values = 7;
+  map<string, string> subnet_attributes = 8;
+  int32 mtu = 9;
+}
+
+message InterfacePolicy {
+  string iface_id = 1;
+  string vm_id = 2;
+  string tenant_id = 3;
+  string subnet_id = 4;
+  map<string, string> subnet_labels = 5;
+  string subnet_cidr = 6;
+  string gateway_ip = 7;
+  string ip_address = 8;
+  string mac_address = 9;
+  AttachContext attach = 10;
+  // Rules and the referenced sets' names; the sets' contents travel in
+  // PolicyStreamResponse.sets (policy.sets is left empty).
+  kyuusha.network.v1.SecurityPolicy policy = 11;
+  int64 version = 12; // a host ignores a policy older than the last it applied for this interface
+}
+
+// SetUpdate changes one named address set: full replaces its members with
+// members; otherwise add/remove apply. version is the etcd revision it
+// reflects.
+message SetUpdate {
+  string name = 1;
+  int64 version = 2;
+  bool full = 3;
+  repeated string members = 4;
+  repeated string add = 5;
+  repeated string remove = 6;
+}

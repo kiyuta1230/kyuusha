@@ -20,22 +20,19 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/kiyuta1230/kyuusha/internal/compute-agent/snap"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/vmm"
 	"github.com/kiyuta1230/kyuusha/internal/compute-agent/volumeref"
 
 	blockstorage "github.com/kiyuta1230/kyuusha/internal/block-storage"
 	"github.com/kiyuta1230/kyuusha/internal/compute"
-	"github.com/kiyuta1230/kyuusha/internal/network"
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
 	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	networkagentv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/agent/v1"
 )
 
 var tracer = otel.Tracer("github.com/kiyuta1230/kyuusha/internal/compute-agent")
@@ -131,15 +128,17 @@ type Agent struct {
 	// drivers get, see handleUpdateSets.
 	SecurityBackendBin string
 
-	// lastAppliedACL tracks, per iface_id, the resource_version of the
-	// last network.UpdateACLCommand this Agent actually applied (see
-	// handleUpdateACL) -- guards against a redelivered or reordered stale
-	// command re-applying an older rule set over a newer one already in
-	// effect. Lazily initialized; empty (including after a restart -- this
-	// is never persisted) just means the next command for that iface_id is
-	// treated as newer than anything seen before, which is always correct
-	// since every command carries the interface's *complete* current rule
-	// set, never a delta (see network.UpdateACLCommand's own doc comment).
+	// PolicyClient is the network service's PolicyDistributionService
+	// (east-west), for this host's policy stream -- see policystream.go.
+	// nil disables it (tests).
+	PolicyClient networkagentv1.PolicyDistributionServiceClient
+	policyKick   chan struct{}
+
+	// lastAppliedACL tracks, per iface_id, the version of the last policy
+	// this Agent applied from the policy stream (see applyInterfacePolicy)
+	// -- so a policy older than one already in effect (e.g. from a
+	// replica whose cache lags after a reconnect) never replaces it.
+	// Empty after a restart, which is fine: every policy is complete.
 	lastAppliedACLMu sync.Mutex
 	lastAppliedACL   map[string]int64
 }
@@ -275,54 +274,15 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	defer verifyConsumeCtx.Stop()
 
-	// network's SecurityPolicy updates (update_acl) -- same "a
-	// separate stream the other service owns/creates" shape as
-	// BLOCKSTORAGE_CMD above.
-	if err := network.EnsureStreams(ctx, a.JS); err != nil {
-		return err
+	// network's SecurityGroup policy for the interfaces wired here -- an
+	// xDS-like gRPC stream to the network service, not NATS (see
+	// policystream.go).
+	if a.PolicyClient != nil {
+		a.policyKick = make(chan struct{}, 1)
+		go a.runPolicyStream(ctx)
+	} else {
+		slog.Warn("compute-agent: no network policy client configured (-network-addr); SecurityGroup changes after boot won't reach this host")
 	}
-	networkStream, err := a.JS.Stream(ctx, "NETWORK_CMD")
-	if err != nil {
-		return err
-	}
-	updateACLCons, err := networkStream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       "compute-agent-" + a.Hypervisor + "-update-acl",
-		FilterSubject: network.CmdSubjectUpdateACL(a.Hypervisor),
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		// MaxDeliver bounds retries for a NetworkInterface whose VM hasn't
-		// finished booting on this host yet (see handleUpdateACL: it
-		// deliberately doesn't Ack until some driver reports the tap as
-		// wired) -- 20 x the default 30s AckWait is a generous ~10 minutes,
-		// comfortably past any real VM boot time, without retrying forever
-		// for a VM that will genuinely never boot here (deleted before
-		// ever booting on this host, or scheduled to a different one by
-		// the time this message was published).
-		MaxDeliver: 20,
-	})
-	if err != nil {
-		return err
-	}
-	updateACLConsumeCtx, err := updateACLCons.Consume(a.handleUpdateACL)
-	if err != nil {
-		return err
-	}
-	defer updateACLConsumeCtx.Stop()
-
-	// Address-set membership changes (see handleUpdateSets): always Acked,
-	// so no MaxDeliver tuning is needed.
-	updateSetsCons, err := networkStream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Durable:       "compute-agent-" + a.Hypervisor + "-update-sets",
-		FilterSubject: network.CmdSubjectUpdateSets(a.Hypervisor),
-		AckPolicy:     jetstream.AckExplicitPolicy,
-	})
-	if err != nil {
-		return err
-	}
-	updateSetsConsumeCtx, err := updateSetsCons.Consume(a.handleUpdateSets)
-	if err != nil {
-		return err
-	}
-	defer updateSetsConsumeCtx.Stop()
 
 	// Plain NATS core subscription, not JetStream: console access is
 	// ephemeral/live, not a durable work-queue command -- see
@@ -432,6 +392,7 @@ func (a *Agent) handleCreate(msg jetstream.Msg) {
 			result = compute.CreateResult{VMID: cmd.VMID, Success: false, Error: err.Error()}
 		} else {
 			a.reportAttachedVolumes(ctx, attached)
+			a.kickPolicyStream() // subscribe to the new interfaces right away
 		}
 	} else {
 		slog.Info("compute-agent: stub-creating VM", "vm_id", cmd.VMID, "hypervisor", a.Hypervisor, "driver_hint", cmd.DriverHint)
@@ -509,101 +470,6 @@ func (a *Agent) handleStop(msg jetstream.Msg) {
 		slog.Error("compute-agent: publish stop-result failed", "vm_id", cmd.VMID, "err", err)
 	}
 }
-
-// handleUpdateACL re-applies a NetworkInterface's current SecurityPolicy (see internal/compute-agent/snap) once the VM they belong
-// to has actually finished booting on this host. Unlike every other
-// handleX above, this deliberately does NOT Ack on receipt: only once some
-// driver reports the tap as wired (ApplyACL's applied=true) does it Ack --
-// otherwise JetStream's own redelivery (bounded by the consumer's
-// MaxDeliver, see Run) is the retry mechanism for "this VM hasn't finished
-// booting yet", with no separate polling loop needed here.
-func (a *Agent) handleUpdateACL(msg jetstream.Msg) {
-	var cmd network.UpdateACLCommand
-	if err := json.Unmarshal(msg.Data(), &cmd); err != nil {
-		slog.Error("compute-agent: bad update_acl command", "err", err)
-		_ = msg.Ack() // malformed payload will never parse differently on redelivery
-		return
-	}
-
-	if !a.shouldApplyACL(cmd.IfaceID, cmd.ResourceVersion) {
-		_ = msg.Ack() // a newer command for this interface already applied
-		return
-	}
-
-	update := vmm.ACLUpdate{
-		Attach:  vmm.AttachInfo(cmd.Attach),
-		IfaceID: cmd.IfaceID, SubnetID: cmd.SubnetID, SubnetLabels: cmd.SubnetLabels, SubnetCIDR: cmd.SubnetCIDR, GatewayIP: cmd.GatewayIP,
-		IPAddress: cmd.IPAddress, MACAddress: cmd.MACAddress,
-		Policy: viaJSON[vmm.SecurityPolicy](cmd.Policy),
-	}
-	for _, driver := range a.Drivers {
-		applied, err := driver.ApplyACL(cmd.VMID, update)
-		if !applied {
-			continue
-		}
-		if err != nil {
-			slog.Error("compute-agent: apply ACL failed", "vm_id", cmd.VMID, "iface_id", cmd.IfaceID, "err", err)
-		} else {
-			a.recordAppliedACL(cmd.IfaceID, cmd.ResourceVersion)
-		}
-		_ = msg.Ack() // a driver had this tap: either applied, or genuinely failed -- neither is "not ready yet"
-		return
-	}
-	// No driver has this tap wired yet -- leave unacked for redelivery.
-}
-
-func (a *Agent) shouldApplyACL(ifaceID string, resourceVersion int64) bool {
-	a.lastAppliedACLMu.Lock()
-	defer a.lastAppliedACLMu.Unlock()
-	return resourceVersion > a.lastAppliedACL[ifaceID]
-}
-
-func (a *Agent) recordAppliedACL(ifaceID string, resourceVersion int64) {
-	a.lastAppliedACLMu.Lock()
-	defer a.lastAppliedACLMu.Unlock()
-	if a.lastAppliedACL == nil {
-		a.lastAppliedACL = make(map[string]int64)
-	}
-	a.lastAppliedACL[ifaceID] = resourceVersion
-}
-
-// handleUpdateSets applies network-reconciler's address-set changes (see
-// internal/network/sgsync.go) through the SNAP backend. Always Acked:
-// sets no local interface references are simply skipped, and anything
-// missed is repaired by the next periodic full copy.
-func (a *Agent) handleUpdateSets(msg jetstream.Msg) {
-	defer func() { _ = msg.Ack() }()
-	var cmd network.UpdateSetsCommand
-	if err := json.Unmarshal(msg.Data(), &cmd); err != nil {
-		slog.Error("compute-agent: bad update_sets command", "err", err)
-		return
-	}
-	updates := viaJSON[[]vmm.SetUpdate](cmd.Sets)
-	applied, err := snap.UpdateSets(updates, a.SecurityBackendBin)
-	if err != nil {
-		slog.Error("compute-agent: apply address-set updates failed", "err", err)
-		return
-	}
-	if !cmd.ObservedAt.IsZero() {
-		delay := time.Since(cmd.ObservedAt).Seconds()
-		for _, u := range applied {
-			kind := "delta"
-			if u.Full {
-				kind = "full"
-			}
-			setPropagationSeconds.WithLabelValues(kind).Observe(delay)
-		}
-	}
-}
-
-// setPropagationSeconds is how long an address-set change took from
-// network-reconciler noticing it to this host applying it -- the delay
-// docs/specs/snap.md promises to keep to seconds.
-var setPropagationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
-	Name:    "kyuusha_compute_agent_sg_set_propagation_seconds",
-	Help:    "Delay from network-reconciler observing an address-set change to this host applying it, by kind (delta/full).",
-	Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60},
-}, []string{"kind"})
 
 // viaJSON converts between two types sharing one JSON shape -- the
 // network/compute wire mirrors and vmm's own (same "no cross-service type

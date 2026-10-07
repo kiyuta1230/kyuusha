@@ -248,8 +248,6 @@ services:
       - "-grpc-addr=:8084"
       - "-etcd-endpoints=${KYUUSHA_ETCD_ENDPOINTS:-etcd:2379}"
       - "-identity-addr=identity:8082"
-      - "-compute-addr=compute:8081"
-      - "-nats-url=nats://nats:4222"
       - "-metrics-addr=:9096"
       - "-otlp-endpoint=jaeger:4317"
     depends_on:
@@ -257,19 +255,11 @@ services:
         condition: service_healthy
       identity:
         condition: service_started
-      nats:
-        condition: service_healthy
       jaeger:
         condition: service_started
     # No ports exposed to the host: same reasoning as compute above.
-    # -compute-addr/-nats-url: only UpdateFirewallRules' publishUpdateACL
-    # path uses these (see cmd/network/main.go's own package doc comment).
-    # No depends_on: compute here -- compute itself depends on network, so
-    # the reverse would be a real (compose-level, not just conceptual)
-    # dependency cycle. Not needed anyway: grpc.NewClient dials lazily, and
-    # publishUpdateACL already treats a resolve failure as "skip, log a
-    # warning" (see internal/network/service.go), same reasoning as
-    # network-reconciler's own identical -compute-addr note below.
+    # compute-agents also dial this directly (-network-addr) for their
+    # SecurityGroup policy streams (see cmd/network/main.go).
 
   # network's actual reconcile loop (pool/ip_address/mac_address
   # allocation, orphan-GC), split into its own process from the gRPC API
@@ -286,10 +276,7 @@ services:
       - "-identity-addr=identity:8082"
       - "-metrics-addr=:9099"
       - "-otlp-endpoint=jaeger:4317"
-      - "-nats-url=nats://nats:4222"
     depends_on:
-      nats:
-        condition: service_healthy
       etcd:
         condition: service_healthy
       identity:
@@ -436,6 +423,7 @@ services:
     command:
       - "-nats-url=nats://nats:4222"
       - "-compute-addr=compute:8081"
+      - "-network-addr=network:8084"
       - "-hypervisor=hypervisor-1"
       - "-drivers=FIRECRACKER,CLOUD_HYPERVISOR"
       - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"
@@ -483,6 +471,7 @@ services:
     command:
       - "-nats-url=nats://nats:4222"
       - "-compute-addr=compute:8081"
+      - "-network-addr=network:8084"
       - "-hypervisor=hypervisor-2"
       - "-drivers=FIRECRACKER,CLOUD_HYPERVISOR"
       - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"
@@ -530,6 +519,7 @@ services:
     command:
       - "-nats-url=nats://nats:4222"
       - "-compute-addr=compute:8081"
+      - "-network-addr=network:8084"
       - "-hypervisor=hypervisor-3"
       - "-drivers=FIRECRACKER,CLOUD_HYPERVISOR"
       - "-storage-connections=playground-nfs:/mnt/kyuusha-volumes"

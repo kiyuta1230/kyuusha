@@ -38,6 +38,9 @@ flowchart LR
     CA1["compute-agent (hypervisor-1)"] -->|gRPC mTLS\n自己登録| CO
     CA2["compute-agent (hypervisor-2)"] -->|gRPC mTLS\n自己登録| CO
     CA3["compute-agent (hypervisor-3)"] -->|gRPC mTLS\n自己登録| CO
+    CA1 -->|gRPC mTLS\nポリシーの購読| NET
+    CA2 --> NET
+    CA3 --> NET
     CO <-->|NATS JetStream\nコマンド/イベント| NATS["NATS :4222"]
     CA1 <--> NATS
     CA2 <--> NATS
@@ -47,7 +50,9 @@ flowchart LR
 - clientが到達できるのは`api-gateway`のみ。`compute`/`identity`/`image`/`network`/`block-storage`は
   ネットワーク的に到達可能でもクライアントが直接叩くことは想定しない構成（docker-compose上は
   ホストにポート公開しない）
-- `compute-agent`は`compute`に**直接**gRPCで接続する（自己登録用。api-gatewayは経由しない、東西通信）
+- `compute-agent`は`compute`に**直接**gRPCで接続する（自己登録用。api-gatewayは経由しない、東西通信）。
+  `network`にも直接ストリームを張り、配線済みのNICのSecurityGroupのポリシーを購読する
+  （[SNAP仕様](snap.md)「ポリシーの配布」）
 - `compute` → `identity`（Quota参照）・`compute` → `image`（Image検証）・`compute` → `network`
   （NetworkInterface検証/作成、[network仕様](network.md)「compute側の統合」参照）・
   `compute` → `block-storage`（Volume検証、VolumeAttachment作成、[Volume仕様](volume.md)
@@ -70,7 +75,7 @@ flowchart LR
 | `compute` | `:8081` | `VirtualMachineService`, `HypervisorService`（Registerを含む全RPC） |
 | `identity` | `:8082` | `TenantService` |
 | `image` | `:8083` | `ImageService` |
-| `network` | `:8084` | `SubnetService`, `NetworkInterfaceService` |
+| `network` | `:8084` | `AllocationPoolService`, `NetworkClassService`, `NetworkService`, `SubnetService`, `NetworkInterfaceService`, `SecurityGroupService`, `PolicyDistributionService`（compute-agent向け） |
 | `block-storage` | `:8085` | `VolumeService`, `VolumeAttachmentService`, `StorageConnectionService` |
 | `NATS` | `:4222`（client）, `:8222`（監視用HTTP、compose環境のみ） | JetStream |
 

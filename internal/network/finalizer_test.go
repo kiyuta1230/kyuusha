@@ -17,7 +17,7 @@ import (
 // remove it, and tenant_usage drops exactly once.
 func TestService_SubnetFinalizerHoldsVLAN(t *testing.T) {
 	ctx := context.Background()
-	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil, nil)
+	svc, err := NewService(ctx, resourcetest.Client(t), &FakeTenantClient{}, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

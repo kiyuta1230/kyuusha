@@ -189,7 +189,7 @@ func Apply(iface Interface) error {
 	writeTapChains(&rules, "inet", iface)
 	// Unknown address (either one empty) leaves any previously installed
 	// anti-spoofing chain untouched rather than flushing it: re-Apply's
-	// only post-boot caller (update_acl) changes rules, never the
+	// only post-boot caller (the policy stream) changes rules, never the
 	// interface's address, so "don't know" must never mean "stop checking".
 	antiSpoof := iface.IPAddress != "" && iface.MACAddress != ""
 	if antiSpoof {
@@ -483,7 +483,7 @@ func removeUnusedSets() {
 // entry of jumps (target chain -> match expression) unless base already
 // jumps to that target -- checked via `nft -j list chain`, since a plain
 // `add rule` isn't idempotent the way `add table`/`add chain` are (it would
-// append a duplicate jump on every call, e.g. every update_acl re-apply
+// append a duplicate jump on every call, e.g. every policy re-apply
 // over a VM's lifetime).
 func ensureJumpRules(fam, base string, jumps map[string]string) error {
 	existing, err := jumpTargets(fam, base)

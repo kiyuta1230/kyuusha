@@ -68,7 +68,7 @@ func (f *FakeTenantClient) Watch(context.Context, *identityv1.WatchTenantsReques
 }
 
 // FakeVirtualMachineClient is a minimal computev1.VirtualMachineServiceClient
-// for tests exercising sweepOrphanedNetworkInterfaces and publishUpdateACL
+// for tests exercising sweepOrphanedNetworkInterfaces and VM placement
 // without a real compute service: Get returns a VirtualMachine for any id in
 // Existing, NotFound for anything else; every other method panics since
 // Service never calls them.
@@ -76,7 +76,7 @@ type FakeVirtualMachineClient struct {
 	Existing map[string]bool
 	// Hypervisor optionally sets the returned VirtualMachine's
 	// status.hypervisor (keyed by vm_id) -- used by
-	// publishUpdateACL's tests to simulate a VM that's actually scheduled
+	// placement tests to simulate a VM that's actually scheduled
 	// somewhere. A VM present in Existing but absent here gets an empty
 	// Hypervisor, same as an unscheduled VM.
 	Hypervisor map[string]string

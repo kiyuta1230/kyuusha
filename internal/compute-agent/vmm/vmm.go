@@ -74,11 +74,11 @@ type VMM interface {
 	// if the file doesn't exist (this driver never booted vmID, or it's
 	// already been deleted).
 	RootDiskPath(vmID string) (string, error)
-	// ApplyACL re-applies ingress/egress firewall rules for an already-
-	// wired NetworkInterface (vmID, u.IfaceID), via snap.Attach -- the
+	// ApplyACL re-applies the SecurityGroup policy of an already-wired
+	// NetworkInterface (vmID, u.IfaceID), via snap.Attach -- the
 	// post-boot counterpart to Boot's own initial snap.Attach call (see
 	// docs/specs/snap.md). Everything in u is passed in fresh (from the
-	// triggering network.UpdateACLCommand) rather than looked up from this
+	// policy stream, see compute-agent's policystream.go) rather than looked up from this
 	// driver's own boot-time state, so nothing here needs to survive a
 	// compute-agent restart for this to keep working. applied=false (not
 	// an error) means this driver has no currently-wired tap for that
@@ -336,7 +336,7 @@ type AttachInfo struct {
 }
 
 // ACLUpdate is ApplyACL's input: one NetworkInterface's complete current
-// SNAP inputs, mirroring network.UpdateACLCommand.
+// SNAP inputs, as the policy stream delivers them.
 type ACLUpdate struct {
 	Attach       AttachInfo
 	IfaceID      string

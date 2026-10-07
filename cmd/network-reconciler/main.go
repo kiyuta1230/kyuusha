@@ -2,7 +2,8 @@
 // (network.Service.Run): pool allocation for every Network/Subnet, and
 // ip_address/mac_address allocation for every NetworkInterface, left
 // Pending by their Creates; the orphaned-NetworkInterface sweep; and
-// re-sending update_acl when a Network's membership changes. It serves no gRPC API
+// keeping NetworkInterface.status.hypervisor in step with VM placement.
+// It serves no gRPC API
 // at all -- cmd/network is the SubnetService/NetworkInterfaceService gRPC
 // binary, safely run as any number of stateless replicas (see its own
 // package doc comment).
@@ -28,8 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -52,7 +51,6 @@ func main() {
 	tlsKey := flag.String("tls-key", "hack/devcerts/server.key", "east-west mTLS private key")
 	tlsCA := flag.String("tls-ca", "hack/devcerts/ca.crt", "CA compute's certificate must chain to")
 	etcdEndpoints := flag.String("etcd-endpoints", "etcd:2379", "comma-separated etcd endpoints (backing store, see docs/architecture.md)")
-	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL, for re-sending update_acl to hypervisors when a Network's membership changes")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -121,30 +119,11 @@ func main() {
 	}
 	defer identityConn.Close()
 
-	// NATS: a Network gaining or losing a Subnet changes every member
-	// NIC's effective rules, and this is the process that sees it happen
-	// (see network.Service.republishNetworkACLs).
-	nc, err := nats.Connect(*natsURL)
-	if err != nil {
-		slog.Error("connect to nats", "err", err)
-		os.Exit(1)
-	}
-	defer nc.Close()
-	js, err := jetstream.New(nc)
-	if err != nil {
-		slog.Error("jetstream", "err", err)
-		os.Exit(1)
-	}
-	if err := network.EnsureStreams(ctx, js); err != nil {
-		slog.Error("ensure nats streams", "err", err)
-		os.Exit(1)
-	}
-
 	// A second, independent network.Service instance from the API binary's
 	// own -- both need one (Run's methods read/write through it), but
 	// neither shares process memory (including allocator/ipPool/
 	// nextMACOct) with the other, only the etcd state both connect to.
-	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn), js)
+	svc, err := network.NewService(ctx, etcdClient, identityv1.NewTenantServiceClient(identityConn), computev1.NewVirtualMachineServiceClient(computeConn))
 	if err != nil {
 		slog.Error("new network service", "err", err)
 		os.Exit(1)

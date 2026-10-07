@@ -125,7 +125,7 @@ func fatalf(format string, args ...any) {
 func tapPinDir(tapName string) string { return filepath.Join(pinRoot, tapName) }
 
 // attach installs (first call for this tap) or re-populates (every later
-// call, e.g. an update_acl-triggered re-apply) this tap's ACL
+// call, e.g. a re-apply after a policy change) this tap's ACL
 // state. Re-population only rewrites the two rule maps' contents -- the
 // already-attached TC programs keep running throughout, so there is no
 // enforcement gap during an update, unlike detach+reattach would cause.

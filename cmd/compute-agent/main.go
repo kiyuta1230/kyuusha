@@ -41,11 +41,13 @@ import (
 	"github.com/kiyuta1230/kyuusha/internal/telemetry"
 
 	computev1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/compute/v1"
+	networkagentv1 "github.com/kiyuta1230/kyuusha/gen/go/kyuusha/network/agent/v1"
 )
 
 func main() {
 	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL")
 	computeAddr := flag.String("compute-addr", "localhost:8081", "compute service address, for Hypervisor self-registration")
+	networkAddr := flag.String("network-addr", "", "network service address (any replica), for the SecurityGroup policy stream (see docs/specs/snap.md「ポリシーの配布」). Empty disables it: interfaces keep the policy they booted with")
 	hypervisor := flag.String("hypervisor", "", "this hypervisor's ID (required)")
 	bootstrapTokenFile := flag.String("bootstrap-token-file", "", "path to a zone-scoped bootstrap token (required; see 'kyuusha hypervisor bootstrap-token create'). Its zone claim, not any locally-configured value, becomes this Hypervisor's zone")
 	vcpu := flag.Int("vcpu", 8, "allocatable vCPU capacity to report")
@@ -248,6 +250,20 @@ func main() {
 	}
 	defer computeConn.Close()
 
+	var policyClient networkagentv1.PolicyDistributionServiceClient
+	if *networkAddr != "" {
+		networkConn, err := grpc.NewClient(*networkAddr,
+			grpc.WithTransportCredentials(clientCreds),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		)
+		if err != nil {
+			slog.Error("dial network", "addr", *networkAddr, "err", err)
+			os.Exit(1)
+		}
+		defer networkConn.Close()
+		policyClient = networkagentv1.NewPolicyDistributionServiceClient(networkConn)
+	}
+
 	agent := &computeagent.Agent{
 		Hypervisor:                 *hypervisor,
 		NC:                         nc,
@@ -267,6 +283,7 @@ func main() {
 		MigrationRegistryPlainHTTP: *migrationRegistryPlainHTTP,
 		Drivers:                    vmmDrivers,
 		SecurityBackendBin:         *securityBackendBin,
+		PolicyClient:               policyClient,
 	}
 	slog.Info("compute-agent: starting", "hypervisor", *hypervisor)
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
