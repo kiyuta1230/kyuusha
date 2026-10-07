@@ -28,11 +28,13 @@ type policyVMM struct {
 	fail    error
 }
 
-func (f *policyVMM) Boot(context.Context, vmm.BootSpec) ([]vmm.AttachedVolume, error) { return nil, nil }
-func (f *policyVMM) Stop(string, bool)                                                {}
-func (f *policyVMM) Destroy(string)                                                   {}
-func (f *policyVMM) ConsoleLogPath(string) string                                     { return "" }
-func (f *policyVMM) RootDiskPath(string) (string, error)                              { return "", nil }
+func (f *policyVMM) Boot(context.Context, vmm.BootSpec) ([]vmm.AttachedVolume, error) {
+	return nil, nil
+}
+func (f *policyVMM) Stop(string, bool)                   {}
+func (f *policyVMM) Destroy(string)                      {}
+func (f *policyVMM) ConsoleLogPath(string) string        { return "" }
+func (f *policyVMM) RootDiskPath(string) (string, error) { return "", nil }
 func (f *policyVMM) Running() []vmm.RunningVM {
 	f.mu.Lock()
 	defer f.mu.Unlock()
