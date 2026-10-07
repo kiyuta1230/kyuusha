@@ -105,7 +105,9 @@ func TestService_UpdateSubnetRejectsAddressingChanges(t *testing.T) {
 		"zone":       func(s *Subnet) { s.Spec.Zone = "zone-b" },
 		"network_id": func(s *Subnet) { s.Spec.NetworkID = "network-other" },
 		"cidr":       func(s *Subnet) { s.Spec.RequestedAddresses = []SubnetAddress{{CIDR: "10.0.9.0/24"}} },
-		"gateway_ip": func(s *Subnet) { s.Spec.RequestedAddresses = []SubnetAddress{{CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.254"}} },
+		"gateway_ip": func(s *Subnet) {
+			s.Spec.RequestedAddresses = []SubnetAddress{{CIDR: "10.0.1.0/24", GatewayIP: "10.0.1.254"}}
+		},
 	} {
 		cur, _ := svc.GetSubnet(ctx, "tenant-a", sn.Meta.ID)
 		mutate(cur)
