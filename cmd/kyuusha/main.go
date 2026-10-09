@@ -197,7 +197,7 @@ func resolveTenant(token string) string {
 	if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
 		return ""
 	}
-	if claims.Role != "" {
+	if len(claims.AllRoles()) > 0 {
 		return ""
 	}
 	return claims.TenantID

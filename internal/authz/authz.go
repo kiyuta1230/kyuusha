@@ -64,10 +64,14 @@ func (a *Authorizer) authorize(ctx context.Context, req any, fullMethod string) 
 		requestTenantID = tenantGetter.GetTenantId()
 	}
 
+	roles := claims.AllRoles()
+	if roles == nil {
+		roles = []string{} // an empty set, not null, for policy.rego
+	}
 	input := map[string]any{
 		"claims": map[string]any{
 			"tenant_id":   claims.TenantID,
-			"role":        claims.Role,
+			"roles":       roles,
 			"tenant_role": claims.TenantRole,
 		},
 		"request": map[string]any{
@@ -102,7 +106,7 @@ func (a *Authorizer) UnaryInterceptor() grpc.UnaryServerInterceptor {
 		resp, err := handler(ctx, req)
 		audit.Log(ctx, audit.Record{
 			Event: audit.EventRPCCompleted, RPCMethod: info.FullMethod, RequestTenantID: requestTenantID,
-			TenantID: claims.TenantID, Sub: claims.Subject, Role: claims.Role, TenantRole: claims.TenantRole, Err: err,
+			TenantID: claims.TenantID, Sub: claims.Subject, Roles: claims.AllRoles(), TenantRole: claims.TenantRole, ClientID: claims.AuthorizedParty, Username: claims.PreferredUsername, Err: err,
 		})
 		return resp, err
 	}
@@ -124,7 +128,7 @@ func (a *Authorizer) StreamInterceptor() grpc.StreamServerInterceptor {
 		if wrapped.claims != nil && !wrapped.denied {
 			audit.Log(ss.Context(), audit.Record{
 				Event: audit.EventRPCCompleted, RPCMethod: info.FullMethod, RequestTenantID: wrapped.requestTenantID,
-				TenantID: wrapped.claims.TenantID, Sub: wrapped.claims.Subject, Role: wrapped.claims.Role, TenantRole: wrapped.claims.TenantRole, Err: err,
+				TenantID: wrapped.claims.TenantID, Sub: wrapped.claims.Subject, Roles: wrapped.claims.AllRoles(), TenantRole: wrapped.claims.TenantRole, ClientID: wrapped.claims.AuthorizedParty, Username: wrapped.claims.PreferredUsername, Err: err,
 			})
 		}
 		return err
@@ -137,7 +141,7 @@ func auditDenied(ctx context.Context, rpcMethod, requestTenantID string, claims 
 	}
 	audit.Log(ctx, audit.Record{
 		Event: audit.EventAuthzDenied, RPCMethod: rpcMethod, RequestTenantID: requestTenantID,
-		TenantID: claims.TenantID, Sub: claims.Subject, Role: claims.Role, TenantRole: claims.TenantRole, Err: err,
+		TenantID: claims.TenantID, Sub: claims.Subject, Roles: claims.AllRoles(), TenantRole: claims.TenantRole, ClientID: claims.AuthorizedParty, Username: claims.PreferredUsername, Err: err,
 	})
 }
 

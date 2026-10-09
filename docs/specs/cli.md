@@ -273,7 +273,10 @@ devonly。ローカルのECDSA秘密鍵でJWTを署名するだけで、実際�
 |---|---|
 | `-key` | 署名鍵ファイル（既定`hack/devkeys/jwt-dev.key`） |
 | `-tenant` | `tenant_id`クレーム（必須） |
-| `-role` | `role`クレーム: `""`(既定)/`admin`(全テナント横断)/`storage-admin`(全テナントのblock-storage RPCのみ)。任意、[認証・認可仕様](authn-authz.md)参照 |
+| `-role` | `role`クレーム: `""`(既定)/`admin`(全テナント横断)/`storage-admin`/`network-admin`/`<サービス名>-admin`(全テナントのそのサービスのRPCのみ)/`viewer`(全テナント・read-only)。任意、[認証・認可仕様](authn-authz.md)参照 |
+| `-roles` | `roles`クレーム（カンマ区切り。`-role`と合わせて1つの集合。例: `network-admin,viewer`） |
 | `-tenant-role` | `tenant_role`クレーム: `""`(既定、a.k.a. member、自テナント内read/write)/`viewer`(自テナント内read-only)。任意、[認証・認可仕様](authn-authz.md)参照 |
 | `-sub` | `sub`クレーム（誰が。任意、[監査ログ仕様](audit-logging.md)参照。自己申告で認可判定には使われない） |
+| `-client-id` / `-username` | `azp`/`preferred_username`クレーム（サービスアカウントのトークンを真似る。監査ログに残る） |
+| `-issuer` / `-audience` | `iss`/`aud`クレーム（既定`kyuusha-dev`/`kyuusha`。api-gatewayの`-jwt-issuer`/`-jwt-audience`と合わせる） |
 | `-ttl` | トークン有効期限（既定1時間） |

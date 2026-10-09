@@ -5,6 +5,29 @@
 参照**——ここには日付付きの事実のみを置き、設計トレードオフの深掘りはarchitecture.mdへ
 リンクする形にする。
 
+## 2026-10-10
+
+- **サービスアカウント（OIDCのclient_credentials）で使うための認証・認可を整えた**。
+  - api-gatewayに`-jwt-issuer`/`-jwt-audience`を追加し、JWTの`iss`/`aud`を検証できるように
+    した（未指定なら検査しない。起動時に警告を出す）。それまでは署名と`exp`しか見て
+    いなかったため、同じOIDCのrealmが他のアプリ向けに発行したトークンでも、`tenant_id`さえ
+    付いていれば通った。playgroundは両方を検査し、`kyuusha token mint`は既定で
+    `iss=kyuusha-dev`、`aud=kyuusha`を付ける
+  - 1つのトークンが複数のテナント横断のロールを持てるよう、`roles`クレーム（文字列か配列）を
+    追加した。`role`と合わせて1つの集合として扱い、OPAのポリシーはロールごとに許す範囲を
+    足し算する。例えばkyuusha-vpcのコントローラは`["network-admin", "viewer"]`で、networkの
+    書き込みと他の読み取りができ、それ以外は書けない（それまでは`admin`を渡すしか
+    なかった）
+  - 監査ログに`client_id`（`azp`）と`username`（`preferred_username`）を記録するように
+    した。ロールは`role`（文字列）から`roles`（配列）に変わった
+  - [認証・認可仕様](specs/authn-authz.md)に、Keycloakでのサービスアカウントの作り方
+    （クライアント、mapper、Audience、トークンの寿命）と用途ごとのクレームの例を書いた
+  - playgroundで確認した:
+    - `aud`か`iss`が違うトークン、`aud`の無いトークンは拒否される
+    - `roles=network-admin,viewer`のトークンは、他テナントのSecurityGroupを作れ、VMの
+      全テナント一覧とHypervisorの一覧を読めるが、VMの作成とTenantの更新は拒否される
+    - 監査ログに`roles`・`client_id`・`username`が残る
+
 ## 2026-10-08
 
 - **VMに依存しないIPの予約`IPReservation`を追加した**（kyuusha-vpcからの変更依頼A11）。

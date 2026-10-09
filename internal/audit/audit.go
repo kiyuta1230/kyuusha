@@ -25,9 +25,11 @@ const (
 	EventRPCCompleted Event = "rpc_completed"
 )
 
-// Record is one audit event. TenantID/Sub/Role/TenantRole are the caller's
-// claims (empty if not yet known -- an authn failure happens before any
-// claims exist). RequestTenantID is the tenant_id carried by the request
+// Record is one audit event. TenantID/Sub/Roles/TenantRole/ClientID/
+// Username are the caller's claims (empty if not yet known -- an authn
+// failure happens before any claims exist). ClientID (OIDC "azp") and
+// Username ("preferred_username") identify a service account readably,
+// where Sub is often an opaque id. RequestTenantID is the tenant_id carried by the request
 // itself, which can differ from the caller's own TenantID for admin actions
 // acting on another tenant. Err is the outcome; nil means success.
 type Record struct {
@@ -36,8 +38,10 @@ type Record struct {
 	RequestTenantID string
 	TenantID        string
 	Sub             string
-	Role            string
+	Roles           []string
 	TenantRole      string
+	ClientID        string
+	Username        string
 	Err             error
 }
 
@@ -54,8 +58,10 @@ func Log(ctx context.Context, r Record) {
 		slog.String("request_tenant_id", r.RequestTenantID),
 		slog.String("tenant_id", r.TenantID),
 		slog.String("sub", r.Sub),
-		slog.String("role", r.Role),
+		slog.Any("roles", r.Roles),
 		slog.String("tenant_role", r.TenantRole),
+		slog.String("client_id", r.ClientID),
+		slog.String("username", r.Username),
 	}
 	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
 		attrs = append(attrs, slog.String("trace_id", sc.TraceID().String()))

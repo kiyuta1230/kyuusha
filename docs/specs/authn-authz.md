@@ -31,10 +31,20 @@ sequenceDiagram
 
 ## JWT検証（internal/authn）
 
-- Claims: `tenant_id` (string, 必須。空なら拒否)、`sub`（標準claim、誰が。任意、OPA認可判定（`internal/authz`）には使わない——ただし`internal/authn/propagate.go`経由でbackendへ転送され、Finalizer所有権チェックのようなサービス層の個別認可では使う。詳細は「将来の拡張」節）、
-  `role` (string, 任意)、その他標準クレーム(`exp`/`iat`等)
-- `tenant_id`/`role`はOIDCの標準クレームではない**カスタムクレーム**。接続するOIDC基盤（Keycloak/Dex等）側で
-  必ずこの名前でトークンに埋め込む設定（Keycloakなら protocol mapper）が要る
+- Claims:
+  - `tenant_id`（string、必須。空なら拒否）
+  - `role`（string、任意）と`roles`（文字列か文字列の配列、任意）: テナント横断のロール。
+    2つは合わせて1つの集合として扱う（`roles`は1つのトークンに複数のロールを持たせるため。
+    例: networkは書き込み、それ以外は読み取りのコントローラなら`["network-admin", "viewer"]`）
+  - `tenant_role`（string、任意）: テナント内のロール
+  - `sub`（標準claim、誰が。任意、OPA認可判定（`internal/authz`）には使わない——ただし
+    `internal/authn/propagate.go`経由でbackendへ転送され、Finalizer所有権チェックのような
+    サービス層の個別認可では使う。詳細は「将来の拡張」節）
+  - `azp`（OIDCの「トークンを受け取ったクライアント」）と`preferred_username`: 認可には使わず、
+    監査ログに残す（`sub`がUUIDのような読めない値でも、どのサービスアカウントか分かるように）
+  - その他標準クレーム（`exp`/`iat`/`iss`/`aud`等）
+- `tenant_id`/`role`/`roles`/`tenant_role`はOIDCの標準クレームではない**カスタムクレーム**。接続するOIDC基盤（Keycloak/Dex等）側で
+  必ずこの名前でトークンに埋め込む設定（Keycloakなら protocol mapper）が要る（下記「サービスアカウント」）
 - アルゴリズム: 許可リスト方式（`ES256`, `RS256`）。トークン自身の`alg`ヘッダを無条件に信用しない
   （alg confusion攻撃対策）。`ES256`はdevonly署名（`hack/devkeys`）、`RS256`はKeycloakの既定値に対応
 - gRPC unary/stream interceptorとして実装。streamはRecvMsgをラップして最初のメッセージ受信時に検証する
@@ -55,12 +65,76 @@ api-gatewayは`-jwt-jwks-url`が指定されていればJWKSモード、そう�
 信頼するissuer（JWKSエンドポイント）は1デプロイにつき1つのみ。テナントごとに異なるIdPを
 信頼する、といった構成は想定していない。
 
+### 発行元と宛先の検証
+
+api-gatewayの`-jwt-issuer`を指定すると`iss`がそれと一致すること、`-jwt-audience`を指定すると
+`aud`にそれが含まれることを要求する。未指定なら検査しない（起動時に警告を出す）。
+
+署名鍵がkyuusha専用でなく、同じOIDCのrealm（同じ署名鍵）が他のアプリケーション向けにも
+トークンを発行している場合は、**両方とも指定する**。指定しないと、他のアプリ向けに
+発行されたトークンでも、`tenant_id`さえ付いていればkyuushaに通ってしまう。Keycloakなら
+`-jwt-issuer`はrealmのURL（`https://<host>/realms/<realm>`）、`-jwt-audience`はkyuusha向けに
+決めた名前（例: `kyuusha`）で、トークンへの`aud`の追加は下記のAudience mapperで行う。
+playgroundは`kyuusha token mint`の既定値（`iss=kyuusha-dev`、`aud=kyuusha`）で両方を検査している。
+
 ### トークン発行
 
-- 現状: `kyuusha token mint`によるローカル署名のみ（`hack/devkeys/jwt-dev.key`）。開発・playground専用
-- 本番相当のOIDC発行元（Keycloak/Dex/ORY Hydra等）は未接続。kyuusha自身はOIDCのフロー
+- 開発・playground: `kyuusha token mint`によるローカル署名（`hack/devkeys/jwt-dev.key`）。
+  `-role`/`-roles`/`-tenant-role`/`-sub`/`-client-id`/`-username`/`-issuer`/`-audience`で
+  クレームを指定できる（[CLI仕様](cli.md)）
+- 本番: 外部のOIDC発行元（Keycloak/Dex/ORY Hydra等）。kyuusha自身はOIDCのフロー
   （認可コード、client_credentials等）を一切実装しない。発行元が何であってもkyuushaのロジックには
   影響しない（検証鍵の入手方法とクレームマッピングさえ合っていれば良い）
+
+### サービスアカウント
+
+kyuushaは人とサービスアカウント（コントローラ、CI、KaaSのCCM等、プログラムが使う
+アカウント）を区別しない。どちらもクレームだけで判断するので、サービスアカウントは
+OIDC発行元の側で作る。Keycloakの場合:
+
+1. **クライアントを作る**: realmに、サービスアカウントごとにOpenID Connectのクライアントを
+   作る（例: `kyuusha-vpc`）。Client authenticationをオン（confidential client）、
+   Authentication flowは「Service accounts roles」だけをオンにする（人のログインに使わない
+   ので、Standard flow等はオフ）。Keycloakは裏で`service-account-<client-id>`というユーザーを
+   作り、トークンの`sub`はそのユーザーのID、`azp`はクライアントID、`preferred_username`は
+   そのユーザー名になる
+2. **クレームを載せる**: そのクライアントの専用のclient scope（Client scopes → `<client-id>-dedicated`）
+   にmapperを足す。realm全体のclient scopeに足さないこと（他のアプリ向けのトークンにまで
+   `tenant_id`が付いてしまう）
+   - `tenant_id`: Hardcoded claim、Token Claim Name `tenant_id`、値はそのアカウントが属する
+     テナント。テナントを持たない基盤のアカウントでも必須なので、運用用の名目上のテナント
+     （例: `kyuusha-system`。identityに実在しなくてよい）を入れる
+   - `roles`: Hardcoded claim、Token Claim Name `roles`、Claim JSON Typeを`JSON`にして配列を
+     書く（例: `["network-admin","viewer"]`）か、文字列で1つだけ書く。テナント内だけで動く
+     アカウントなら付けない（`tenant_role`が要るならHardcoded claimで`tenant_role`）
+   - Audience: Included Custom Audienceにapi-gatewayの`-jwt-audience`と同じ値（例: `kyuusha`）
+   - いずれも「Add to access token」をオンにする
+3. **トークンの寿命を短くする**: kyuushaはトークンをローカルで検証するだけで、発行元に失効を
+   問い合わせない。クライアントを無効にしたりシークレットを変えたりしても、発行済みの
+   トークンは`exp`まで使える。クライアントの詳細設定でAccess Token Lifespanを数分にする
+   （client_credentialsでは更新トークンを使わず、期限が近づいたら取り直すのが普通）
+4. **トークンを取る**: `POST https://<host>/realms/<realm>/protocol/openid-connect/token`に
+   `grant_type=client_credentials`、`client_id`、`client_secret`を送り、返った`access_token`を
+   `Authorization: Bearer`で使う
+
+用途ごとのクレームの例:
+
+| 用途 | `tenant_id` | `roles` | 例 |
+|---|---|---|---|
+| テナント横断の基盤のコントローラ | 名目上の値（`kyuusha-system`） | 必要なロールだけ | kyuusha-vpc: `["network-admin", "viewer"]`（networkの書き込みと、VM・Hypervisorの読み取り） |
+| 1つのテナントの中だけで動く自動化 | そのテナント | 無し（読み取りだけなら`tenant_role=viewer`） | KaaSクラスタのCCM（テナントごとにクライアントを作る） |
+| 全体の監査 | 名目上の値 | `["viewer"]` | 監査用のツール |
+
+注意:
+
+- 名目上のテナントに`viewer`を含むロールを持たせると、その名目上のテナント自身にも書き込めない
+  （下記ポリシーの`not "viewer" in roles`）。基盤のアカウントが自分のテナントにリソースを
+  作ることは普通は無いので問題にならない
+- Finalizerは付けた`sub`だけが外せる（adminは別）。Keycloakでクライアントを作り直すと
+  サービスアカウントのユーザーも作り直されて`sub`が変わり、以前に付けたFinalizerを
+  自分では外せなくなる（adminが外す）。クライアントは作り直さず、シークレットの再発行で済ませる
+- 監査ログには`sub`に加えて`client_id`（`azp`）と`username`（`preferred_username`）が残る
+  （[監査ログ仕様](audit-logging.md)）
 
 ## OPA認可（internal/authz）
 
@@ -70,20 +144,27 @@ api-gatewayは`-jwt-jwks-url`が指定されていればJWKSモード、そう�
 ```rego
 default allow := false
 
-allow if { input.claims.role == "admin" }
+roles := {r | some r in input.claims.roles}
+
+allow if { "admin" in roles }
 
 allow if {
-    input.claims.role == "storage-admin"
+    "storage-admin" in roles
     input.rpc.service == "blockstorage"
 }
 
 allow if {
-    input.claims.role == "network-admin"
+    "network-admin" in roles
     input.rpc.service == "network"
 }
 
 allow if {
-    input.claims.role == "viewer"
+    input.rpc.service != ""
+    concat("", [input.rpc.service, "-admin"]) in roles
+}
+
+allow if {
+    "viewer" in roles
     input.rpc.action == "read"
 }
 
@@ -91,7 +172,7 @@ allow if {
     input.claims.tenant_id != ""
     input.claims.tenant_id == input.request.tenant_id
     input.claims.tenant_role != "viewer"
-    input.claims.role != "viewer"
+    not "viewer" in roles
 }
 
 allow if {
@@ -103,14 +184,16 @@ allow if {
 ```
 
 - 評価入力:
-  - `input.claims.tenant_id` / `input.claims.role` / `input.claims.tenant_role`: JWTのclaim
+  - `input.claims.tenant_id` / `input.claims.tenant_role`: JWTのclaim
+  - `input.claims.roles`: `role`と`roles`を合わせたロールの一覧（重複なし）。ロールごとの
+    規則は独立していて、複数持てば許される範囲が足し算になる
   - `input.request.tenant_id`: リクエストメッセージの`tenant_id`フィールド（`TenantIDGetter`インターフェースで取得）
   - `input.rpc.service` / `input.rpc.action`: 呼ばれたgRPCメソッドの分類（`internal/authz/rpcclass.go`）。
     `service`はプロトのパッケージ名の2セグメント目（例: `/kyuusha.blockstorage.v1.StorageConnectionService/Create` → `blockstorage`）、
     `action`はメソッド名が`Get`/`List`/`Watch`で始まれば`read`、それ以外は`write`——どちらも
     手書きの対応表を持たず構造的に導出するので、新しいサービス/RPCを足しても
     このファイル自体は変更不要
-- **リクエストメッセージが`tenant_id`フィールドを持たない場合**（例: `CreateTenantRequest`, Hypervisor系の各Request, `CreateStorageConnectionRequest`）、`input.request.tenant_id`は空文字列として扱われる。`claims.tenant_id`は空になり得ないため、この場合は事実上 **admin roleのみ許可**になる（ポリシー自体の変更は不要）——ただし対象がblock-storageサービスのRPCなら`role=="storage-admin"`、それ以外のサービスのRPCなら`role=="<サービス名>-admin"`（例: networkなら`network-admin`）、read系RPC（Get/List/Watch）なら`role=="viewer"`も同様に許可される
+- **リクエストメッセージが`tenant_id`フィールドを持たない場合**（例: `CreateTenantRequest`, Hypervisor系の各Request, `CreateStorageConnectionRequest`）、`input.request.tenant_id`は空文字列として扱われる。`claims.tenant_id`は空になり得ないため、この場合は事実上 **admin roleのみ許可**になる（ポリシー自体の変更は不要）——ただし対象がblock-storageサービスのRPCなら`storage-admin`、それ以外のサービスのRPCなら`<サービス名>-admin`（例: networkなら`network-admin`）、read系RPC（Get/List/Watch）なら`viewer`のロールを持っていれば同様に許可される
 - gRPC unary/stream interceptorとして実装。streamはauthnと同様、RecvMsgラップで最初のメッセージ受信時に評価する
 - interceptorの適用順序: authn → authz（authzはauthnが設定したClaimsに依存する）
 

@@ -1130,8 +1130,11 @@ JWT署名・OAuth2/OIDCフロー・鍵ローテーションは自前実装が事
 再発明はしない。NATS/NVMe-oF選定と同じ「軽量な既製品に乗る」姿勢を踏襲する。
 
 - **トークン発行**: `identity`サービス自身にOAuth2/OIDCプロトコルを実装させず、外部のOIDC認証基盤に
-  委ねる。求める要件は「カスタムクレーム（`tenant_id`必須、`role`は任意）をトークンに追加できること」
-  のみで、特定製品を前提にしない。`identity`はkyuusha固有の概念（tenant=KaaSクラスタ、quota）を持つ
+  委ねる。求める要件は「カスタムクレーム（`tenant_id`必須、`role`/`roles`は任意）をトークンに追加できること」
+  のみで、特定製品を前提にしない。人とサービスアカウントは区別せず、サービスアカウントも
+  認証基盤の側で作る（Keycloakならclient_credentialsのクライアント）。認証基盤が他のアプリの
+  トークンも発行するので、api-gatewayは`iss`/`aud`も検証する（OIDCの複数のアプリが1つの
+  realmを共有するのは普通の運用で、署名だけでは「kyuusha向けのトークンか」が分からないため）。`identity`はkyuusha固有の概念（tenant=KaaSクラスタ、quota）を持つ
   薄いラッパーに留める。api-gateway側の鍵検証方式（固定公開鍵/JWKS）を含む具体的な実装は
   [認証・認可仕様](specs/authn-authz.md)を参照
 - **KaaS→api-gateway（南北）**: 発行されたJWTをapi-gatewayが公開鍵でローカル検証する（毎リクエストで
@@ -2848,7 +2851,7 @@ originへ殺到するthundering herdを防げない。この具体的なトリ�
 - ストレージ冗長化への切替タイミング（Volumeが本番相当で使われ始めた時点が目安。具体的な方式はDRBD等含め運用者判断）
 - NATS JetStreamのsubject/stream設計（`ms.<service>.<cmd|evt>.<hypervisor>...`、CMD/EVTストリームの分離）
 - gRPC認証方式（南北=カスタムクレーム対応OIDC認証基盤によるJWT発行+ローカル検証（固定公開鍵/JWKS、詳細は[認証・認可仕様](specs/authn-authz.md)）、東西=mTLS）とHypervisor自己登録・zone割当（zoneスコープ付きbootstrapトークン）。ハイパーバイザー専用mTLS証明書の動的発行（本格PKI）は不採用と確定し、bootstrapトークンへの任意`hypervisor_id`クレーム+`HypervisorSpec.revoked`による軽量な個体識別・失効に代替（将来のRegisterを拒否するのみ、既存セッションの強制切断は不可という割り切り込み）
-- 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）。`tenant_role=viewer`（テナント内read-only）と`role=storage-admin`（block-storageサービスのみにscopeしたadmin相当）、`role=network-admin`（同形、networkサービスにscope）、`role=viewer`（全テナント・全サービス横断read-only）を実装——静的な列挙のみで、動的カスタムロール定義は見送り
+- 認可方式（OPA埋め込み、テナント×R/Wをベースラインにadmin/operatorロールと内部最小権限を直交軸として追加）。`tenant_role=viewer`（テナント内read-only）と`role=storage-admin`（block-storageサービスのみにscopeしたadmin相当）、`role=network-admin`（同形、networkサービスにscope）、`role=viewer`（全テナント・全サービス横断read-only）を実装——静的な列挙のみで、動的カスタムロール定義は見送り。1つのトークンが複数のロールを持てる（`roles`クレーム。許す範囲はロールごとの足し算）——基盤のコントローラに必要な権限だけを組み合わせて渡すため（例: kyuusha-vpcに`network-admin`＋`viewer`）
 - Watchの再開設計（resource_version + Bookmarkイベント、履歴保持は有限で古すぎたら再List）
 - Firecrackerのjailer/tapデバイス運用方針
 - ネットワークACL（テナント所有の`SecurityGroup`をNICに明示的に付ける。allowのみ・既定は両方向拒否・Networkごとの既定のグループ・相手はCIDR/SecurityGroup/Network、ホストへはアドレス集合の差分で配る。詳細は「SecurityGroup」節参照）

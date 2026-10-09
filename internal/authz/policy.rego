@@ -7,15 +7,22 @@ default allow := false
 # admin/operator role can act on any tenant. Per docs/architecture.md's authz
 # granularity discussion, admin is a role orthogonal to any single tenant,
 # not a per-tenant permission.
+# The caller's cross-tenant roles: the token's role and roles claims
+# together (see authn.Claims.AllRoles). A token may hold several, e.g.
+# ["network-admin", "viewer"] for a controller that writes network
+# resources and reads everything else; each rule below grants what its own
+# role grants, and they add up.
+roles := {r | some r in input.claims.roles}
+
 allow if {
-	input.claims.role == "admin"
+	"admin" in roles
 }
 
 # storage-admin is a narrower version of admin, scoped to one service area
 # (block-storage: Volume/VolumeAttachment/StorageConnection) rather than
 # every RPC -- see docs/specs/authn-authz.md "将来の拡張".
 allow if {
-	input.claims.role == "storage-admin"
+	"storage-admin" in roles
 	input.rpc.service == "blockstorage"
 }
 
@@ -23,7 +30,7 @@ allow if {
 # NetworkInterface) instead -- same pattern, see docs/specs/authn-authz.md
 # "将来の拡張".
 allow if {
-	input.claims.role == "network-admin"
+	"network-admin" in roles
 	input.rpc.service == "network"
 }
 
@@ -33,7 +40,7 @@ allow if {
 # names kyuusha can't list here. See docs/specs/authn-authz.md "将来の拡張".
 allow if {
 	input.rpc.service != ""
-	input.claims.role == concat("", [input.rpc.service, "-admin"])
+	concat("", [input.rpc.service, "-admin"]) in roles
 }
 
 # viewer (role, not tenant_role) is the cross-tenant, cross-service
@@ -43,15 +50,15 @@ allow if {
 # read-only RPCs -- the "auditor" role. See docs/specs/authn-authz.md
 # "将来の拡張".
 allow if {
-	input.claims.role == "viewer"
+	"viewer" in roles
 	input.rpc.action == "read"
 }
 
 # ordinary tenant-scoped callers may act on their own tenant's resources:
 # the request's tenant_id must match the token's. A "viewer" tenant_role
 # narrows this to read-only RPCs (Get/List/Watch) -- any other tenant_role
-# (default: "" a.k.a. "member") keeps full read/write. role != "viewer" is
-# required too: every token carries some tenant_id (it's a required claim),
+# (default: "" a.k.a. "member") keeps full read/write. Not holding the
+# "viewer" role is required too: every token carries some tenant_id (it's a required claim),
 # so a global viewer's own nominal tenant_id would otherwise still match
 # here and grant it full read/write over that one tenant -- silently
 # defeating the "read-only everywhere, no exceptions" guarantee the viewer
@@ -63,7 +70,7 @@ allow if {
 	input.claims.tenant_id != ""
 	input.claims.tenant_id == input.request.tenant_id
 	input.claims.tenant_role != "viewer"
-	input.claims.role != "viewer"
+	not "viewer" in roles
 }
 
 allow if {

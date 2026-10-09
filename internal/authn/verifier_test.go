@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"slices"
 	"testing"
 	"time"
 
@@ -117,5 +118,82 @@ func TestVerifier_RejectsDisallowedAlgorithm(t *testing.T) {
 	}
 	if _, err := v.parse(signed); err == nil {
 		t.Fatal("expected HS256 to be rejected by the algorithm allowlist, got nil")
+	}
+}
+
+func TestVerifier_IssuerAndAudience(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewStaticKeyVerifier(&key.PublicKey)
+	v.Issuer, v.Audience = "https://idp.example/realms/kyuusha", "kyuusha"
+	mint := func(iss string, aud ...string) string {
+		c := validClaims("tenant-a")
+		c.Issuer, c.Audience = iss, aud
+		return signES256(t, key, c)
+	}
+	if _, err := v.parse(mint("https://idp.example/realms/kyuusha", "account", "kyuusha")); err != nil {
+		t.Fatalf("matching iss and aud: %v", err)
+	}
+	for name, tok := range map[string]string{
+		"wrong issuer":   mint("https://idp.example/realms/other", "kyuusha"),
+		"no issuer":      mint("", "kyuusha"),
+		"wrong audience": mint("https://idp.example/realms/kyuusha", "some-other-app"),
+		"no audience":    mint("https://idp.example/realms/kyuusha"),
+	} {
+		if _, err := v.parse(tok); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// Unset, neither is checked.
+	open := NewStaticKeyVerifier(&key.PublicKey)
+	if _, err := open.parse(mint("anyone")); err != nil {
+		t.Fatalf("no iss/aud configured: %v", err)
+	}
+}
+
+// TestClaims_Roles: the roles claim may be one string or an array, and
+// merges with role.
+func TestClaims_Roles(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewStaticKeyVerifier(&key.PublicKey)
+	sign := func(extra jwt.MapClaims) string {
+		m := jwt.MapClaims{"tenant_id": "ops", "exp": time.Now().Add(time.Hour).Unix()}
+		for k, val := range extra {
+			m[k] = val
+		}
+		s, err := jwt.NewWithClaims(jwt.SigningMethodES256, m).SignedString(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for name, c := range map[string]struct {
+		extra jwt.MapClaims
+		want  []string
+	}{
+		"array":           {jwt.MapClaims{"roles": []string{"network-admin", "viewer"}}, []string{"network-admin", "viewer"}},
+		"single string":   {jwt.MapClaims{"roles": "viewer"}, []string{"viewer"}},
+		"role and roles":  {jwt.MapClaims{"role": "admin", "roles": []string{"viewer", "admin"}}, []string{"admin", "viewer"}},
+		"neither":         {jwt.MapClaims{}, nil},
+		"service account": {jwt.MapClaims{"azp": "kyuusha-vpc", "preferred_username": "service-account-kyuusha-vpc", "roles": []string{"network-admin"}}, []string{"network-admin"}},
+	} {
+		claims, err := v.parse(sign(c.extra))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := claims.AllRoles(); len(got) != len(c.want) || len(got) > 0 && !slices.Equal(got, c.want) {
+			t.Errorf("%s: AllRoles = %v, want %v", name, got, c.want)
+		}
+		if name == "service account" && (claims.AuthorizedParty != "kyuusha-vpc" || claims.PreferredUsername != "service-account-kyuusha-vpc") {
+			t.Errorf("azp/preferred_username = %q/%q", claims.AuthorizedParty, claims.PreferredUsername)
+		}
+	}
+	if _, err := v.parse(sign(jwt.MapClaims{"roles": 42})); err == nil {
+		t.Error("a non-string roles claim was accepted")
 	}
 }

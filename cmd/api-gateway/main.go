@@ -40,6 +40,8 @@ func main() {
 	blockStorageAddr := flag.String("block-storage-addr", "localhost:8085", "block-storage service address")
 	jwtPublicKey := flag.String("jwt-public-key", "hack/devkeys/jwt-dev.pub", "PEM public key file to verify client JWTs against (dev/test; ignored if -jwt-jwks-url is set)")
 	jwtJWKSURL := flag.String("jwt-jwks-url", "", "JWKS endpoint to verify client JWTs against (e.g. a Keycloak realm's .../protocol/openid-connect/certs); takes precedence over -jwt-public-key")
+	jwtIssuer := flag.String("jwt-issuer", "", "required \"iss\" of client JWTs (e.g. a Keycloak realm's https://<host>/realms/<realm>); empty accepts any. Set it, with -jwt-audience, whenever the issuer also issues tokens for other applications -- see docs/specs/authn-authz.md")
+	jwtAudience := flag.String("jwt-audience", "", "value client JWTs' \"aud\" must contain (e.g. \"kyuusha\"); empty accepts any")
 	metricsAddr := flag.String("metrics-addr", ":9093", "address to serve /metrics (Prometheus) on")
 	otlpEndpoint := flag.String("otlp-endpoint", "", "OTLP/gRPC trace collector address (empty disables tracing)")
 	tlsCert := flag.String("tls-cert", "hack/devcerts/server.crt", "east-west mTLS certificate presented when dialing backend services (see internal/mtls); unrelated to the client-facing JWT above")
@@ -100,6 +102,10 @@ func main() {
 			os.Exit(1)
 		}
 		verifier = authn.NewStaticKeyVerifier(pubKey)
+	}
+	verifier.Issuer, verifier.Audience = *jwtIssuer, *jwtAudience
+	if *jwtIssuer == "" || *jwtAudience == "" {
+		slog.Warn("api-gateway: client JWTs' issuer and/or audience are not checked (-jwt-issuer/-jwt-audience); any token signed by the configured key is accepted")
 	}
 
 	authorizer, err := authz.New(ctx)

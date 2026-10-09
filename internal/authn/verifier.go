@@ -31,6 +31,13 @@ var validSigningMethods = []string{"ES256", "RS256"}
 // FromContext regardless of which key source below produced it.
 type Verifier struct {
 	KeyFunc jwt.Keyfunc
+	// Issuer, if set, must equal the token's "iss"; Audience, if set, must
+	// be among its "aud". Both empty accepts any -- fine with a dedicated
+	// signing key, but with an OIDC realm that also issues tokens for other
+	// applications, set both so only tokens meant for kyuusha pass (see
+	// docs/specs/authn-authz.md「発行元と宛先の検証」).
+	Issuer   string
+	Audience string
 }
 
 // NewStaticKeyVerifier builds a Verifier that always verifies against one
@@ -108,7 +115,14 @@ func (v *Verifier) authenticate(ctx context.Context) (*Claims, error) {
 
 func (v *Verifier) parse(token string) (*Claims, error) {
 	claims := &Claims{}
-	_, err := jwt.ParseWithClaims(token, claims, v.KeyFunc, jwt.WithValidMethods(validSigningMethods))
+	opts := []jwt.ParserOption{jwt.WithValidMethods(validSigningMethods)}
+	if v.Issuer != "" {
+		opts = append(opts, jwt.WithIssuer(v.Issuer))
+	}
+	if v.Audience != "" {
+		opts = append(opts, jwt.WithAudience(v.Audience))
+	}
+	_, err := jwt.ParseWithClaims(token, claims, v.KeyFunc, opts...)
 	if err != nil {
 		return nil, err
 	}

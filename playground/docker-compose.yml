@@ -354,6 +354,11 @@ services:
       - "-block-storage-addr=block-storage:8085"
       - "-metrics-addr=:9093"
       - "-otlp-endpoint=jaeger:4317"
+      # Matches `kyuusha token mint`'s default iss/aud, so the playground
+      # exercises the issuer/audience check a real OIDC realm needs (see
+      # docs/specs/authn-authz.md).
+      - "-jwt-issuer=kyuusha-dev"
+      - "-jwt-audience=kyuusha"
     depends_on:
       - compute
       - identity

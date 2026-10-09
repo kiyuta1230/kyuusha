@@ -229,3 +229,40 @@ func TestAuthorize_ServiceScopedAdmin(t *testing.T) {
 		t.Fatalf("role -admin on a method with no service: got %v, want PermissionDenied", err)
 	}
 }
+
+// TestAuthorize_MultipleRoles: roles add up. A controller holding
+// network-admin and viewer writes network resources of any tenant and
+// reads everything else, but writes nothing outside network -- not even
+// in its own nominal tenant.
+func TestAuthorize_MultipleRoles(t *testing.T) {
+	ctx := context.Background()
+	a, err := New(ctx)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctrl := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "ops", Roles: authn.StringList{"network-admin", "viewer"}})
+	for _, c := range []struct {
+		name   string
+		tenant string
+		method string
+		allow  bool
+	}{
+		{"network write, another tenant", "tenant-b", subnetCreateMethod, true},
+		{"compute read, another tenant", "tenant-b", vmGetMethod, true},
+		{"block-storage read, another tenant", "tenant-b", volumeGetMethod, true},
+		{"compute write, another tenant", "tenant-b", vmCreateMethod, false},
+		{"compute write, its own nominal tenant", "ops", vmCreateMethod, false},
+	} {
+		_, _, err := a.authorize(ctrl, fakeReq{tenantID: c.tenant}, c.method)
+		if c.allow && err != nil || !c.allow && status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s: got %v, want allow=%v", c.name, err, c.allow)
+		}
+	}
+	// role and roles together count as one set.
+	both := authn.NewContextForTest(ctx, &authn.Claims{TenantID: "ops", Role: "storage-admin", Roles: authn.StringList{"network-admin"}})
+	for _, m := range []string{storageconnCreateMethod, subnetCreateMethod} {
+		if _, _, err := a.authorize(both, fakeReq{tenantID: "tenant-b"}, m); err != nil {
+			t.Errorf("role+roles on %s: got %v, want allowed", m, err)
+		}
+	}
+}

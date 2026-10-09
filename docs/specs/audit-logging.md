@@ -14,7 +14,7 @@ api-gatewayを通過する全リクエストについて、「誰が・何を・
 | `rpc_completed` | `internal/authz`（interceptorがhandlerを呼んだ後） | 認可を通過したRPCの最終結果（成功/業務エラー問わず） |
 
 `authn_failed`の時点では`Claims`がまだ存在しない（検証前に失敗するため）ので、
-`tenant_id`/`sub`/`role`/`tenant_role`は空文字列になる。
+`tenant_id`/`sub`/`tenant_role`/`client_id`/`username`は空文字列、`roles`は空になる。
 
 ## レコードの構造
 
@@ -26,14 +26,15 @@ api-gatewayを通過する全リクエストについて、「誰が・何を・
 | `event` | 上表のいずれか |
 | `rpc_method` | 呼ばれたgRPCフルメソッド名 |
 | `request_tenant_id` | リクエスト自体が持つ`tenant_id`（adminが他テナントを操作する場合、`tenant_id`と異なりうる） |
-| `tenant_id` / `sub` / `role` / `tenant_role` | 呼び出し元のJWT claims。`sub`/`role`/`tenant_role`は[認証・認可仕様](authn-authz.md)参照（`role`の値: `""`/`admin`/`storage-admin`/`network-admin`/`viewer`。`tenant_role`の値: `""`/`viewer`） |
+| `tenant_id` / `sub` / `roles` / `tenant_role` | 呼び出し元のJWT claims。[認証・認可仕様](authn-authz.md)参照。`roles`は`role`と`roles`クレームを合わせたロールの配列（値: `admin`/`storage-admin`/`network-admin`/`<サービス名>-admin`/`viewer`）、`tenant_role`の値: `""`/`viewer` |
+| `client_id` / `username` | 呼び出し元のJWTの`azp`（トークンを受け取ったOIDCクライアント）と`preferred_username`。サービスアカウントなら、`sub`がUUIDでもどのアカウントか分かる（[認証・認可仕様](authn-authz.md)「サービスアカウント」） |
 | `trace_id` | リクエストのOTelトレースID（有効な場合のみ）。[トレーシング仕様](observability-tracing.md)のtrace/spanと突き合わせられる |
 | `error` | 失敗時のみ。エラーメッセージ |
 
 出力例（実測、playgroundにて）:
 
 ```json
-{"time":"...","level":"WARN","msg":"audit","audit":true,"event":"authz_denied","rpc_method":"/kyuusha.identity.v1.TenantService/Update","request_tenant_id":"tenant-36c320a969406dcf","tenant_id":"tenant-36c320a969406dcf","sub":"viewer-test@example.com","role":"","tenant_role":"viewer","trace_id":"2ad3e21b3960f1e52d93a58f9f558d08","error":"rpc error: code = PermissionDenied desc = not authorized for this tenant"}
+{"time":"...","level":"WARN","msg":"audit","audit":true,"event":"authz_denied","rpc_method":"/kyuusha.identity.v1.TenantService/Update","request_tenant_id":"tenant-36c320a969406dcf","tenant_id":"tenant-36c320a969406dcf","sub":"viewer-test@example.com","roles":[],"tenant_role":"viewer","client_id":"","username":"","trace_id":"2ad3e21b3960f1e52d93a58f9f558d08","error":"rpc error: code = PermissionDenied desc = not authorized for this tenant"}
 ```
 
 ## streaming RPC（Watch）の扱い
